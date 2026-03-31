@@ -28,7 +28,9 @@ MainWindow::MainWindow(QWidget *parent)
     setupEditor();
     setupSidebar();
     setupActions();
-    setupGUI(Default, QStringLiteral("rpgforgeui.rc"));
+
+    setXMLFile(QStringLiteral(":/rpgforgeui.rc"));
+    setupGUI();
 
     // Merge KTextEditor::View's GUI (Edit, View, Selection, Tools menus)
     guiFactory()->addClient(m_editorView);
