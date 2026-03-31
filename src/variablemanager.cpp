@@ -66,32 +66,32 @@ QString VariableManager::resolve(const QString &expression) const
         changed = false;
         depth++;
         
-        auto it = varRegex.globalMatch(result);
-        QList<QRegularExpressionMatch> matches;
-        while (it.hasNext()) matches.append(it.next());
+        auto matches = varRegex.globalMatch(result);
+        QList<QRegularExpressionMatch> matchList;
+        while (matches.hasNext()) matchList.prepend(matches.next()); // Work backwards
 
-        for (int i = matches.size() - 1; i >= 0; --i) {
-            auto match = matches.at(i);
+        for (const auto &match : matchList) {
             QString name = match.captured(1);
             if (vars.contains(name)) {
-                result.replace(match.capturedStart(), match.capturedLength(), vars.value(name));
+                // Get the value of the referenced variable
+                QString val = vars.value(name);
+                // If the value itself is an expression, we don't resolve it here
+                // because the loop will catch it in the next iteration.
+                result.replace(match.capturedStart(), match.capturedLength(), val);
                 changed = true;
             }
         }
     }
 
     // After resolving all variables, if the string looks like a math expression, evaluate it
-    // Check if it contains only digits, operators, and parentheses
+    // Allow digits, operators, parentheses, and spaces
     static QRegularExpression mathCheckRegex(QStringLiteral("^[0-9\\+\\-\\*/\\(\\)\\.\\s]+$"));
-    if (mathCheckRegex.match(result).hasMatch() && result.trimmed().length() > 0) {
-        // Only evaluate if it's not JUST a single number (optional optimization)
-        // or if it contains operators.
-        if (result.contains(QRegularExpression(QStringLiteral("[\\+\\-\\*/\\(\\)]")))) {
-            QJSEngine engine;
-            auto val = engine.evaluate(result);
-            if (!val.isError()) {
-                result = val.toString();
-            }
+    if (mathCheckRegex.match(result).hasMatch() && result.contains(QRegularExpression(QStringLiteral("[\\+\\-\\*/\\(\\)]")))) {
+        QJSEngine engine;
+        auto val = engine.evaluate(result);
+        if (!val.isError()) {
+            // Format to avoid scientific notation if possible
+            result = QString::number(val.toNumber(), 'g', 10);
         }
     }
     

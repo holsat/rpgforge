@@ -39,6 +39,9 @@ private:
     QToolButton *m_removeButton;
 
     void setupUi();
+    void recalculateAll();
+    void saveVariables();
+    void loadVariables();
 };
 
 #endif // VARIABLESPANEL_H
