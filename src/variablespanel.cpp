@@ -29,15 +29,21 @@ void VariablesPanel::setupUi()
     
     m_addButton = new QToolButton(toolbar);
     m_addButton->setIcon(QIcon::fromTheme(QStringLiteral("list-add")));
-    m_addButton->setToolTip(i18n("Add Variable"));
+    m_addButton->setToolTip(i18n("Add Main Variable"));
     connect(m_addButton, &QToolButton::clicked, this, &VariablesPanel::addVariable);
+
+    m_addVariantButton = new QToolButton(toolbar);
+    m_addVariantButton->setIcon(QIcon::fromTheme(QStringLiteral("entry-new"))); // Or another appropriate icon
+    m_addVariantButton->setToolTip(i18n("Add Variant to Selected Variable"));
+    connect(m_addVariantButton, &QToolButton::clicked, this, &VariablesPanel::addVariant);
     
     m_removeButton = new QToolButton(toolbar);
     m_removeButton->setIcon(QIcon::fromTheme(QStringLiteral("list-remove")));
-    m_removeButton->setToolTip(i18n("Remove Selected Variable"));
+    m_removeButton->setToolTip(i18n("Remove Selected Variable/Variant"));
     connect(m_removeButton, &QToolButton::clicked, this, &VariablesPanel::removeVariable);
 
     toolbarLayout->addWidget(m_addButton);
+    toolbarLayout->addWidget(m_addVariantButton);
     toolbarLayout->addWidget(m_removeButton);
     toolbarLayout->addStretch();
     
@@ -48,9 +54,8 @@ void VariablesPanel::setupUi()
     m_treeWidget->setColumnCount(4);
     m_treeWidget->setHeaderLabels({i18n("Name"), i18n("Computed"), i18n("Expression"), i18n("Calc")});
     m_treeWidget->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
-    m_treeWidget->setRootIsDecorated(false);
+    m_treeWidget->setRootIsDecorated(true);
     
-    // Column widths
     m_treeWidget->setColumnWidth(3, 50);
     
     connect(m_treeWidget, &QTreeWidget::itemChanged, this, &VariablesPanel::onItemChanged);
@@ -71,6 +76,28 @@ void VariablesPanel::addVariable()
     recalculateAll();
 }
 
+void VariablesPanel::addVariant()
+{
+    auto *parent = m_treeWidget->currentItem();
+    if (!parent) return;
+    
+    // If a variant is selected, add to its parent
+    if (parent->parent()) {
+        parent = parent->parent();
+    }
+
+    auto *item = new QTreeWidgetItem(parent);
+    item->setText(0, i18n("v1"));
+    item->setText(1, QStringLiteral("0"));
+    item->setText(2, QStringLiteral("0"));
+    item->setCheckState(3, Qt::Checked);
+    item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsEditable | Qt::ItemIsUserCheckable);
+    
+    parent->setExpanded(true);
+    m_treeWidget->editItem(item, 0);
+    recalculateAll();
+}
+
 void VariablesPanel::removeVariable()
 {
     auto *item = m_treeWidget->currentItem();
@@ -86,7 +113,6 @@ void VariablesPanel::onItemChanged(QTreeWidgetItem *item, int column)
     Q_UNUSED(item);
     if (column == 1) return; // Ignore changes to computed column
 
-    // Sync variables to manager so recalculateAll has latest data
     VariableManager::instance().setPanelVariables(variables());
     
     recalculateAll();
@@ -97,14 +123,24 @@ void VariablesPanel::onItemChanged(QTreeWidgetItem *item, int column)
 void VariablesPanel::recalculateAll()
 {
     m_treeWidget->blockSignals(true);
-    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
-        auto *item = m_treeWidget->topLevelItem(i);
+    
+    // Helper lambda to recurse
+    std::function<void(QTreeWidgetItem*)> calcItem = [&](QTreeWidgetItem *item) {
         QString expression = item->text(2);
         bool shouldCalc = item->checkState(3) == Qt::Checked;
         
         QString result = VariableManager::instance().resolve(expression, shouldCalc);
         item->setText(1, result);
+        
+        for (int i = 0; i < item->childCount(); ++i) {
+            calcItem(item->child(i));
+        }
+    };
+
+    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
+        calcItem(m_treeWidget->topLevelItem(i));
     }
+    
     m_treeWidget->blockSignals(false);
 }
 
@@ -116,9 +152,22 @@ void VariablesPanel::saveVariables()
     
     for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
         auto *item = m_treeWidget->topLevelItem(i);
-        settings.beginGroup(item->text(0));
+        QString name = item->text(0);
+        settings.beginGroup(name);
         settings.setValue(QStringLiteral("expression"), item->text(2));
         settings.setValue(QStringLiteral("calculate"), item->checkState(3) == Qt::Checked);
+        
+        if (item->childCount() > 0) {
+            settings.beginGroup(QStringLiteral("variants"));
+            for (int j = 0; j < item->childCount(); ++j) {
+                auto *variant = item->child(j);
+                settings.beginGroup(variant->text(0));
+                settings.setValue(QStringLiteral("expression"), variant->text(2));
+                settings.setValue(QStringLiteral("calculate"), variant->checkState(3) == Qt::Checked);
+                settings.endGroup();
+            }
+            settings.endGroup();
+        }
         settings.endGroup();
     }
     settings.endGroup();
@@ -131,25 +180,35 @@ void VariablesPanel::loadVariables()
     QStringList groups = settings.childGroups();
     
     m_treeWidget->blockSignals(true);
-    if (groups.isEmpty()) {
+    m_treeWidget->clear();
+
+    for (const QString &name : groups) {
+        settings.beginGroup(name);
         auto *item = new QTreeWidgetItem(m_treeWidget);
-        item->setText(0, QStringLiteral("hp_base"));
-        item->setText(1, QStringLiteral("10"));
-        item->setText(2, QStringLiteral("10"));
-        item->setCheckState(3, Qt::Checked);
+        item->setText(0, name);
+        item->setText(2, settings.value(QStringLiteral("expression")).toString());
+        bool calc = settings.value(QStringLiteral("calculate"), true).toBool();
+        item->setCheckState(3, calc ? Qt::Checked : Qt::Unchecked);
         item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsEditable | Qt::ItemIsUserCheckable);
-    } else {
-        for (const QString &name : groups) {
-            settings.beginGroup(name);
-            auto *item = new QTreeWidgetItem(m_treeWidget);
-            item->setText(0, name);
-            item->setText(2, settings.value(QStringLiteral("expression")).toString());
-            bool calc = settings.value(QStringLiteral("calculate"), true).toBool();
-            item->setCheckState(3, calc ? Qt::Checked : Qt::Unchecked);
-            item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsEditable | Qt::ItemIsUserCheckable);
+        
+        if (settings.childGroups().contains(QStringLiteral("variants"))) {
+            settings.beginGroup(QStringLiteral("variants"));
+            QStringList variants = settings.childGroups();
+            for (const QString &vName : variants) {
+                settings.beginGroup(vName);
+                auto *vItem = new QTreeWidgetItem(item);
+                vItem->setText(0, vName);
+                vItem->setText(2, settings.value(QStringLiteral("expression")).toString());
+                bool vCalc = settings.value(QStringLiteral("calculate"), true).toBool();
+                vItem->setCheckState(3, vCalc ? Qt::Checked : Qt::Unchecked);
+                vItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsEditable | Qt::ItemIsUserCheckable);
+                settings.endGroup();
+            }
             settings.endGroup();
         }
+        settings.endGroup();
     }
+    
     m_treeWidget->blockSignals(false);
     settings.endGroup();
     
@@ -162,9 +221,16 @@ QMap<QString, QString> VariablesPanel::variables() const
     QMap<QString, QString> vars;
     for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
         auto *item = m_treeWidget->topLevelItem(i);
+        QString name = item->text(0);
         bool shouldCalc = item->checkState(3) == Qt::Checked;
-        // Prefix with CALC: to signal VariableManager if it should evaluate math
-        vars.insert(item->text(0), shouldCalc ? (QStringLiteral("CALC:") + item->text(2)) : item->text(2));
+        vars.insert(name, shouldCalc ? (QStringLiteral("CALC:") + item->text(2)) : item->text(2));
+        
+        for (int j = 0; j < item->childCount(); ++j) {
+            auto *vItem = item->child(j);
+            QString vName = name + QLatin1Char('.') + vItem->text(0);
+            bool vShouldCalc = vItem->checkState(3) == Qt::Checked;
+            vars.insert(vName, vShouldCalc ? (QStringLiteral("CALC:") + vItem->text(2)) : vItem->text(2));
+        }
     }
     return vars;
 }

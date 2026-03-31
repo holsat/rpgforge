@@ -30,12 +30,14 @@ Q_SIGNALS:
 
 private Q_SLOTS:
     void addVariable();
+    void addVariant();
     void removeVariable();
     void onItemChanged(QTreeWidgetItem *item, int column);
 
 private:
     QTreeWidget *m_treeWidget;
     QToolButton *m_addButton;
+    QToolButton *m_addVariantButton;
     QToolButton *m_removeButton;
 
     void setupUi();
