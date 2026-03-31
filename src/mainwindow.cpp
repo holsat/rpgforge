@@ -30,8 +30,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupSidebar();
     setupActions();
 
-    setXMLFile(QStringLiteral(":/rpgforgeui.rc"));
-    setupGUI();
+    setupGUI(Default, QStringLiteral(":/rpgforgeui.rc"));
 
     // Merge KTextEditor::View's GUI (Edit, View, Selection, Tools menus)
     guiFactory()->addClient(m_editorView);
@@ -170,8 +169,8 @@ void MainWindow::setupActions()
     m_togglePreviewAction->setIcon(QIcon::fromTheme(QStringLiteral("view-split-left-right")));
     m_togglePreviewAction->setCheckable(true);
     m_togglePreviewAction->setChecked(true);
-    m_togglePreviewAction->setShortcut(Qt::CTRL | Qt::Key_P);
     actionCollection()->addAction(QStringLiteral("toggle_preview"), m_togglePreviewAction);
+    actionCollection()->setDefaultShortcut(m_togglePreviewAction, Qt::CTRL | Qt::Key_P);
     connect(m_togglePreviewAction, &QAction::triggered, this, &MainWindow::togglePreview);
 }
 
