@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Option 1: Crossed sword and quill over a shield/document -->
+  <defs>
+    <linearGradient id="shield1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a90d9"/>
+      <stop offset="100%" stop-color="#2c5aa0"/>
+    </linearGradient>
+    <linearGradient id="gold1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd700"/>
+      <stop offset="100%" stop-color="#b8960f"/>
+    </linearGradient>
+  </defs>
+  <!-- Shield/document background -->
+  <path d="M64 8 L112 28 L112 72 Q112 104 64 120 Q16 104 16 72 L16 28 Z" fill="url(#shield1)" stroke="#1a3a6a" stroke-width="2"/>
+  <!-- Document lines on shield -->
+  <rect x="36" y="42" width="56" height="3" rx="1.5" fill="rgba(255,255,255,0.3)"/>
+  <rect x="36" y="52" width="48" height="3" rx="1.5" fill="rgba(255,255,255,0.3)"/>
+  <rect x="36" y="62" width="52" height="3" rx="1.5" fill="rgba(255,255,255,0.3)"/>
+  <rect x="36" y="72" width="40" height="3" rx="1.5" fill="rgba(255,255,255,0.3)"/>
+  <!-- Sword (left to right diagonal) -->
+  <g transform="translate(64,64) rotate(-45) translate(-64,-64)">
+    <rect x="60" y="10" width="8" height="80" rx="2" fill="#d4d4d4" stroke="#888" stroke-width="1"/>
+    <rect x="50" y="86" width="28" height="6" rx="2" fill="url(#gold1)" stroke="#8a6d00" stroke-width="1"/>
+    <rect x="58" y="92" width="12" height="16" rx="2" fill="#5c3a1e" stroke="#3a2010" stroke-width="1"/>
+    <polygon points="64,10 60,10 64,2 68,10" fill="#e8e8e8"/>
+  </g>
+  <!-- Quill pen (right to left diagonal) -->
+  <g transform="translate(64,64) rotate(45) translate(-64,-64)">
+    <path d="M64 6 Q58 30 60 50 L62 90 L64 100 L66 90 L68 50 Q70 30 64 6Z" fill="#e8e8e8" stroke="#999" stroke-width="0.5"/>
+    <path d="M64 6 Q60 20 62 50 L64 50 Q66 20 64 6Z" fill="#c0392b"/>
+    <rect x="62" y="90" width="4" height="14" fill="#5c3a1e"/>
+    <polygon points="62,104 64,112 66,104" fill="#333"/>
+  </g>
+  <!-- Center gem -->
+  <circle cx="64" cy="64" r="8" fill="#c0392b" stroke="url(#gold1)" stroke-width="2"/>
+  <circle cx="62" cy="62" r="3" fill="rgba(255,255,255,0.4)"/>
+</svg>

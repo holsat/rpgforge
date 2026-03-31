@@ -1,0 +1,14 @@
+build/
+cmake-build-*/
+.idea/
+*.user
+*.autosave
+*~
+*.swp
+*.swo
+crashinfo.txt
+
+# Generated icons (keep SVG source and final rpgforge.svg)
+icons/option*.png
+icons/option*.svg
+icons/rpgforge_*.png

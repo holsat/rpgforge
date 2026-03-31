@@ -1,0 +1,25 @@
+<!DOCTYPE gui SYSTEM "kpartgui.dtd">
+<gui name="rpgforge" version="3">
+  <MenuBar>
+    <Menu name="file">
+      <text>&amp;File</text>
+      <Action name="file_new"/>
+      <Action name="file_open"/>
+      <Separator/>
+      <Action name="file_save"/>
+      <Action name="file_save_as"/>
+      <Separator/>
+      <Action name="file_quit"/>
+    </Menu>
+    <!-- Edit, View, Selection, and Tools menus are provided by
+         KTextEditor::View's merged GUI client -->
+    <!-- Remove the empty Search menu that KTextEditor creates -->
+    <Menu name="search" deleted="true"/>
+  </MenuBar>
+  <ToolBar name="mainToolBar">
+    <text>Main Toolbar</text>
+    <Action name="file_new"/>
+    <Action name="file_open"/>
+    <Action name="file_save"/>
+  </ToolBar>
+</gui>

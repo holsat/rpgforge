@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RPG Forge
+GenericName=RPG Game Design IDE
+Comment=An IDE for RPG game designers
+Exec=rpgforge %U
+Icon=rpgforge
+Terminal=false
+Categories=Development;TextEditor;Game;
+MimeType=text/markdown;text/plain;
+Keywords=rpg;game;design;markdown;editor;forge;
