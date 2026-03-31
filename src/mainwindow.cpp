@@ -4,6 +4,9 @@
 #include "gitpanel.h"
 #include "outlinepanel.h"
 #include "previewpanel.h"
+#include "variablespanel.h"
+#include "variablemanager.h"
+#include "variablecompletionmodel.h"
 #include "sidebar.h"
 
 #include <KActionCollection>
@@ -82,6 +85,10 @@ void MainWindow::setupEditor()
             this, &MainWindow::onCursorPositionChanged);
     connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged,
             this, &MainWindow::syncScroll);
+
+    // Register variable autocomplete
+    auto *completionModel = new VariableCompletionModel(this);
+    m_editorView->registerCompletionModel(completionModel);
 }
 
 void MainWindow::setupSidebar()
@@ -92,6 +99,7 @@ void MainWindow::setupSidebar()
     m_gitPanel = new GitPanel(this);
     m_breadcrumbBar = new BreadcrumbBar(this);
     m_previewPanel = new PreviewPanel(this);
+    m_variablesPanel = new VariablesPanel(this);
 
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
@@ -103,6 +111,10 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("view-list-tree")),
         QStringLiteral("Document Outline"),
         m_outlinePanel);
+    m_variablesId = m_sidebar->addPanel(
+        QIcon::fromTheme(QStringLiteral("code-variable"), QIcon::fromTheme(QStringLiteral("variable"))),
+        QStringLiteral("Variables"),
+        m_variablesPanel);
     m_gitId = m_sidebar->addPanel(
         QIcon::fromTheme(QStringLiteral("vcs-branch"),
                          QIcon::fromTheme(QStringLiteral("git"))),
@@ -154,6 +166,16 @@ void MainWindow::setupSidebar()
                 m_togglePreviewAction->setChecked(!m_togglePreviewAction->isChecked());
                 togglePreview();
             });
+
+    connect(m_variablesPanel, &VariablesPanel::variablesChanged, this, [this]() {
+        VariableManager::instance().setPanelVariables(m_variablesPanel->variables());
+    });
+
+    connect(&VariableManager::instance(), &VariableManager::variablesChanged, this, [this]() {
+        if (m_previewPanel) {
+            m_previewPanel->setMarkdown(m_document->text());
+        }
+    });
 }
 
 void MainWindow::setupActions()
@@ -236,6 +258,11 @@ void MainWindow::onTextChanged()
 {
     if (m_document) {
         QString text = m_document->text();
+
+        // Parse YAML front-matter
+        auto frontMatterVars = VariableManager::parseFrontMatter(text);
+        VariableManager::instance().setDocumentVariables(frontMatterVars);
+
         if (m_outlinePanel) {
             m_outlinePanel->documentChanged(text);
         }

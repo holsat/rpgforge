@@ -1,4 +1,5 @@
 #include "previewpanel.h"
+#include "variablemanager.h"
 #include <QWebEngineView>
 #include <QVBoxLayout>
 
@@ -55,7 +56,9 @@ void PreviewPanel::updatePreview()
         return;
     }
 
-    QString htmlBody = m_parser.renderHtml(m_pendingMarkdown);
+    // Replace variables before rendering markdown to HTML
+    QString processedMarkdown = VariableManager::instance().processMarkdown(m_pendingMarkdown);
+    QString htmlBody = m_parser.renderHtml(processedMarkdown);
     
     // Escape for JavaScript string
     QString escaped = htmlBody;
