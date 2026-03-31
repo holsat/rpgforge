@@ -288,9 +288,9 @@ void MainWindow::syncScroll()
 {
     if (!m_editorView || !m_previewPanel || !m_previewPanel->isVisible()) return;
 
-    // Use scrollToLine for improved accuracy
+    // Use scrollToLine with smooth=false for real-time synchronization
     int currentLine = m_editorView->firstDisplayedLine();
-    m_previewPanel->scrollToLine(currentLine);
+    m_previewPanel->scrollToLine(currentLine, false);
 }
 
 void MainWindow::updateTitle()

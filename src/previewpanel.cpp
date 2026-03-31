@@ -101,32 +101,32 @@ void PreviewPanel::scrollToPercentage(double percentage)
     m_webView->page()->runJavaScript(js);
 }
 
-void PreviewPanel::scrollToLine(int line)
+void PreviewPanel::scrollToLine(int line, bool smooth)
 {
-    // Find the element with id="line-X" or the nearest one before it
+    // Find the element with data-sourcepos that corresponds to this line
+    // cmark uses 1-based line numbers.
     QString js = QStringLiteral(
         "(function() {"
-        "  var targetLine = %1;"
-        "  var el = document.getElementById('line-' + targetLine);"
-        "  if (!el) {"
-        "    // If exact line not found (not a heading), find nearest heading before it"
-        "    var headings = document.querySelectorAll('[id^=\"line-\"]');"
-        "    var best = null;"
-        "    for (var h of headings) {"
-        "      var hLine = parseInt(h.id.replace('line-', ''));"
-        "      if (hLine <= targetLine) {"
-        "        if (!best || hLine > parseInt(best.id.replace('line-', ''))) {"
-        "          best = h;"
-        "        }"
-        "      } else break;"
+        "  var targetLine = %1 + 1;"
+        "  var els = document.querySelectorAll('[data-sourcepos]');"
+        "  var best = null;"
+        "  for (var i = 0; i < els.length; i++) {"
+        "    var el = els[i];"
+        "    var pos = el.getAttribute('data-sourcepos');"
+        "    if (pos) {"
+        "      var startLine = parseInt(pos.split(':')[0]);"
+        "      if (startLine <= targetLine) {"
+        "        best = el;"
+        "      } else {"
+        "        break;" // Elements are ordered by line
+        "      }"
         "    }"
-        "    el = best;"
         "  }"
-        "  if (el) {"
-        "    el.scrollIntoView({behavior: 'smooth', block: 'start'});"
+        "  if (best) {"
+        "    best.scrollIntoView({behavior: '%2', block: 'start'});"
         "  }"
         "})();"
-    ).arg(line);
+    ).arg(line).arg(smooth ? QStringLiteral("smooth") : QStringLiteral("auto"));
     m_webView->page()->runJavaScript(js);
 }
 
