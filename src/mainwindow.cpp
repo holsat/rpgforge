@@ -12,6 +12,8 @@
 #include <KActionCollection>
 #include <KLocalizedString>
 #include <KStandardAction>
+#include <KTextEditor/MovingRange>
+#include <KTextEditor/Attribute>
 #include <KXMLGUIFactory>
 #include <KTextEditor/Document>
 #include <KTextEditor/Editor>
@@ -57,6 +59,8 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     saveSession();
+    qDeleteAll(m_errorRanges);
+    m_errorRanges.clear();
 }
 
 void MainWindow::setupEditor()
@@ -124,13 +128,11 @@ void MainWindow::setupSidebar()
     // Show file explorer by default
     m_sidebar->showPanel(m_fileExplorerId);
 
-    // Build the central layout: [sidebar | breadcrumb+editor | preview]
+    // Build the central layout: [splitter [sidebar | editor | preview]]
     auto *centralWidget = new QWidget(this);
     auto *hbox = new QHBoxLayout(centralWidget);
     hbox->setContentsMargins(0, 0, 0, 0);
     hbox->setSpacing(0);
-
-    hbox->addWidget(m_sidebar);
 
     m_mainSplitter = new QSplitter(Qt::Horizontal, centralWidget);
 
@@ -141,14 +143,17 @@ void MainWindow::setupSidebar()
     vbox->addWidget(m_breadcrumbBar);
     vbox->addWidget(m_editorView);
 
+    m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(editorContainer);
     m_mainSplitter->addWidget(m_previewPanel);
 
-    // Set initial sizes for splitter (50/50 split)
-    m_mainSplitter->setStretchFactor(0, 1);
+    // Set initial sizes: sidebar (250px), editor (1), preview (1)
+    m_mainSplitter->setSizes({250, 600, 550});
+    m_mainSplitter->setStretchFactor(0, 0); 
     m_mainSplitter->setStretchFactor(1, 1);
+    m_mainSplitter->setStretchFactor(2, 1);
 
-    hbox->addWidget(m_mainSplitter, 1); // splitter gets all remaining space
+    hbox->addWidget(m_mainSplitter, 1); 
 
     setCentralWidget(centralWidget);
 
@@ -180,11 +185,13 @@ void MainWindow::setupSidebar()
 
 void MainWindow::setupActions()
 {
-    KStandardAction::openNew(this, &MainWindow::newFile, actionCollection());
-    KStandardAction::open(this, &MainWindow::openFile, actionCollection());
-    KStandardAction::save(this, &MainWindow::saveFile, actionCollection());
-    KStandardAction::saveAs(this, &MainWindow::saveFileAs, actionCollection());
+    auto *newAct = KStandardAction::openNew(this, &MainWindow::newFile, actionCollection());
+    auto *openAct = KStandardAction::open(this, &MainWindow::openFile, actionCollection());
+    auto *saveAct = KStandardAction::save(this, &MainWindow::saveFile, actionCollection());
+    auto *saveAsAct = KStandardAction::saveAs(this, &MainWindow::saveFileAs, actionCollection());
     KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
+
+    actionCollection()->setDefaultShortcut(saveAct, Qt::CTRL | Qt::Key_S);
 
     m_togglePreviewAction = new QAction(this);
     m_togglePreviewAction->setText(i18n("Show Preview"));
@@ -269,6 +276,66 @@ void MainWindow::onTextChanged()
         if (m_previewPanel) {
             m_previewPanel->setMarkdown(text);
         }
+        
+        updateErrorHighlighting();
+    }
+}
+
+void MainWindow::updateErrorHighlighting()
+{
+    if (!m_document) return;
+
+    // Clear old ranges
+    qDeleteAll(m_errorRanges);
+    m_errorRanges.clear();
+
+    static KTextEditor::Attribute::Ptr errorAttr;
+    if (!errorAttr) {
+        errorAttr = new KTextEditor::Attribute();
+        errorAttr->setUnderlineStyle(QTextCharFormat::WaveUnderline);
+        errorAttr->setUnderlineColor(Qt::red);
+    }
+
+    QString text = m_document->text();
+    auto vars = VariableManager::instance().variableNames();
+
+    auto offsetToCursor = [&text](int offset) -> KTextEditor::Cursor {
+        int line = 0;
+        int col = 0;
+        for (int i = 0; i < offset && i < text.length(); ++i) {
+            if (text.at(i) == QLatin1Char('\n')) {
+                line++;
+                col = 0;
+            } else {
+                col++;
+            }
+        }
+        return KTextEditor::Cursor(line, col);
+    };
+
+    // Pattern 1: Unresolved variables {{var}}
+    static QRegularExpression unresolvedRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
+    auto it = unresolvedRegex.globalMatch(text);
+    while (it.hasNext()) {
+        auto match = it.next();
+        QString name = match.captured(1);
+        if (!vars.contains(name)) {
+            KTextEditor::Range range(offsetToCursor(match.capturedStart()), offsetToCursor(match.capturedEnd()));
+            auto *mRange = m_document->newMovingRange(range);
+            mRange->setAttribute(errorAttr);
+            m_errorRanges.append(mRange);
+        }
+    }
+
+    // Pattern 2: Potential syntax errors {var} (single braces)
+    static QRegularExpression singleBraceRegex(QStringLiteral("(?<!\\{)\\{([A-Za-z0-9_\\.]+)\\}(?!\\})"));
+    auto it2 = singleBraceRegex.globalMatch(text);
+    while (it2.hasNext()) {
+        auto match = it2.next();
+        KTextEditor::Range range(offsetToCursor(match.capturedStart()), offsetToCursor(match.capturedEnd()));
+        auto *mRange = m_document->newMovingRange(range);
+        mRange->setAttribute(errorAttr);
+        m_errorRanges.append(mRange);
     }
 }
 

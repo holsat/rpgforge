@@ -53,14 +53,28 @@ bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, con
 {
     Q_UNUSED(userBehaved);
     
-    // Start completion if we just typed '{{'
+    // Trigger if user typed '{' and the previous character was also '{'
     if (insertedText == QLatin1String("{")) {
         KTextEditor::Document *doc = view->document();
-        QString line = doc->line(position.line());
-        if (position.column() >= 2 && line.at(position.column() - 2) == QLatin1Char('{')) {
-            return true;
+        if (position.column() >= 2) {
+            QString prev2 = doc->text(KTextEditor::Range(position.line(), position.column() - 2, position.line(), position.column()));
+            if (prev2 == QLatin1String("{{")) {
+                return true;
+            }
         }
     }
+    
+    // Also trigger if we are already inside {{ and the user types a letter
+    KTextEditor::Document *doc = view->document();
+    QString line = doc->line(position.line());
+    int start = position.column();
+    while (start > 0 && line.at(start - 1).isLetterOrNumber()) {
+        start--;
+    }
+    if (start >= 2 && line.mid(start - 2, 2) == QLatin1String("{{")) {
+        return true;
+    }
+
     return false;
 }
 
@@ -69,8 +83,17 @@ void VariableCompletionModel::executeCompletionItem(KTextEditor::View *view, con
     if (!index.isValid() || index.row() >= m_variables.size()) return;
 
     QString completion = m_variables.at(index.row());
-    // We want to insert the variable name and close the braces if needed
-    // But KTextEditor handles the replacement of 'word'.
-    // If we triggered on '{{', the word might be empty or partial.
-    view->document()->replaceText(word, completion + QStringLiteral("}}"));
+    KTextEditor::Document *doc = view->document();
+    
+    // We want to replace the current "word" (variable name being typed)
+    // and potentially the prefix {{ if we're doing a full replacement.
+    // However, KTextEditor usually gives us the range of the current word.
+    doc->replaceText(word, completion);
+    
+    // Check if we need to add the closing }}
+    KTextEditor::Cursor cursor = view->cursorPosition();
+    QString restOfLine = doc->line(cursor.line()).mid(cursor.column());
+    if (!restOfLine.startsWith(QLatin1String("}}"))) {
+        doc->insertText(cursor, QStringLiteral("}}"));
+    }
 }

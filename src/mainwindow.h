@@ -7,6 +7,7 @@ namespace KTextEditor {
     class Document;
     class Editor;
     class View;
+    class MovingRange;
 }
 
 class BreadcrumbBar;
@@ -41,6 +42,7 @@ private Q_SLOTS:
     void navigateToLine(int line);
     void togglePreview();
     void syncScroll();
+    void updateErrorHighlighting();
 
 private:
     void setupEditor();
@@ -71,6 +73,8 @@ private:
     int m_outlineId = -1;
     int m_gitId = -1;
     int m_variablesId = -1;
+
+    QList<KTextEditor::MovingRange*> m_errorRanges;
 };
 
 #endif // MAINWINDOW_H
