@@ -12,7 +12,15 @@ VariableCompletionModel::VariableCompletionModel(QObject *parent)
 void VariableCompletionModel::updateVariables()
 {
     beginResetModel();
-    m_variables = VariableManager::instance().variableNames();
+    m_variables.clear();
+    const auto names = VariableManager::instance().variableNames();
+    for (const QString &name : names) {
+        if (name.startsWith(QLatin1String("CALC:"))) {
+            m_variables.append(name.mid(5));
+        } else {
+            m_variables.append(name);
+        }
+    }
     endResetModel();
 }
 

@@ -18,7 +18,7 @@ public:
     void setPanelVariables(const QMap<QString, QString> &vars);
 
     // Resolve an expression (e.g., "{{hp_base}} + 10")
-    QString resolve(const QString &expression) const;
+    QString resolve(const QString &expression, bool shouldEvaluateMath = true) const;
 
     // Process a full markdown text and replace all {{var}} occurrences
     QString processMarkdown(const QString &markdown) const;

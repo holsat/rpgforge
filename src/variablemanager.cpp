@@ -51,7 +51,7 @@ QMap<QString, QString> VariableManager::mergedVariables() const
     return merged;
 }
 
-QString VariableManager::resolve(const QString &expression) const
+QString VariableManager::resolve(const QString &expression, bool shouldEvaluateMath) const
 {
     // Find all occurrences of {{variable_name}}
     static QRegularExpression varRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
@@ -73,25 +73,27 @@ QString VariableManager::resolve(const QString &expression) const
         for (const auto &match : matchList) {
             QString name = match.captured(1);
             if (vars.contains(name)) {
-                // Get the value of the referenced variable
                 QString val = vars.value(name);
-                // If the value itself is an expression, we don't resolve it here
-                // because the loop will catch it in the next iteration.
+                // If the variable was marked as CALC: in the panel, we strip it here
+                // because we are resolving its value into another expression.
+                if (val.startsWith(QLatin1String("CALC:"))) {
+                    val = val.mid(5);
+                }
                 result.replace(match.capturedStart(), match.capturedLength(), val);
                 changed = true;
             }
         }
     }
 
-    // After resolving all variables, if the string looks like a math expression, evaluate it
-    // Allow digits, operators, parentheses, and spaces
-    static QRegularExpression mathCheckRegex(QStringLiteral("^[0-9\\+\\-\\*/\\(\\)\\.\\s]+$"));
-    if (mathCheckRegex.match(result).hasMatch() && result.contains(QRegularExpression(QStringLiteral("[\\+\\-\\*/\\(\\)]")))) {
-        QJSEngine engine;
-        auto val = engine.evaluate(result);
-        if (!val.isError()) {
-            // Format to avoid scientific notation if possible
-            result = QString::number(val.toNumber(), 'g', 10);
+    // After resolving all variables, if math is enabled and it looks like a math expression, evaluate it
+    if (shouldEvaluateMath) {
+        static QRegularExpression mathCheckRegex(QStringLiteral("^[0-9\\+\\-\\*/\\(\\)\\.\\s]+$"));
+        if (mathCheckRegex.match(result).hasMatch() && result.contains(QRegularExpression(QStringLiteral("[\\+\\-\\*/\\(\\)]")))) {
+            QJSEngine engine;
+            auto val = engine.evaluate(result);
+            if (!val.isError()) {
+                result = QString::number(val.toNumber(), 'g', 10);
+            }
         }
     }
     
@@ -104,6 +106,7 @@ QString VariableManager::processMarkdown(const QString &markdown) const
     static QRegularExpression varRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
     
     QString result = markdown;
+    auto vars = mergedVariables();
     
     auto it = varRegex.globalMatch(result);
     // Work backwards to avoid offset issues
@@ -114,7 +117,13 @@ QString VariableManager::processMarkdown(const QString &markdown) const
     
     for (int i = matches.size() - 1; i >= 0; --i) {
         auto match = matches.at(i);
-        QString resolved = resolve(match.captured(0));
+        QString name = match.captured(1);
+        
+        QString rawVal = vars.value(name);
+        bool shouldCalc = rawVal.startsWith(QLatin1String("CALC:"));
+        QString expression = shouldCalc ? rawVal.mid(5) : rawVal;
+        
+        QString resolved = resolve(expression, shouldCalc);
         result.replace(match.capturedStart(), match.capturedLength(), resolved);
     }
     
