@@ -65,7 +65,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 3 — Live Preview Panel
 
-**Status:** Not Started
+**Status:** Complete
 
 **Goal:** Real-time rendered markdown preview with LaTeX and CSS support.
 

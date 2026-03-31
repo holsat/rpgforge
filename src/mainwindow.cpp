@@ -3,6 +3,7 @@
 #include "fileexplorer.h"
 #include "gitpanel.h"
 #include "outlinepanel.h"
+#include "previewpanel.h"
 #include "sidebar.h"
 
 #include <KActionCollection>
@@ -46,6 +47,9 @@ MainWindow::MainWindow(QWidget *parent)
     autoSaveTimer->setInterval(5000);
     connect(autoSaveTimer, &QTimer::timeout, this, &MainWindow::saveSession);
     autoSaveTimer->start();
+
+    // Initial preview update
+    onTextChanged();
 }
 
 MainWindow::~MainWindow()
@@ -77,6 +81,8 @@ void MainWindow::setupEditor()
             this, &MainWindow::updateTitle);
     connect(m_editorView, &KTextEditor::View::cursorPositionChanged,
             this, &MainWindow::onCursorPositionChanged);
+    connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged,
+            this, &MainWindow::syncScroll);
 }
 
 void MainWindow::setupSidebar()
@@ -86,6 +92,7 @@ void MainWindow::setupSidebar()
     m_outlinePanel = new OutlinePanel(this);
     m_gitPanel = new GitPanel(this);
     m_breadcrumbBar = new BreadcrumbBar(this);
+    m_previewPanel = new PreviewPanel(this);
 
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
@@ -106,7 +113,7 @@ void MainWindow::setupSidebar()
     // Show file explorer by default
     m_sidebar->showPanel(m_fileExplorerId);
 
-    // Build the central layout: [sidebar | breadcrumb+editor]
+    // Build the central layout: [sidebar | breadcrumb+editor | preview]
     auto *centralWidget = new QWidget(this);
     auto *hbox = new QHBoxLayout(centralWidget);
     hbox->setContentsMargins(0, 0, 0, 0);
@@ -114,14 +121,23 @@ void MainWindow::setupSidebar()
 
     hbox->addWidget(m_sidebar);
 
-    auto *editorContainer = new QWidget(centralWidget);
+    m_mainSplitter = new QSplitter(Qt::Horizontal, centralWidget);
+
+    auto *editorContainer = new QWidget(m_mainSplitter);
     auto *vbox = new QVBoxLayout(editorContainer);
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
     vbox->addWidget(m_breadcrumbBar);
     vbox->addWidget(m_editorView);
 
-    hbox->addWidget(editorContainer, 1); // editor gets all remaining space
+    m_mainSplitter->addWidget(editorContainer);
+    m_mainSplitter->addWidget(m_previewPanel);
+
+    // Set initial sizes for splitter (50/50 split)
+    m_mainSplitter->setStretchFactor(0, 1);
+    m_mainSplitter->setStretchFactor(1, 1);
+
+    hbox->addWidget(m_mainSplitter, 1); // splitter gets all remaining space
 
     setCentralWidget(centralWidget);
 
@@ -143,6 +159,15 @@ void MainWindow::setupActions()
     KStandardAction::save(this, &MainWindow::saveFile, actionCollection());
     KStandardAction::saveAs(this, &MainWindow::saveFileAs, actionCollection());
     KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
+
+    m_togglePreviewAction = new QAction(this);
+    m_togglePreviewAction->setText(i18n("Show Preview"));
+    m_togglePreviewAction->setIcon(QIcon::fromTheme(QStringLiteral("view-split-left-right")));
+    m_togglePreviewAction->setCheckable(true);
+    m_togglePreviewAction->setChecked(true);
+    m_togglePreviewAction->setShortcut(Qt::CTRL | Qt::Key_P);
+    actionCollection()->addAction(QStringLiteral("toggle_preview"), m_togglePreviewAction);
+    connect(m_togglePreviewAction, &QAction::triggered, this, &MainWindow::togglePreview);
 }
 
 void MainWindow::newFile()
@@ -150,6 +175,7 @@ void MainWindow::newFile()
     m_document->closeUrl();
     m_document->setHighlightingMode(QStringLiteral("Markdown"));
     updateTitle();
+    onTextChanged();
 }
 
 void MainWindow::openFile()
@@ -198,8 +224,14 @@ void MainWindow::saveFileAs()
 
 void MainWindow::onTextChanged()
 {
-    if (m_outlinePanel && m_document) {
-        m_outlinePanel->documentChanged(m_document->text());
+    if (m_document) {
+        QString text = m_document->text();
+        if (m_outlinePanel) {
+            m_outlinePanel->documentChanged(text);
+        }
+        if (m_previewPanel) {
+            m_previewPanel->setMarkdown(text);
+        }
     }
 }
 
@@ -226,6 +258,29 @@ void MainWindow::navigateToLine(int line)
     if (m_editorView) {
         m_editorView->setCursorPosition(KTextEditor::Cursor(line, 0));
         m_editorView->setFocus();
+    }
+}
+
+void MainWindow::togglePreview()
+{
+    if (m_previewPanel) {
+        m_previewPanel->setVisible(m_togglePreviewAction->isChecked());
+    }
+}
+
+void MainWindow::syncScroll()
+{
+    if (!m_editorView || !m_previewPanel || !m_previewPanel->isVisible()) return;
+
+    // Synchronize by percentage of the document
+    // KTextEditor doesn't give direct total height in pixels easily,
+    // so we use lines as a proxy for percentage.
+    int currentLine = m_editorView->firstDisplayedLine();
+    int totalLines = m_document->lines();
+    
+    if (totalLines > 0) {
+        double percentage = static_cast<double>(currentLine) / totalLines;
+        m_previewPanel->scrollToPercentage(percentage);
     }
 }
 

@@ -13,9 +13,12 @@ class BreadcrumbBar;
 class FileExplorer;
 class GitPanel;
 class OutlinePanel;
+class PreviewPanel;
 class Sidebar;
 class QTimer;
 class QUrl;
+class QSplitter;
+class QAction;
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -35,6 +38,8 @@ private Q_SLOTS:
     void updateCursorContext();
     void onTextChanged();
     void navigateToLine(int line);
+    void togglePreview();
+    void syncScroll();
 
 private:
     void setupEditor();
@@ -53,6 +58,10 @@ private:
     OutlinePanel *m_outlinePanel = nullptr;
     GitPanel *m_gitPanel = nullptr;
     BreadcrumbBar *m_breadcrumbBar = nullptr;
+    PreviewPanel *m_previewPanel = nullptr;
+
+    QSplitter *m_mainSplitter = nullptr;
+    QAction *m_togglePreviewAction = nullptr;
 
     QTimer *m_cursorDebounce = nullptr;
 

@@ -24,6 +24,9 @@ public:
     // Parse the given markdown text and return all headings
     QVector<HeadingInfo> parseHeadings(const QString &markdown) const;
 
+    // Render markdown to HTML with GFM extensions
+    QString renderHtml(const QString &markdown) const;
+
     // Find the heading context (ancestor chain) for a given line number.
     static QVector<HeadingInfo> headingContextForLine(const QVector<HeadingInfo> &headings, int line);
 

@@ -11,6 +11,39 @@ void MarkdownParser::init()
     cmark_gfm_core_extensions_ensure_registered();
 }
 
+QString MarkdownParser::renderHtml(const QString &markdown) const
+{
+    if (markdown.isEmpty()) return QString();
+
+    QByteArray utf8 = markdown.toUtf8();
+    cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
+    if (!parser) return QString();
+
+    // Attach GFM extensions
+    const char *exts[] = {"table", "strikethrough", "autolink", "tasklist"};
+    for (const char *name : exts) {
+        cmark_syntax_extension *ext = cmark_find_syntax_extension(name);
+        if (ext) cmark_parser_attach_syntax_extension(parser, ext);
+    }
+
+    cmark_parser_feed(parser, utf8.constData(), utf8.size());
+    cmark_node *doc = cmark_parser_finish(parser);
+
+    if (!doc) {
+        cmark_parser_free(parser);
+        return QString();
+    }
+
+    char *rendered = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
+    QString html = QString::fromUtf8(rendered);
+
+    free(rendered);
+    cmark_node_free(doc);
+    cmark_parser_free(parser);
+
+    return html;
+}
+
 QVector<HeadingInfo> MarkdownParser::parseHeadings(const QString &markdown) const
 {
     QVector<HeadingInfo> headings;

@@ -13,7 +13,7 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets)
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -46,6 +46,8 @@ add_executable(rpgforge
     src/sidebar.h
     src/gitpanel.cpp
     src/gitpanel.h
+    src/previewpanel.cpp
+    src/previewpanel.h
     src/resources.qrc
 )
 
@@ -53,6 +55,7 @@ target_link_libraries(rpgforge
     Qt6::Widgets
     Qt6::Core
     Qt6::Gui
+    Qt6::WebEngineWidgets
     KF6::CoreAddons
     KF6::I18n
     KF6::XmlGui

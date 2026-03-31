@@ -13,6 +13,9 @@
     </Menu>
     <!-- Edit, View, Selection, and Tools menus are provided by
          KTextEditor::View's merged GUI client -->
+    <Menu name="view">
+      <Action name="toggle_preview"/>
+    </Menu>
     <!-- Remove the empty Search menu that KTextEditor creates -->
     <Menu name="search" deleted="true"/>
   </MenuBar>
@@ -21,5 +24,7 @@
     <Action name="file_new"/>
     <Action name="file_open"/>
     <Action name="file_save"/>
+    <Separator/>
+    <Action name="toggle_preview"/>
   </ToolBar>
 </gui>
