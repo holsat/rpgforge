@@ -1,6 +1,6 @@
 <RCC>
   <qresource prefix="/">
-    <file alias="icons/rpgforge.svg">../icons/rpgforge.svg</file>
+    <file alias="icons/org.kde.rpgforge.svg">../icons/org.kde.rpgforge.svg</file>
     <file>rpgforgeui.rc</file>
   </qresource>
 </RCC>

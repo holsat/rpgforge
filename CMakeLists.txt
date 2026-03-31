@@ -69,7 +69,7 @@ target_link_libraries(rpgforge
 
 install(TARGETS rpgforge ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(FILES src/rpgforgeui.rc DESTINATION ${KDE_INSTALL_KXMLGUIDIR}/rpgforge)
-install(FILES rpgforge.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+install(FILES org.kde.rpgforge.desktop DESTINATION ${KDE_INSTALL_APPDIR})
 install(FILES icons/rpgforge.svg DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps)
 install(FILES icons/rpgforge_16x16.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/16x16/apps RENAME rpgforge.png)
 install(FILES icons/rpgforge_22x22.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/22x22/apps RENAME rpgforge.png)

@@ -15,7 +15,7 @@ int main(int argc, char *argv[])
     KLocalizedString::setApplicationDomain("rpgforge");
 
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("rpgforge"),
-        QIcon(QStringLiteral(":/icons/rpgforge.svg"))));
+        QIcon(QStringLiteral(":/icons/org.kde.rpgforge.svg"))));
 
     KAboutData aboutData(
         QStringLiteral("rpgforge"),
@@ -24,7 +24,7 @@ int main(int argc, char *argv[])
         i18n("An IDE for RPG game designers"),
         KAboutLicense::GPL_V3,
         i18n("(c) 2026"));
-    aboutData.setProgramLogo(QIcon(QStringLiteral(":/icons/rpgforge.svg")));
+    aboutData.setProgramLogo(QIcon(QStringLiteral(":/icons/org.kde.rpgforge.svg")));
     aboutData.setDesktopFileName(QStringLiteral("org.kde.rpgforge"));
 
     KAboutData::setApplicationData(aboutData);
