@@ -119,4 +119,12 @@ void BreadcrumbBar::rebuildCrumbs()
     }
 
     m_layout->addStretch();
+
+    // Add Toggle Preview button at the far right
+    auto *toggleBtn = new QToolButton(this);
+    toggleBtn->setIcon(QIcon::fromTheme(QStringLiteral("view-split-left-right")));
+    toggleBtn->setToolTip(tr("Toggle Live Preview"));
+    toggleBtn->setAutoRaise(true);
+    connect(toggleBtn, &QToolButton::clicked, this, &BreadcrumbBar::togglePreviewRequested);
+    m_layout->addWidget(toggleBtn);
 }

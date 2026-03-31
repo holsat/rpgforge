@@ -150,6 +150,11 @@ void MainWindow::setupSidebar()
             this, &MainWindow::navigateToLine);
     connect(m_breadcrumbBar, &BreadcrumbBar::headingClicked,
             this, &MainWindow::navigateToLine);
+    connect(m_breadcrumbBar, &BreadcrumbBar::togglePreviewRequested,
+            this, [this]() {
+                m_togglePreviewAction->setChecked(!m_togglePreviewAction->isChecked());
+                togglePreview();
+            });
 }
 
 void MainWindow::setupActions()
@@ -191,6 +196,9 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 {
     if (!url.isEmpty()) {
         m_document->openUrl(url);
+        if (m_previewPanel) {
+            m_previewPanel->setBaseUrl(url);
+        }
         const QString fileName = url.fileName();
         if (fileName.endsWith(QLatin1String(".md")) ||
             fileName.endsWith(QLatin1String(".markdown")) ||
@@ -218,6 +226,9 @@ void MainWindow::saveFileAs()
         i18n("Markdown Files (*.md *.markdown);;All Files (*)"));
     if (!url.isEmpty()) {
         m_document->saveAs(url);
+        if (m_previewPanel) {
+            m_previewPanel->setBaseUrl(url);
+        }
         updateTitle();
     }
 }

@@ -12,10 +12,11 @@ PreviewPanel::PreviewPanel(QWidget *parent)
     layout->addWidget(m_webView);
 
     m_debounceTimer->setSingleShot(true);
-    m_debounceTimer->setInterval(200);
+    m_debounceTimer->setInterval(150); // Lowered for more responsiveness
     connect(m_debounceTimer, &QTimer::timeout, this, &PreviewPanel::updatePreview);
+    connect(m_webView, &QWebEngineView::loadFinished, this, &PreviewPanel::onLoadFinished);
 
-    // Initial load
+    // Load initial empty skeleton
     m_webView->setHtml(wrapHtml(QString()));
 }
 
@@ -25,10 +26,58 @@ void PreviewPanel::setMarkdown(const QString &markdown)
     m_debounceTimer->start();
 }
 
+void PreviewPanel::setBaseUrl(const QUrl &url)
+{
+    if (m_baseUrl != url) {
+        m_baseUrl = url;
+        m_needsFullReload = true;
+        m_debounceTimer->start();
+    }
+}
+
+void PreviewPanel::onLoadFinished(bool ok)
+{
+    m_isLoaded = ok;
+    m_needsFullReload = false;
+    if (ok) {
+        // Now that the page is loaded, update with the latest markdown if any
+        if (!m_pendingMarkdown.isEmpty()) {
+            updatePreview();
+        }
+    }
+}
+
 void PreviewPanel::updatePreview()
 {
+    if (m_needsFullReload || !m_isLoaded) {
+        m_webView->setHtml(wrapHtml(QString()), m_baseUrl);
+        m_needsFullReload = false;
+        return;
+    }
+
     QString htmlBody = m_parser.renderHtml(m_pendingMarkdown);
-    m_webView->setHtml(wrapHtml(htmlBody));
+    
+    // Escape for JavaScript string
+    QString escaped = htmlBody;
+    escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+    escaped.replace(QLatin1Char('\"'), QLatin1String("\\\""));
+    escaped.replace(QLatin1Char('\''), QLatin1String("\\\'"));
+    escaped.replace(QLatin1Char('\n'), QLatin1String("\\n"));
+    escaped.replace(QLatin1Char('\r'), QLatin1String("\\r"));
+    escaped.replace(QLatin1Char('\b'), QLatin1String("\\b"));
+    escaped.replace(QLatin1Char('\f'), QLatin1String("\\f"));
+
+    QString js = QStringLiteral(
+        "var content = document.getElementById('content');"
+        "if (content) {"
+        "  content.innerHTML = \"%1\";"
+        "  if (window.renderMathInElement) {"
+        "    renderMathInElement(content);"
+        "  }"
+        "}"
+    ).arg(escaped);
+
+    m_webView->page()->runJavaScript(js);
 }
 
 void PreviewPanel::scrollBy(int x, int y)
@@ -61,7 +110,7 @@ QString PreviewPanel::wrapHtml(const QString &body) const
         "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css\">"
         "<script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js\"></script>"
         "<script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js\" "
-        "onload=\"renderMathInElement(document.body);\"></script>"
+        "onload=\"window.renderMathInElement = renderMathInElement; renderMathInElement(document.body);\"></script>"
         "<style>"
         "body { font-family: sans-serif; line-height: 1.6; padding: 2em; max-width: 800px; margin: 0 auto; color: #333; }"
         "pre { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }"
@@ -70,11 +119,11 @@ QString PreviewPanel::wrapHtml(const QString &body) const
         "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }"
         "th { background-color: #f2f2f2; }"
         "blockquote { border-left: 4px solid #ddd; padding-left: 1em; color: #666; margin-left: 0; }"
-        "img { max-width: 100%; }"
+        "img { max-width: 100%; height: auto; }"
         "</style>"
-        "</head><body>"
+        "</head><body><div id=\"content\">"
     );
-    static const QString foot = QStringLiteral("</body></html>");
+    static const QString foot = QStringLiteral("</div></body></html>");
 
     return head + body + foot;
 }

@@ -28,6 +28,7 @@ public:
 
 Q_SIGNALS:
     void headingClicked(int line);
+    void togglePreviewRequested();
 
 private Q_SLOTS:
     void rebuildCrumbs();
