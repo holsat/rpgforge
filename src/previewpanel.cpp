@@ -101,6 +101,35 @@ void PreviewPanel::scrollToPercentage(double percentage)
     m_webView->page()->runJavaScript(js);
 }
 
+void PreviewPanel::scrollToLine(int line)
+{
+    // Find the element with id="line-X" or the nearest one before it
+    QString js = QStringLiteral(
+        "(function() {"
+        "  var targetLine = %1;"
+        "  var el = document.getElementById('line-' + targetLine);"
+        "  if (!el) {"
+        "    // If exact line not found (not a heading), find nearest heading before it"
+        "    var headings = document.querySelectorAll('[id^=\"line-\"]');"
+        "    var best = null;"
+        "    for (var h of headings) {"
+        "      var hLine = parseInt(h.id.replace('line-', ''));"
+        "      if (hLine <= targetLine) {"
+        "        if (!best || hLine > parseInt(best.id.replace('line-', ''))) {"
+        "          best = h;"
+        "        }"
+        "      } else break;"
+        "    }"
+        "    el = best;"
+        "  }"
+        "  if (el) {"
+        "    el.scrollIntoView({behavior: 'smooth', block: 'start'});"
+        "  }"
+        "})();"
+    ).arg(line);
+    m_webView->page()->runJavaScript(js);
+}
+
 QString PreviewPanel::wrapHtml(const QString &body) const
 {
     // Basic CSS and KaTeX integration

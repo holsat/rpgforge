@@ -20,6 +20,7 @@ public:
     void setBaseUrl(const QUrl &url);
     void scrollBy(int x, int y);
     void scrollToPercentage(double percentage);
+    void scrollToLine(int line);
 
 private Q_SLOTS:
     void updatePreview();

@@ -268,6 +268,9 @@ void MainWindow::navigateToLine(int line)
     if (m_editorView) {
         m_editorView->setCursorPosition(KTextEditor::Cursor(line, 0));
         m_editorView->setFocus();
+        if (m_previewPanel && m_previewPanel->isVisible()) {
+            m_previewPanel->scrollToLine(line);
+        }
     }
 }
 
@@ -275,6 +278,9 @@ void MainWindow::togglePreview()
 {
     if (m_previewPanel) {
         m_previewPanel->setVisible(m_togglePreviewAction->isChecked());
+        if (m_previewPanel->isVisible()) {
+            syncScroll();
+        }
     }
 }
 
@@ -282,16 +288,9 @@ void MainWindow::syncScroll()
 {
     if (!m_editorView || !m_previewPanel || !m_previewPanel->isVisible()) return;
 
-    // Synchronize by percentage of the document
-    // KTextEditor doesn't give direct total height in pixels easily,
-    // so we use lines as a proxy for percentage.
+    // Use scrollToLine for improved accuracy
     int currentLine = m_editorView->firstDisplayedLine();
-    int totalLines = m_document->lines();
-    
-    if (totalLines > 0) {
-        double percentage = static_cast<double>(currentLine) / totalLines;
-        m_previewPanel->scrollToPercentage(percentage);
-    }
+    m_previewPanel->scrollToLine(currentLine);
 }
 
 void MainWindow::updateTitle()

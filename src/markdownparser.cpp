@@ -19,7 +19,6 @@ QString MarkdownParser::renderHtml(const QString &markdown) const
     cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
     if (!parser) return QString();
 
-    // Attach GFM extensions
     const char *exts[] = {"table", "strikethrough", "autolink", "tasklist"};
     for (const char *name : exts) {
         cmark_syntax_extension *ext = cmark_find_syntax_extension(name);
@@ -28,16 +27,56 @@ QString MarkdownParser::renderHtml(const QString &markdown) const
 
     cmark_parser_feed(parser, utf8.constData(), utf8.size());
     cmark_node *doc = cmark_parser_finish(parser);
-
     if (!doc) {
         cmark_parser_free(parser);
         return QString();
     }
 
-    char *rendered = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
-    QString html = QString::fromUtf8(rendered);
+    // Instead of simple cmark_render_html, we use a custom walker to inject line numbers
+    // This allows us to jump to specific headings exactly.
+    cmark_iter *iter = cmark_iter_new(doc);
+    cmark_event_type evType;
+    QString html;
 
-    free(rendered);
+    while ((evType = cmark_iter_next(iter)) != CMARK_EVENT_DONE) {
+        cmark_node *node = cmark_iter_get_node(iter);
+        cmark_node_type type = cmark_node_get_type(node);
+
+        if (type == CMARK_NODE_HEADING) {
+            int level = cmark_node_get_heading_level(node);
+            int line = cmark_node_get_start_line(node) - 1; // 0-based
+            if (evType == CMARK_EVENT_ENTER) {
+                html += QStringLiteral("<h%1 id=\"line-%2\">").arg(level).arg(line);
+            } else {
+                html += QStringLiteral("</h%1>\n").arg(level);
+            }
+            continue;
+        }
+
+        // For all other nodes, we let cmark render them, but we want to intercept
+        // to avoid double rendering during recursion.
+        // For simplicity in this phase, we only inject IDs into headings.
+        // We'll use cmark_render_html on the node itself if it's not a heading and it's an ENTER event.
+        if (evType == CMARK_EVENT_ENTER) {
+            // We only want to render the node if its parent isn't being handled by us
+            cmark_node *parent = cmark_node_parent(node);
+            if (parent && cmark_node_get_type(parent) == CMARK_NODE_HEADING) {
+                // Inside a heading, just get the text/inline content
+                char *part = cmark_render_html(node, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
+                html += QString::fromUtf8(part);
+                free(part);
+                cmark_iter_reset(iter, node, CMARK_EVENT_EXIT);
+            } else if (type != CMARK_NODE_DOCUMENT) {
+                // Standard block/inline
+                char *part = cmark_render_html(node, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
+                html += QString::fromUtf8(part);
+                free(part);
+                cmark_iter_reset(iter, node, CMARK_EVENT_EXIT);
+            }
+        }
+    }
+
+    cmark_iter_free(iter);
     cmark_node_free(doc);
     cmark_parser_free(parser);
 
