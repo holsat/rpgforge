@@ -134,9 +134,11 @@ void MainWindow::setupEditor()
 
     // Register variable autocomplete safely after the view is fully initialized
     QTimer::singleShot(500, this, [this]() {
+        m_editorView->setAutomaticInvocationEnabled(true);
         auto *completionModel = new VariableCompletionModel(this);
         m_editorView->registerCompletionModel(completionModel);
-        std::cerr << "MainWindow: Variable completion model registered (deferred)" << std::endl;
+        std::cerr << "MainWindow: Variable completion model registered (deferred), auto-invoke="
+                  << m_editorView->isAutomaticInvocationEnabled() << std::endl;
     });
 }
 
