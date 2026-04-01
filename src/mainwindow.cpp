@@ -1,12 +1,41 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #include "mainwindow.h"
 #include "breadcrumbbar.h"
+#include "compiledialog.h"
+#include "explorersidebar.h"
+#include "corkboardview.h"
+#include "imagepreview.h"
 #include "fileexplorer.h"
 #include "gitpanel.h"
 #include "outlinepanel.h"
+#include "pdfexporter.h"
 #include "previewpanel.h"
+#include "projecttreepanel.h"
 #include "variablespanel.h"
 #include "variablemanager.h"
 #include "variablecompletionmodel.h"
+#include "projectmanager.h"
+#include "projectsettingsdialog.h"
+#include "metadatadialog.h"
+#include "newprojectdialog.h"
+#include "projecttreemodel.h"
 #include "sidebar.h"
 
 #include <KActionCollection>
@@ -20,13 +49,19 @@
 #include <KTextEditor/View>
 
 #include <QApplication>
+#include <QDir>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QInputDialog>
+#include <QMenu>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWebEngineView>
 
 MainWindow::MainWindow(QWidget *parent)
     : KXmlGuiWindow(parent)
@@ -99,6 +134,9 @@ void MainWindow::setupSidebar()
 {
     // Create the sidebar panels
     m_fileExplorer = new FileExplorer(this);
+    m_projectTree = new ProjectTreePanel(this);
+    auto *explorerStack = new ExplorerSidebar(m_projectTree, m_fileExplorer, this);
+    
     m_outlinePanel = new OutlinePanel(this);
     m_gitPanel = new GitPanel(this);
     m_breadcrumbBar = new BreadcrumbBar(this);
@@ -108,9 +146,9 @@ void MainWindow::setupSidebar()
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
     m_fileExplorerId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("folder")),
-        QStringLiteral("File Explorer"),
-        m_fileExplorer);
+        QIcon::fromTheme(QStringLiteral("folder-explorer"), QIcon::fromTheme(QStringLiteral("folder"))),
+        QStringLiteral("Explorer"),
+        explorerStack);
     m_outlineId = m_sidebar->addPanel(
         QIcon::fromTheme(QStringLiteral("view-list-tree")),
         QStringLiteral("Document Outline"),
@@ -125,7 +163,9 @@ void MainWindow::setupSidebar()
         QStringLiteral("Git / Versioning"),
         m_gitPanel);
 
-    // Show file explorer by default
+    connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
+
+    // Show explorer by default
     m_sidebar->showPanel(m_fileExplorerId);
 
     // Build the central layout: [splitter [sidebar | editor | preview]]
@@ -141,7 +181,17 @@ void MainWindow::setupSidebar()
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
     vbox->addWidget(m_breadcrumbBar);
-    vbox->addWidget(m_editorView);
+    
+    m_centralStack = new QStackedWidget(editorContainer);
+    m_corkboardView = new CorkboardView(this);
+    m_imagePreview = new ImagePreview(this);
+    m_pdfViewer = new QWebEngineView(this);
+    m_centralStack->addWidget(m_editorView);
+    m_centralStack->addWidget(m_corkboardView);
+    m_centralStack->addWidget(m_imagePreview);
+    m_centralStack->addWidget(m_pdfViewer);
+    
+    vbox->addWidget(m_centralStack);
 
     m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(editorContainer);
@@ -160,6 +210,43 @@ void MainWindow::setupSidebar()
     // Wire up connections
     connect(m_fileExplorer, &FileExplorer::fileActivated,
             this, &MainWindow::openFileFromUrl);
+    connect(m_projectTree, &ProjectTreePanel::fileActivated, this, [this](const QString &relativePath) {
+        if (ProjectManager::instance().isProjectOpen()) {
+            QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
+            openFileFromUrl(QUrl::fromLocalFile(fullPath));
+            m_centralStack->setCurrentWidget(m_editorView);
+        }
+    });
+    connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](ProjectTreeItem *folder) {
+        if (folder->name.toLower() == QStringLiteral("media")) {
+            // Switch to editor or something neutral, or just stay on last view
+            return;
+        }
+        m_corkboardView->setFolder(folder);
+        m_centralStack->setCurrentWidget(m_corkboardView);
+    });
+    connect(m_corkboardView, &CorkboardView::fileActivated, this, [this](const QString &relativePath) {
+        if (ProjectManager::instance().isProjectOpen()) {
+            QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
+            openFileFromUrl(QUrl::fromLocalFile(fullPath));
+            m_centralStack->setCurrentWidget(m_editorView);
+        }
+    });
+    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](ProjectTreeItem *folder, ProjectTreeItem *draggedItem, ProjectTreeItem *targetItem) {
+        int toIdx = -1;
+        if (targetItem) {
+            toIdx = folder->children.indexOf(targetItem);
+        } else {
+            toIdx = folder->children.size();
+        }
+
+        if (m_projectTree->model()->moveItem(draggedItem, folder, toIdx)) {
+            ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+            ProjectManager::instance().saveProject();
+            // Refresh corkboard to reflect potential order changes if model-view sync wasn't enough
+            m_corkboardView->setFolder(folder);
+        }
+    });
     connect(m_outlinePanel, &OutlinePanel::headingsUpdated,
             m_breadcrumbBar, &BreadcrumbBar::setHeadings);
     connect(m_outlinePanel, &OutlinePanel::headingClicked,
@@ -185,10 +272,41 @@ void MainWindow::setupSidebar()
 
 void MainWindow::setupActions()
 {
-    auto *newAct = KStandardAction::openNew(this, &MainWindow::newFile, actionCollection());
-    auto *openAct = KStandardAction::open(this, &MainWindow::openFile, actionCollection());
+    actionCollection()->addAction(KStandardAction::New, QStringLiteral("file_new"), this, SLOT(newFile()));
+    actionCollection()->addAction(KStandardAction::Open, QStringLiteral("file_open"), this, SLOT(openFile()));
     auto *saveAct = KStandardAction::save(this, &MainWindow::saveFile, actionCollection());
-    auto *saveAsAct = KStandardAction::saveAs(this, &MainWindow::saveFileAs, actionCollection());
+    actionCollection()->addAction(KStandardAction::SaveAs, QStringLiteral("file_save_as"), this, SLOT(saveFileAs()));
+    
+    auto *newProjectAct = new QAction(this);
+    newProjectAct->setText(i18n("New Project..."));
+    newProjectAct->setIcon(QIcon::fromTheme(QStringLiteral("project-development-new")));
+    actionCollection()->addAction(QStringLiteral("project_new"), newProjectAct);
+    connect(newProjectAct, &QAction::triggered, this, &MainWindow::newProject);
+
+    auto *openProjectAct = new QAction(this);
+    openProjectAct->setText(i18n("Open Project..."));
+    openProjectAct->setIcon(QIcon::fromTheme(QStringLiteral("project-open")));
+    actionCollection()->addAction(QStringLiteral("project_open"), openProjectAct);
+    connect(openProjectAct, &QAction::triggered, this, &MainWindow::openProject);
+
+    auto *closeProjectAct = new QAction(this);
+    closeProjectAct->setText(i18n("Close Project"));
+    closeProjectAct->setIcon(QIcon::fromTheme(QStringLiteral("project-development-close")));
+    actionCollection()->addAction(QStringLiteral("project_close"), closeProjectAct);
+    connect(closeProjectAct, &QAction::triggered, this, &MainWindow::closeProject);
+
+    auto *projectSettingsAct = new QAction(this);
+    projectSettingsAct->setText(i18n("Project Settings..."));
+    projectSettingsAct->setIcon(QIcon::fromTheme(QStringLiteral("configure")));
+    actionCollection()->addAction(QStringLiteral("project_settings"), projectSettingsAct);
+    connect(projectSettingsAct, &QAction::triggered, this, &MainWindow::projectSettings);
+
+    auto *compileAct = new QAction(this);
+    compileAct->setText(i18n("Compile to PDF..."));
+    compileAct->setIcon(QIcon::fromTheme(QStringLiteral("document-export-pdf")));
+    actionCollection()->addAction(QStringLiteral("compile_project"), compileAct);
+    connect(compileAct, &QAction::triggered, this, &MainWindow::compileToPdf);
+
     KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
 
     actionCollection()->setDefaultShortcut(saveAct, Qt::CTRL | Qt::Key_S);
@@ -222,9 +340,31 @@ void MainWindow::openFile()
 
 void MainWindow::openFileFromUrl(const QUrl &url)
 {
-    if (!url.isEmpty()) {
+    if (!url.isEmpty() && url.isLocalFile()) {
+        QString path = url.toLocalFile();
+        QString suffix = QFileInfo(path).suffix().toLower();
+        
+        static QStringList imgSuffixes = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"), 
+                                        QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"), 
+                                        QStringLiteral("bmp")};
+        
+        if (imgSuffixes.contains(suffix)) {
+            if (m_imagePreview->loadImage(path)) {
+                m_centralStack->setCurrentWidget(m_imagePreview);
+                if (m_previewPanel) m_previewPanel->hide();
+                return;
+            }
+        } else if (suffix == QLatin1String("pdf")) {
+            m_pdfViewer->setUrl(url);
+            m_centralStack->setCurrentWidget(m_pdfViewer);
+            if (m_previewPanel) m_previewPanel->hide();
+            return;
+        }
+        
         m_document->openUrl(url);
-        if (m_previewPanel) {
+        m_centralStack->setCurrentWidget(m_editorView);
+        if (m_previewPanel && m_togglePreviewAction->isChecked()) {
+            m_previewPanel->show();
             m_previewPanel->setBaseUrl(url);
         }
         const QString fileName = url.fileName();
@@ -261,6 +401,102 @@ void MainWindow::saveFileAs()
     }
 }
 
+void MainWindow::newProject()
+{
+    QString defaultDir = m_fileExplorer ? m_fileExplorer->rootPath() : QDir::homePath();
+    NewProjectDialog dialog(defaultDir, this);
+    
+    if (dialog.exec() == QDialog::Accepted) {
+        QString dir = dialog.projectDir();
+        QString name = dialog.projectName();
+        
+        if (!dir.isEmpty() && !name.isEmpty()) {
+            if (ProjectManager::instance().createProject(dir, name)) {
+                m_fileExplorer->setRootPath(dir);
+                
+                // Add top level folder with project name
+                QModelIndex rootFolder = m_projectTree->model()->addFolder(name);
+                
+                // If a file is open, add it to the project
+                if (m_document && !m_document->url().isEmpty()) {
+                    QString openFilePath = m_document->url().toLocalFile();
+                    m_projectTree->model()->addFileWithSmartDiscovery(openFilePath, rootFolder);
+                }
+                
+                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+                ProjectManager::instance().saveProject();
+                
+                updateTitle();
+            }
+        }
+    }
+}
+
+void MainWindow::openProject()
+{
+    const QString filePath = QFileDialog::getOpenFileName(this, i18n("Open Project"),
+        QString(), i18n("RPG Forge Project (rpgforge.project)"));
+    
+    if (!filePath.isEmpty()) {
+        if (ProjectManager::instance().openProject(filePath)) {
+            m_fileExplorer->setRootPath(ProjectManager::instance().projectPath());
+            updateTitle();
+        }
+    }
+}
+
+void MainWindow::closeProject()
+{
+    ProjectManager::instance().closeProject();
+    updateTitle();
+}
+
+void MainWindow::projectSettings()
+{
+    if (!ProjectManager::instance().isProjectOpen()) {
+        QMessageBox::information(this, i18n("Project Settings"), 
+            i18n("No project is currently open."));
+        return;
+    }
+    
+    ProjectSettingsDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        dialog.save();
+        updateTitle();
+    }
+}
+
+void MainWindow::compileToPdf()
+{
+    if (!ProjectManager::instance().isProjectOpen()) {
+        QMessageBox::information(this, i18n("Compile Project"), 
+            i18n("No project is currently open."));
+        return;
+    }
+
+    CompileDialog settingsDialog(this);
+    if (settingsDialog.exec() != QDialog::Accepted) return;
+    
+    CompileOptions options = settingsDialog.options();
+
+    QString outputPath = QFileDialog::getSaveFileName(this, i18n("Export to PDF"),
+        ProjectManager::instance().projectPath(), i18n("PDF Files (*.pdf)"));
+    
+    if (outputPath.isEmpty()) return;
+
+    auto *exporter = new PdfExporter(this);
+    connect(exporter, &PdfExporter::finished, this, [this, exporter](bool success, const QString &message) {
+        if (success) {
+            QMessageBox::information(this, i18n("Compile Success"), message);
+        } else {
+            QMessageBox::critical(this, i18n("Compile Error"), message);
+        }
+        exporter->deleteLater();
+    });
+    
+    exporter->exportProject(outputPath, options);
+}
+
 void MainWindow::onTextChanged()
 {
     if (m_document) {
@@ -270,11 +506,13 @@ void MainWindow::onTextChanged()
         auto frontMatterVars = VariableManager::parseFrontMatter(text);
         VariableManager::instance().setDocumentVariables(frontMatterVars);
 
+        QString contentOnly = VariableManager::stripMetadata(text);
+
         if (m_outlinePanel) {
-            m_outlinePanel->documentChanged(text);
+            m_outlinePanel->documentChanged(contentOnly);
         }
         if (m_previewPanel) {
-            m_previewPanel->setMarkdown(text);
+            m_previewPanel->setMarkdown(contentOnly);
         }
         
         updateErrorHighlighting();
@@ -390,6 +628,10 @@ void MainWindow::syncScroll()
 void MainWindow::updateTitle()
 {
     QString title = QStringLiteral("RPG Forge");
+    if (ProjectManager::instance().isProjectOpen()) {
+        title = ProjectManager::instance().projectName() + QStringLiteral(" — ") + title;
+    }
+    
     if (!m_document->url().isEmpty()) {
         title = m_document->url().fileName() + QStringLiteral(" — ") + title;
     } else {
@@ -411,6 +653,12 @@ void MainWindow::saveSession()
     if (m_fileExplorer) {
         settings.setValue(QStringLiteral("explorerRoot"), m_fileExplorer->rootPath());
         settings.setValue(QStringLiteral("showHiddenFiles"), m_fileExplorer->showHiddenFiles());
+    }
+
+    if (ProjectManager::instance().isProjectOpen()) {
+        settings.setValue(QStringLiteral("lastProject"), ProjectManager::instance().projectFilePath());
+    } else {
+        settings.remove(QStringLiteral("lastProject"));
     }
 
     if (m_document && !m_document->url().isEmpty()) {
@@ -448,6 +696,16 @@ void MainWindow::restoreSession()
 
     if (m_fileExplorer && settings.contains(QStringLiteral("explorerRoot"))) {
         m_fileExplorer->setRootPath(settings.value(QStringLiteral("explorerRoot")).toString());
+    }
+
+    if (settings.contains(QStringLiteral("lastProject"))) {
+        QString projectPath = settings.value(QStringLiteral("lastProject")).toString();
+        if (QFile::exists(projectPath)) {
+            ProjectManager::instance().openProject(projectPath);
+            if (m_fileExplorer) {
+                m_fileExplorer->setRootPath(ProjectManager::instance().projectPath());
+            }
+        }
     }
 
     if (settings.contains(QStringLiteral("lastFile"))) {
