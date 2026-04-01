@@ -76,6 +76,10 @@ QString VariableManager::resolve(const QString &expression, bool shouldEvaluateM
     QString result = expression;
     auto vars = mergedVariables();
     
+    if (expression.contains(QLatin1String("{{"))) {
+        std::cerr << "VariableManager: Resolving expression [" << expression.toStdString() << "]" << std::endl;
+    }
+
     int depth = 0;
     bool changed = true;
     while (changed && depth < 10) {

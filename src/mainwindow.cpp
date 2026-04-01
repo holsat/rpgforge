@@ -47,6 +47,7 @@
 #include <KTextEditor/Document>
 #include <KTextEditor/Editor>
 #include <KTextEditor/View>
+#include <iostream>
 
 #include <QApplication>
 #include <QDir>
@@ -131,9 +132,12 @@ void MainWindow::setupEditor()
     connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged,
             this, &MainWindow::syncScroll);
 
-    // Register variable autocomplete
-    auto *completionModel = new VariableCompletionModel(this);
-    m_editorView->registerCompletionModel(completionModel);
+    // Register variable autocomplete safely after the view is fully initialized
+    QTimer::singleShot(500, this, [this]() {
+        auto *completionModel = new VariableCompletionModel(this);
+        m_editorView->registerCompletionModel(completionModel);
+        std::cerr << "MainWindow: Variable completion model registered (deferred)" << std::endl;
+    });
 }
 
 void MainWindow::setupSidebar()
