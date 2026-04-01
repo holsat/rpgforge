@@ -16,28 +16,33 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef METADATADIALOG_H
+#define METADATADIALOG_H
 
-#include <QWidget>
+#include <QDialog>
 
-class QLabel;
+class QLineEdit;
+class QComboBox;
+class QTextEdit;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+class MetadataDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
+    explicit MetadataDialog(const QString &title, const QString &status, const QString &synopsis, QWidget *parent = nullptr);
+    ~MetadataDialog() override;
 
-    void setRootPath(const QString &path);
+    QString title() const;
+    QString status() const;
+    QString synopsis() const;
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void setupUi();
+
+    QLineEdit *m_titleEdit = nullptr;
+    QComboBox *m_statusCombo = nullptr;
+    QTextEdit *m_synopsisEdit = nullptr;
 };
 
-#endif // GITPANEL_H
+#endif // METADATADIALOG_H

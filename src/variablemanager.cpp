@@ -1,3 +1,21 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #include "variablemanager.h"
 #include <QRegularExpression>
 #include <QJSEngine>
@@ -161,4 +179,31 @@ QMap<QString, QString> VariableManager::parseFrontMatter(const QString &markdown
     }
     
     return vars;
+}
+
+VariableManager::DocumentMetadata VariableManager::extractMetadata(const QString &markdown)
+{
+    auto vars = parseFrontMatter(markdown);
+    DocumentMetadata meta;
+    meta.title = vars.value(QStringLiteral("title"));
+    meta.status = vars.value(QStringLiteral("status"), QStringLiteral("Draft"));
+    meta.synopsis = vars.value(QStringLiteral("synopsis"));
+    meta.label = vars.value(QStringLiteral("label"));
+    return meta;
+}
+
+QString VariableManager::stripMetadata(const QString &markdown)
+{
+    if (!markdown.startsWith(QLatin1String("---"))) {
+        return markdown;
+    }
+    
+    int endIdx = markdown.indexOf(QLatin1String("---"), 3);
+    if (endIdx == -1) {
+        return markdown;
+    }
+    
+    // Return content after the second --- and skip any leading newlines
+    QString stripped = markdown.mid(endIdx + 3).trimmed();
+    return stripped;
 }

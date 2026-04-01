@@ -6,8 +6,16 @@
       <Action name="file_new"/>
       <Action name="file_open"/>
       <Separator/>
+      <Action name="project_new"/>
+      <Action name="project_open"/>
+      <Action name="project_close"/>
+      <Separator/>
       <Action name="file_save"/>
       <Action name="file_save_as"/>
+      <Separator/>
+      <Action name="project_settings"/>
+      <Separator/>
+      <Action name="compile_project"/>
       <Separator/>
       <Action name="file_quit"/>
     </Menu>
@@ -24,6 +32,9 @@
     <Action name="file_new"/>
     <Action name="file_open"/>
     <Action name="file_save"/>
+    <Separator/>
+    <Action name="project_open"/>
+    <Action name="compile_project"/>
     <Separator/>
     <Action name="toggle_preview"/>
   </ToolBar>
