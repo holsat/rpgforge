@@ -1,7 +1,26 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include <KXmlGuiWindow>
+#include <QStackedWidget>
 
 namespace KTextEditor {
     class Document;
@@ -11,12 +30,17 @@ namespace KTextEditor {
 }
 
 class BreadcrumbBar;
+class CorkboardView;
+class ImagePreview;
 class FileExplorer;
 class GitPanel;
 class OutlinePanel;
 class PreviewPanel;
+class ProjectTreePanel;
 class VariablesPanel;
 class Sidebar;
+class QWebEngineView;
+class QPushButton;
 class QTimer;
 class QUrl;
 class QSplitter;
@@ -36,6 +60,11 @@ private Q_SLOTS:
     void openFileFromUrl(const QUrl &url);
     void saveFile();
     void saveFileAs();
+    void newProject();
+    void openProject();
+    void closeProject();
+    void projectSettings();
+    void compileToPdf();
     void onCursorPositionChanged();
     void updateCursorContext();
     void onTextChanged();
@@ -56,8 +85,14 @@ private:
     KTextEditor::Document *m_document = nullptr;
     KTextEditor::View *m_editorView = nullptr;
 
+    QStackedWidget *m_centralStack = nullptr;
+    CorkboardView *m_corkboardView = nullptr;
+    ImagePreview *m_imagePreview = nullptr;
+    QWebEngineView *m_pdfViewer = nullptr;
+
     Sidebar *m_sidebar = nullptr;
     FileExplorer *m_fileExplorer = nullptr;
+    ProjectTreePanel *m_projectTree = nullptr;
     OutlinePanel *m_outlinePanel = nullptr;
     GitPanel *m_gitPanel = nullptr;
     BreadcrumbBar *m_breadcrumbBar = nullptr;
@@ -70,6 +105,7 @@ private:
     QTimer *m_cursorDebounce = nullptr;
 
     int m_fileExplorerId = -1;
+    int m_projectTreeId = -1;
     int m_outlineId = -1;
     int m_gitId = -1;
     int m_variablesId = -1;
