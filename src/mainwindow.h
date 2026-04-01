@@ -7,6 +7,7 @@ namespace KTextEditor {
     class Document;
     class Editor;
     class View;
+    class MovingRange;
 }
 
 class BreadcrumbBar;
@@ -14,6 +15,7 @@ class FileExplorer;
 class GitPanel;
 class OutlinePanel;
 class PreviewPanel;
+class VariablesPanel;
 class Sidebar;
 class QTimer;
 class QUrl;
@@ -40,6 +42,7 @@ private Q_SLOTS:
     void navigateToLine(int line);
     void togglePreview();
     void syncScroll();
+    void updateErrorHighlighting();
 
 private:
     void setupEditor();
@@ -59,6 +62,7 @@ private:
     GitPanel *m_gitPanel = nullptr;
     BreadcrumbBar *m_breadcrumbBar = nullptr;
     PreviewPanel *m_previewPanel = nullptr;
+    VariablesPanel *m_variablesPanel = nullptr;
 
     QSplitter *m_mainSplitter = nullptr;
     QAction *m_togglePreviewAction = nullptr;
@@ -68,6 +72,9 @@ private:
     int m_fileExplorerId = -1;
     int m_outlineId = -1;
     int m_gitId = -1;
+    int m_variablesId = -1;
+
+    QList<KTextEditor::MovingRange*> m_errorRanges;
 };
 
 #endif // MAINWINDOW_H

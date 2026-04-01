@@ -85,7 +85,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 4 — Variable System
 
-**Status:** Not Started
+**Status:** Complete
 
 **Goal:** Define, reference, and auto-complete custom variables in documents.
 
