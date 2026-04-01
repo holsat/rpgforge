@@ -243,8 +243,7 @@ void MainWindow::setupSidebar()
         if (m_projectTree->model()->moveItem(draggedItem, folder, toIdx)) {
             ProjectManager::instance().setTree(m_projectTree->model()->projectData());
             ProjectManager::instance().saveProject();
-            // Refresh corkboard to reflect potential order changes if model-view sync wasn't enough
-            m_corkboardView->setFolder(folder);
+            // Debounced refresh will be triggered by model signals via ProjectTreePanel
         }
     });
     connect(m_outlinePanel, &OutlinePanel::headingsUpdated,

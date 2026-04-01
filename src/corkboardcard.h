@@ -16,28 +16,43 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef CORKBOARDCARD_H
+#define CORKBOARDCARD_H
 
-#include <QWidget>
+#include <QFrame>
+#include <QString>
+#include <QPoint>
 
 class QLabel;
+struct ProjectTreeItem;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+class CorkboardCard : public QFrame
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
+    explicit CorkboardCard(ProjectTreeItem *item, QWidget *parent = nullptr);
+    ~CorkboardCard() override;
 
-    void setRootPath(const QString &path);
+    ProjectTreeItem* item() const { return m_item; }
+
+Q_SIGNALS:
+    void clicked();
+    void doubleClicked();
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void setupUi();
+
+    ProjectTreeItem *m_item;
+    QString m_title;
+    QString m_status;
+    QString m_synopsis;
+    QPoint m_dragStartPosition;
 };
 
-#endif // GITPANEL_H
+#endif // CORKBOARDCARD_H

@@ -16,28 +16,35 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef PDFEXPORTER_H
+#define PDFEXPORTER_H
 
-#include <QWidget>
+#include <QObject>
+#include <QString>
 
-class QLabel;
+class QWebEnginePage;
+struct ProjectTreeItem;
+struct CompileOptions;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+class PdfExporter : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
+    explicit PdfExporter(QObject *parent = nullptr);
+    ~PdfExporter() override;
 
-    void setRootPath(const QString &path);
+    void exportProject(const QString &outputPath, const CompileOptions &options);
+
+Q_SIGNALS:
+    void finished(bool success, const QString &message);
+    void progress(int current, int total);
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void processFolder(ProjectTreeItem *folder, QString &markdown, const CompileOptions &options, QStringList &errors);
+    QString wrapHtml(const QString &body, const CompileOptions &options) const;
+
+    QWebEnginePage *m_page = nullptr;
 };
 
-#endif // GITPANEL_H
+#endif // PDFEXPORTER_H

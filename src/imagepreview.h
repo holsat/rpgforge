@@ -16,28 +16,32 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef IMAGEPREVIEW_H
+#define IMAGEPREVIEW_H
 
-#include <QWidget>
+#include <QScrollArea>
+#include <QLabel>
+#include <QPixmap>
 
-class QLabel;
-
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+class ImagePreview : public QScrollArea
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
+    explicit ImagePreview(QWidget *parent = nullptr);
+    ~ImagePreview() override;
 
-    void setRootPath(const QString &path);
+    bool loadImage(const QString &path);
+    void clear();
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void updatePixmap();
+
+    QLabel *m_label = nullptr;
+    QPixmap m_pixmap;
 };
 
-#endif // GITPANEL_H
+#endif // IMAGEPREVIEW_H

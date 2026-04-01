@@ -1,3 +1,21 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #ifndef VARIABLEMANAGER_H
 #define VARIABLEMANAGER_H
 
@@ -28,6 +46,15 @@ public:
 
     // Helper to parse YAML front-matter from a markdown string
     static QMap<QString, QString> parseFrontMatter(const QString &markdown);
+
+    struct DocumentMetadata {
+        QString title;
+        QString status;
+        QString synopsis;
+        QString label;
+    };
+    static DocumentMetadata extractMetadata(const QString &markdown);
+    static QString stripMetadata(const QString &markdown);
 
 Q_SIGNALS:
     void variablesChanged();

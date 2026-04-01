@@ -16,28 +16,40 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef COMPILEDIALOG_H
+#define COMPILEDIALOG_H
 
-#include <QWidget>
+#include <QDialog>
 
-class QLabel;
+class QCheckBox;
+class QComboBox;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+struct CompileOptions {
+    bool filterByStatus = false;
+    QString minStatus = QStringLiteral("Draft");
+    bool applyStylesheet = true;
+    bool createTOC = false;
+    bool showPageNumbers = true;
+};
+
+class CompileDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
+    explicit CompileDialog(QWidget *parent = nullptr);
+    ~CompileDialog() override;
 
-    void setRootPath(const QString &path);
+    CompileOptions options() const;
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void setupUi();
+
+    QCheckBox *m_filterCheck = nullptr;
+    QComboBox *m_statusCombo = nullptr;
+    QCheckBox *m_stylesheetCheck = nullptr;
+    QCheckBox *m_tocCheck = nullptr;
+    QCheckBox *m_pageNumbersCheck = nullptr;
 };
 
-#endif // GITPANEL_H
+#endif // COMPILEDIALOG_H

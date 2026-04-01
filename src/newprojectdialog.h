@@ -16,28 +16,30 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef NEWPROJECTDIALOG_H
+#define NEWPROJECTDIALOG_H
 
-#include <QWidget>
+#include <QDialog>
 
-class QLabel;
+class QLineEdit;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+class NewProjectDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
+    explicit NewProjectDialog(const QString &defaultDir, QWidget *parent = nullptr);
+    ~NewProjectDialog() override;
 
-    void setRootPath(const QString &path);
+    QString projectName() const;
+    QString projectDir() const;
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void setupUi();
+    void browse();
+
+    QLineEdit *m_nameEdit = nullptr;
+    QLineEdit *m_dirEdit = nullptr;
 };
 
-#endif // GITPANEL_H
+#endif // NEWPROJECTDIALOG_H

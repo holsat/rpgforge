@@ -16,28 +16,29 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#ifndef GITPANEL_H
-#define GITPANEL_H
+#ifndef EXPLORERSIDEBAR_H
+#define EXPLORERSIDEBAR_H
 
 #include <QWidget>
 
-class QLabel;
+class QSplitter;
+class ProjectTreePanel;
+class FileExplorer;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
-class GitPanel : public QWidget
+class ExplorerSidebar : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit GitPanel(QWidget *parent = nullptr);
-    ~GitPanel() override;
-
-    void setRootPath(const QString &path);
+    explicit ExplorerSidebar(ProjectTreePanel *projectTree, FileExplorer *fileExplorer, QWidget *parent = nullptr);
+    ~ExplorerSidebar() override;
 
 private:
-    QLabel *m_statusLabel = nullptr;
-    QString m_rootPath;
+    void setupUi();
+
+    ProjectTreePanel *m_projectTree;
+    FileExplorer *m_fileExplorer;
+    QSplitter *m_splitter;
 };
 
-#endif // GITPANEL_H
+#endif // EXPLORERSIDEBAR_H
