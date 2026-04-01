@@ -54,6 +54,30 @@ add_executable(rpgforge
     src/variablemanager.h
     src/variablecompletionmodel.cpp
     src/variablecompletionmodel.h
+    src/projectmanager.cpp
+    src/projectmanager.h
+    src/projectsettingsdialog.cpp
+    src/projectsettingsdialog.h
+    src/projecttreemodel.cpp
+    src/projecttreemodel.h
+    src/projecttreepanel.cpp
+    src/projecttreepanel.h
+    src/metadatadialog.cpp
+    src/metadatadialog.h
+    src/compiledialog.cpp
+    src/compiledialog.h
+    src/newprojectdialog.cpp
+    src/newprojectdialog.h
+    src/explorersidebar.cpp
+    src/explorersidebar.h
+    src/imagepreview.cpp
+    src/imagepreview.h
+    src/corkboardview.cpp
+    src/corkboardview.h
+    src/corkboardcard.cpp
+    src/corkboardcard.h
+    src/pdfexporter.cpp
+    src/pdfexporter.h
     src/resources.qrc
 )
 

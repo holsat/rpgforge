@@ -137,6 +137,10 @@ QString VariableManager::processMarkdown(const QString &markdown) const
         auto match = matches.at(i);
         QString name = match.captured(1);
         
+        if (!vars.contains(name)) {
+            continue;
+        }
+
         QString rawVal = vars.value(name);
         bool shouldCalc = rawVal.startsWith(QLatin1String("CALC:"));
         QString expression = shouldCalc ? rawVal.mid(5) : rawVal;

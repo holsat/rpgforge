@@ -25,6 +25,8 @@
 #include <QToolButton>
 #include <QIcon>
 #include <QSettings>
+#include <QMenu>
+#include <QAction>
 #include <KLocalizedString>
 
 VariablesPanel::VariablesPanel(QWidget *parent)
@@ -73,10 +75,12 @@ void VariablesPanel::setupUi()
     m_treeWidget->setHeaderLabels({i18n("Name"), i18n("Computed"), i18n("Expression"), i18n("Calc")});
     m_treeWidget->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     m_treeWidget->setRootIsDecorated(true);
+    m_treeWidget->setContextMenuPolicy(Qt::CustomContextMenu);
     
     m_treeWidget->setColumnWidth(3, 50);
     
     connect(m_treeWidget, &QTreeWidget::itemChanged, this, &VariablesPanel::onItemChanged);
+    connect(m_treeWidget, &QTreeWidget::customContextMenuRequested, this, &VariablesPanel::onCustomContextMenu);
 
     layout->addWidget(m_treeWidget);
 }
@@ -136,6 +140,22 @@ void VariablesPanel::onItemChanged(QTreeWidgetItem *item, int column)
     recalculateAll();
     saveVariables();
     Q_EMIT variablesChanged();
+}
+
+void VariablesPanel::onCustomContextMenu(const QPoint &pos)
+{
+    auto *item = m_treeWidget->itemAt(pos);
+    QMenu menu(this);
+
+    menu.addAction(QIcon::fromTheme(QStringLiteral("list-add")), i18n("Add Main Variable"), this, &VariablesPanel::addVariable);
+    
+    if (item) {
+        menu.addAction(QIcon::fromTheme(QStringLiteral("entry-new")), i18n("Add Variant"), this, &VariablesPanel::addVariant);
+        menu.addSeparator();
+        menu.addAction(QIcon::fromTheme(QStringLiteral("list-remove")), i18n("Remove"), this, &VariablesPanel::removeVariable);
+    }
+
+    menu.exec(m_treeWidget->viewport()->mapToGlobal(pos));
 }
 
 void VariablesPanel::recalculateAll()

@@ -51,6 +51,7 @@ private Q_SLOTS:
     void addVariant();
     void removeVariable();
     void onItemChanged(QTreeWidgetItem *item, int column);
+    void onCustomContextMenu(const QPoint &pos);
 
 private:
     QTreeWidget *m_treeWidget;
