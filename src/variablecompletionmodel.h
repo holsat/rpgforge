@@ -22,6 +22,10 @@
 #include <KTextEditor/CodeCompletionModel>
 #include <KTextEditor/CodeCompletionModelControllerInterface>
 
+/**
+ * A highly stable variable completion model.
+ * Uses a pull-only strategy to avoid recursion crashes during typing.
+ */
 class VariableCompletionModel : public KTextEditor::CodeCompletionModel, public KTextEditor::CodeCompletionModelControllerInterface
 {
     Q_OBJECT
@@ -32,13 +36,14 @@ public:
     ~VariableCompletionModel() override = default;
 
     // CodeCompletionModel interface
-    void completionInvoked(KTextEditor::View *view, const KTextEditor::Range &range, InvocationType invocationType) override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    void completionInvoked(KTextEditor::View *view, const KTextEditor::Range &range, InvocationType invocationType) override;
 
     // CodeCompletionModelControllerInterface interface
     bool shouldStartCompletion(KTextEditor::View *view, const QString &insertedText, bool userBehaved, const KTextEditor::Cursor &position) override;
     void executeCompletionItem(KTextEditor::View *view, const KTextEditor::Range &word, const QModelIndex &index) const override;
+    KTextEditor::Range completionRange(KTextEditor::View *view, const KTextEditor::Cursor &position) override;
 
 private:
     QStringList m_variables;

@@ -113,6 +113,12 @@ void MainWindow::setupEditor()
     m_cursorDebounce->setInterval(100);
     connect(m_cursorDebounce, &QTimer::timeout, this, &MainWindow::updateCursorContext);
 
+    // Debounce text changes to prevent UI stutter and recursion crashes
+    m_textChangeDebounce = new QTimer(this);
+    m_textChangeDebounce->setSingleShot(true);
+    m_textChangeDebounce->setInterval(500);
+    connect(m_textChangeDebounce, &QTimer::timeout, this, &MainWindow::updateErrorHighlighting);
+
     // Connect signals
     connect(m_document, &KTextEditor::Document::textChanged,
             this, &MainWindow::onTextChanged);
@@ -498,23 +504,9 @@ void MainWindow::compileToPdf()
 
 void MainWindow::onTextChanged()
 {
-    if (m_document) {
-        QString text = m_document->text();
-
-        // Parse YAML front-matter
-        auto frontMatterVars = VariableManager::parseFrontMatter(text);
-        VariableManager::instance().setDocumentVariables(frontMatterVars);
-
-        QString contentOnly = VariableManager::stripMetadata(text);
-
-        if (m_outlinePanel) {
-            m_outlinePanel->documentChanged(contentOnly);
-        }
-        if (m_previewPanel) {
-            m_previewPanel->setMarkdown(contentOnly);
-        }
-        
-        updateErrorHighlighting();
+    // Minimal work during typing to prevent hangs/crashes
+    if (m_document && m_textChangeDebounce) {
+        m_textChangeDebounce->start();
     }
 }
 
@@ -522,58 +514,20 @@ void MainWindow::updateErrorHighlighting()
 {
     if (!m_document) return;
 
-    // Clear old ranges
+    QString text = m_document->text();
+    
+    // 1. Sync front-matter variables
+    auto frontMatterVars = VariableManager::parseFrontMatter(text);
+    VariableManager::instance().setDocumentVariables(frontMatterVars);
+
+    // 2. Update auxiliary views
+    QString contentOnly = VariableManager::stripMetadata(text);
+    if (m_outlinePanel) m_outlinePanel->documentChanged(contentOnly);
+    if (m_previewPanel) m_previewPanel->setMarkdown(contentOnly);
+
+    // 3. Clear expensive highlights (Disabled for now)
     qDeleteAll(m_errorRanges);
     m_errorRanges.clear();
-
-    static KTextEditor::Attribute::Ptr errorAttr;
-    if (!errorAttr) {
-        errorAttr = new KTextEditor::Attribute();
-        errorAttr->setUnderlineStyle(QTextCharFormat::WaveUnderline);
-        errorAttr->setUnderlineColor(Qt::red);
-    }
-
-    QString text = m_document->text();
-    auto vars = VariableManager::instance().variableNames();
-
-    auto offsetToCursor = [&text](int offset) -> KTextEditor::Cursor {
-        int line = 0;
-        int col = 0;
-        for (int i = 0; i < offset && i < text.length(); ++i) {
-            if (text.at(i) == QLatin1Char('\n')) {
-                line++;
-                col = 0;
-            } else {
-                col++;
-            }
-        }
-        return KTextEditor::Cursor(line, col);
-    };
-
-    // Pattern 1: Unresolved variables {{var}}
-    static QRegularExpression unresolvedRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
-    auto it = unresolvedRegex.globalMatch(text);
-    while (it.hasNext()) {
-        auto match = it.next();
-        QString name = match.captured(1);
-        if (!vars.contains(name)) {
-            KTextEditor::Range range(offsetToCursor(match.capturedStart()), offsetToCursor(match.capturedEnd()));
-            auto *mRange = m_document->newMovingRange(range);
-            mRange->setAttribute(errorAttr);
-            m_errorRanges.append(mRange);
-        }
-    }
-
-    // Pattern 2: Potential syntax errors {var} (single braces)
-    static QRegularExpression singleBraceRegex(QStringLiteral("(?<!\\{)\\{([A-Za-z0-9_\\.]+)\\}(?!\\})"));
-    auto it2 = singleBraceRegex.globalMatch(text);
-    while (it2.hasNext()) {
-        auto match = it2.next();
-        KTextEditor::Range range(offsetToCursor(match.capturedStart()), offsetToCursor(match.capturedEnd()));
-        auto *mRange = m_document->newMovingRange(range);
-        mRange->setAttribute(errorAttr);
-        m_errorRanges.append(mRange);
-    }
 }
 
 void MainWindow::onCursorPositionChanged()

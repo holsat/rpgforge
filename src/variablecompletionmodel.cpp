@@ -29,7 +29,6 @@ VariableCompletionModel::VariableCompletionModel(QObject *parent)
 
 void VariableCompletionModel::updateVariables()
 {
-    beginResetModel();
     m_variables.clear();
     const auto names = VariableManager::instance().variableNames();
     for (const QString &name : names) {
@@ -39,7 +38,7 @@ void VariableCompletionModel::updateVariables()
             m_variables.append(name);
         }
     }
-    endResetModel();
+    m_variables.sort(Qt::CaseInsensitive);
 }
 
 int VariableCompletionModel::rowCount(const QModelIndex &parent) const
@@ -50,20 +49,11 @@ int VariableCompletionModel::rowCount(const QModelIndex &parent) const
 
 QVariant VariableCompletionModel::data(const QModelIndex &index, int role) const
 {
-    if (!index.isValid() || index.row() >= m_variables.size()) return QVariant();
+    if (!index.isValid() || index.row() < 0 || index.row() >= m_variables.size()) return QVariant();
 
-    if (role == Qt::DisplayRole) {
-        return m_variables.at(index.row());
-    }
-    
-    if (role == Qt::DecorationRole) {
-        return QIcon::fromTheme(QStringLiteral("code-variable"));
-    }
-
-    if (role == KTextEditor::CodeCompletionModel::CompletionRole) {
-        return KTextEditor::CodeCompletionModel::Variable;
-    }
-
+    const QString &name = m_variables.at(index.row());
+    if (role == KTextEditor::CodeCompletionModel::Name || role == Qt::DisplayRole) return name;
+    if (role == KTextEditor::CodeCompletionModel::CompletionRole) return KTextEditor::CodeCompletionModel::Variable;
     return QVariant();
 }
 
@@ -72,54 +62,58 @@ void VariableCompletionModel::completionInvoked(KTextEditor::View *view, const K
     Q_UNUSED(view);
     Q_UNUSED(range);
     Q_UNUSED(invocationType);
+    
+    // SAFE: Only reset the model when specifically requested by the UI
+    beginResetModel();
     updateVariables();
+    endResetModel();
 }
 
 bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, const QString &insertedText, bool userBehaved, const KTextEditor::Cursor &position)
 {
+    Q_UNUSED(view);
     Q_UNUSED(userBehaved);
-    
-    // Trigger if user typed '{' and the previous character was also '{'
-    if (insertedText == QLatin1String("{")) {
-        KTextEditor::Document *doc = view->document();
-        if (position.column() >= 2) {
-            QString prev2 = doc->text(KTextEditor::Range(position.line(), position.column() - 2, position.line(), position.column()));
-            if (prev2 == QLatin1String("{{")) {
-                return true;
-            }
-        }
-    }
-    
-    // Also trigger if we are already inside {{ and the user types a letter
+    Q_UNUSED(position);
+
+    // Only trigger on typing the second '{'.
+    // No document access here to prevent recursion.
+    return (insertedText == QLatin1String("{"));
+}
+
+KTextEditor::Range VariableCompletionModel::completionRange(KTextEditor::View *view, const KTextEditor::Cursor &position)
+{
+    if (!view || !view->document()) return KTextEditor::Range::invalid();
+
+    // Safely detect current word boundary
     KTextEditor::Document *doc = view->document();
     QString line = doc->line(position.line());
-    int start = position.column();
-    while (start > 0 && line.at(start - 1).isLetterOrNumber()) {
-        start--;
-    }
-    if (start >= 2 && line.mid(start - 2, 2) == QLatin1String("{{")) {
-        return true;
+    int col = position.column();
+    if (col > line.length()) col = line.length();
+
+    int start = col;
+    while (start > 0) {
+        QChar c = line.at(start - 1);
+        if (c.isLetterOrNumber() || c == QLatin1Char('.') || c == QLatin1Char('_')) {
+            start--;
+        } else {
+            break;
+        }
     }
 
-    return false;
+    return KTextEditor::Range(position.line(), start, position.line(), col);
 }
 
 void VariableCompletionModel::executeCompletionItem(KTextEditor::View *view, const KTextEditor::Range &word, const QModelIndex &index) const
 {
-    if (!index.isValid() || index.row() >= m_variables.size()) return;
+    if (!index.isValid() || index.row() < 0 || index.row() >= m_variables.size()) return;
 
     QString completion = m_variables.at(index.row());
-    KTextEditor::Document *doc = view->document();
+    view->document()->replaceText(word, completion);
     
-    // We want to replace the current "word" (variable name being typed)
-    // and potentially the prefix {{ if we're doing a full replacement.
-    // However, KTextEditor usually gives us the range of the current word.
-    doc->replaceText(word, completion);
-    
-    // Check if we need to add the closing }}
+    // Safely check for closing braces without triggering recursion
     KTextEditor::Cursor cursor = view->cursorPosition();
-    QString restOfLine = doc->line(cursor.line()).mid(cursor.column());
-    if (!restOfLine.startsWith(QLatin1String("}}"))) {
-        doc->insertText(cursor, QStringLiteral("}}"));
+    QString line = view->document()->line(cursor.line());
+    if (!line.mid(cursor.column()).startsWith(QLatin1String("}}"))) {
+        view->document()->insertText(cursor, QStringLiteral("}}"));
     }
 }

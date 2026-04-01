@@ -26,9 +26,16 @@
 #include <QCommandLineParser>
 #include <QIcon>
 
+#include <QWebEngineProfile>
+#include <QWebEngineSettings>
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+
+    // Disable and clear WebEngine cache for debugging and safety
+    QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);
+    QWebEngineProfile::defaultProfile()->clearHttpCache();
 
     KLocalizedString::setApplicationDomain("rpgforge");
 

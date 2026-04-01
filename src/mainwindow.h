@@ -103,6 +103,7 @@ private:
     QAction *m_togglePreviewAction = nullptr;
 
     QTimer *m_cursorDebounce = nullptr;
+    QTimer *m_textChangeDebounce = nullptr;
 
     int m_fileExplorerId = -1;
     int m_projectTreeId = -1;
