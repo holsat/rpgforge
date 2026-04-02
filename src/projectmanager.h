@@ -75,6 +75,11 @@ public:
     QString stylesheetPath() const;
     void setStylesheetPath(const QString &path);
 
+    // Returns the absolute path to the stylesheets/ directory
+    QString stylesheetFolderPath() const;
+    // Returns absolute paths of all .css files in the stylesheets/ directory
+    QStringList stylesheetPaths() const;
+
     // Logical Tree Management
     QJsonObject tree() const;
     void setTree(const QJsonObject &tree);

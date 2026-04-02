@@ -330,10 +330,27 @@ QStringList ProjectTreeModel::mimeTypes() const { return {QStringLiteral("applic
 QMimeData* ProjectTreeModel::mimeData(const QModelIndexList &indexes) const {
     if (indexes.isEmpty()) return nullptr;
     auto *mimeData = new QMimeData();
+
     QByteArray encodedData;
-    ProjectTreeItem *item = itemFromIndex(indexes.at(0));
-    encodedData.append(reinterpret_cast<const char*>(&item), sizeof(item));
+    QList<QUrl> fileUrls;
+
+    for (const QModelIndex &idx : indexes) {
+        if (!idx.isValid()) continue;
+        ProjectTreeItem *item = itemFromIndex(idx);
+        encodedData.append(reinterpret_cast<const char*>(&item), sizeof(item));
+
+        // For file items, also include an absolute URI so the editor can receive drops
+        if (item->type == ProjectTreeItem::File && ProjectManager::instance().isProjectOpen()) {
+            QString absPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(item->path);
+            if (QFile::exists(absPath))
+                fileUrls << QUrl::fromLocalFile(absPath);
+        }
+    }
+
     mimeData->setData(QStringLiteral("application/x-rpgforge-treeitem"), encodedData);
+    if (!fileUrls.isEmpty())
+        mimeData->setUrls(fileUrls);
+
     return mimeData;
 }
 
@@ -349,31 +366,32 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
 
     if (data->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))) {
         QByteArray encodedData = data->data(QStringLiteral("application/x-rpgforge-treeitem"));
-        ProjectTreeItem *dragItem = *reinterpret_cast<ProjectTreeItem**>(encodedData.data());
+        const int count = encodedData.size() / static_cast<int>(sizeof(ProjectTreeItem*));
+        if (count == 0) return false;
 
         ProjectTreeItem *newParentItem = itemFromIndex(targetParent);
         if (newParentItem->type == ProjectTreeItem::File) return false;
 
-        ProjectTreeItem *p = newParentItem;
-        while (p) {
-            if (p == dragItem) return false;
-            p = p->parent;
+        int insertRow = (row == -1) ? newParentItem->children.count() : row;
+
+        for (int i = 0; i < count; i++) {
+            ProjectTreeItem *dragItem = *reinterpret_cast<ProjectTreeItem**>(
+                encodedData.data() + i * static_cast<int>(sizeof(ProjectTreeItem*)));
+
+            if (!dragItem) continue;
+
+            // Circularity guard — don't move an item into itself or a descendant
+            bool circular = false;
+            for (ProjectTreeItem *p = newParentItem; p; p = p->parent) {
+                if (p == dragItem) { circular = true; break; }
+            }
+            if (circular) continue;
+
+            moveItem(dragItem, newParentItem, insertRow);
+
+            // Advance insertion point so the group lands in order
+            insertRow = qMin(insertRow + 1, newParentItem->children.count());
         }
-
-        if (row == -1) row = newParentItem->children.count();
-
-        ProjectTreeItem *oldParentItem = dragItem->parent;
-        int oldRow = oldParentItem->children.indexOf(dragItem);
-
-        if (oldParentItem == newParentItem) {
-            if (row > oldRow) row--;
-        }
-
-        beginMoveRows(createIndex(oldRow, 0, dragItem).parent(), oldRow, oldRow, targetParent, row);
-        oldParentItem->children.removeAt(oldRow);
-        newParentItem->children.insert(row, dragItem);
-        dragItem->parent = newParentItem;
-        endMoveRows();
         return true;
     } else if (data->hasUrls()) {
         for (const QUrl &url : data->urls()) {

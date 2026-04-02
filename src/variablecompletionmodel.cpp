@@ -21,7 +21,6 @@
 #include <KTextEditor/View>
 #include <KTextEditor/Document>
 #include <QIcon>
-#include <iostream>
 
 // Modeled exactly after KateWordCompletionModel from
 // ktexteditor/src/completion/katewordcompletion.cpp
@@ -51,19 +50,12 @@ void VariableCompletionModel::updateVariables()
 
 int VariableCompletionModel::rowCount(const QModelIndex &parent) const
 {
-    int result;
     if (!parent.isValid() && !m_variables.isEmpty()) {
-        result = 1; // One root node to define the custom group
+        return 1; // One root node to define the custom group
     } else if (parent.parent().isValid()) {
-        result = 0; // Completion items have no children
-    } else {
-        result = m_variables.count();
+        return 0; // Completion items have no children
     }
-    static int callCount = 0;
-    if (++callCount <= 20) {
-        std::cerr << "VCM: rowCount(valid=" << parent.isValid() << ", id=" << (parent.isValid() ? parent.internalId() : -1) << ") = " << result << std::endl;
-    }
-    return result;
+    return m_variables.count();
 }
 
 QModelIndex VariableCompletionModel::index(int row, int column, const QModelIndex &parent) const
@@ -118,7 +110,6 @@ QVariant VariableCompletionModel::data(const QModelIndex &index, int role) const
     }
 
     if (index.column() == KTextEditor::CodeCompletionModel::Name && role == Qt::DisplayRole) {
-        std::cerr << "VCM: data Name row=" << index.row() << " id=" << index.internalId() << " -> " << m_variables.at(index.row()).toStdString() << std::endl;
         return m_variables.at(index.row());
     }
 
@@ -139,7 +130,6 @@ void VariableCompletionModel::completionInvoked(KTextEditor::View *view, const K
     // Match KateWordCompletionModel: just update data, no beginResetModel/endResetModel.
     // The presentation model calls createGroups() after this returns.
     updateVariables();
-    std::cerr << "VCM: completionInvoked, " << m_variables.size() << " vars, rowCount(root)=" << rowCount(QModelIndex()) << std::endl;
 }
 
 bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, const QString &insertedText, bool userBehaved, const KTextEditor::Cursor &position)
@@ -165,7 +155,6 @@ bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, con
 
     // Trigger if cursor is inside {{ ... (unclosed)
     if (searchCol >= 2 && line.at(searchCol - 1) == QLatin1Char('{') && line.at(searchCol - 2) == QLatin1Char('{')) {
-        std::cerr << "VCM: shouldStartCompletion -> TRUE" << std::endl;
         return true;
     }
 

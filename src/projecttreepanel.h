@@ -21,6 +21,7 @@
 
 #include <QWidget>
 #include <QModelIndex>
+#include <QPersistentModelIndex>
 
 class QTreeView;
 class ProjectTreeModel;
@@ -38,7 +39,7 @@ public:
 
     QPushButton* createButton() const { return m_createBtn; }
     ProjectTreeModel* model() const { return m_model; }
-    ProjectTreeItem* activeFolder() const { return m_activeFolder; }
+    ProjectTreeItem* activeFolder() const;
 
 Q_SIGNALS:
     void fileActivated(const QString &relativePath);
@@ -54,6 +55,7 @@ private Q_SLOTS:
     void addFile();
     void removeItem();
     void renameItem();
+    void renameFile();
     void editMetadata();
     ProjectTreeItem* currentFolder() const;
 
@@ -64,7 +66,7 @@ private:
     void requestRefresh();
 
     QTreeView *m_treeView = nullptr;
-    ProjectTreeItem *m_activeFolder = nullptr;
+    QPersistentModelIndex m_activeFolderIndex;
     QTimer *m_refreshTimer = nullptr;
     QWidget *m_emptyWidget = nullptr;
     QPushButton *m_createBtn = nullptr;

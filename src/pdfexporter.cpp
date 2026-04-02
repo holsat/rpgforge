@@ -225,14 +225,13 @@ QString PdfExporter::wrapHtml(const QString &body, const CompileOptions &options
         ".toc ul { list-style-type: none; padding: 0; }"
     );
 
-    // Try to load external project stylesheet
+    // Apply all project stylesheets from the stylesheets/ folder
     if (options.applyStylesheet) {
-        QString stylePath = pm.stylesheetPath();
-        if (!stylePath.isEmpty()) {
-            QString fullStylePath = QDir(pm.projectPath()).absoluteFilePath(stylePath);
-            QFile styleFile(fullStylePath);
+        for (const QString &stylePath : pm.stylesheetPaths()) {
+            QFile styleFile(stylePath);
             if (styleFile.open(QIODevice::ReadOnly)) {
                 css += QString::fromUtf8(styleFile.readAll());
+                css += QLatin1Char('\n');
             }
         }
     }

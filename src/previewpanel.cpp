@@ -17,13 +17,20 @@
 */
 
 #include "previewpanel.h"
+#include "projectmanager.h"
 #include "variablemanager.h"
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QFileSystemWatcher>
+#include <QRegularExpression>
 #include <QWebEngineView>
 #include <QVBoxLayout>
 
 PreviewPanel::PreviewPanel(QWidget *parent)
     : QWidget(parent)
     , m_webView(new QWebEngineView(this))
+    , m_styleWatcher(new QFileSystemWatcher(this))
     , m_debounceTimer(new QTimer(this))
 {
     auto *layout = new QVBoxLayout(this);
@@ -31,9 +38,33 @@ PreviewPanel::PreviewPanel(QWidget *parent)
     layout->addWidget(m_webView);
 
     m_debounceTimer->setSingleShot(true);
-    m_debounceTimer->setInterval(150); // Lowered for more responsiveness
+    m_debounceTimer->setInterval(150);
     connect(m_debounceTimer, &QTimer::timeout, this, &PreviewPanel::updatePreview);
     connect(m_webView, &QWebEngineView::loadFinished, this, &PreviewPanel::onLoadFinished);
+
+    // Watch for CSS file changes
+    connect(m_styleWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
+        // Some editors (e.g. vim) delete and recreate files on save — re-add the path
+        if (QFile::exists(path) && !m_styleWatcher->files().contains(path)) {
+            m_styleWatcher->addPath(path);
+        }
+        reloadStylesheet();
+    });
+    connect(m_styleWatcher, &QFileSystemWatcher::directoryChanged, this, [this]() {
+        // Files added or removed from the stylesheets folder — refresh watch list and reload
+        setupStylesheetWatcher();
+        reloadStylesheet();
+    });
+
+    // Re-setup watcher when a project is opened or closed
+    connect(&ProjectManager::instance(), &ProjectManager::projectOpened,
+            this, &PreviewPanel::setupStylesheetWatcher);
+    connect(&ProjectManager::instance(), &ProjectManager::projectClosed,
+            this, &PreviewPanel::setupStylesheetWatcher);
+
+    if (ProjectManager::instance().isProjectOpen()) {
+        setupStylesheetWatcher();
+    }
 
     // Load initial empty skeleton
     m_webView->setHtml(wrapHtml(QString()));
@@ -47,11 +78,28 @@ void PreviewPanel::setMarkdown(const QString &markdown)
 
 void PreviewPanel::setBaseUrl(const QUrl &url)
 {
-    if (m_baseUrl != url) {
-        m_baseUrl = url;
+    // Use the project directory as base URL so relative image paths resolve correctly.
+    // If no project is open, fall back to the file's parent directory.
+    QUrl baseUrl;
+    if (ProjectManager::instance().isProjectOpen()) {
+        baseUrl = QUrl::fromLocalFile(ProjectManager::instance().projectPath() + QDir::separator());
+    } else if (url.isLocalFile()) {
+        baseUrl = QUrl::fromLocalFile(QFileInfo(url.toLocalFile()).absolutePath() + QDir::separator());
+    } else {
+        baseUrl = url;
+    }
+
+    if (m_baseUrl != baseUrl) {
+        m_baseUrl = baseUrl;
         m_needsFullReload = true;
         m_debounceTimer->start();
     }
+}
+
+void PreviewPanel::reloadStylesheet()
+{
+    m_needsFullReload = true;
+    m_debounceTimer->start();
 }
 
 void PreviewPanel::onLoadFinished(bool ok)
@@ -153,17 +201,48 @@ void PreviewPanel::scrollToLine(int line, bool smooth)
     m_webView->page()->runJavaScript(js);
 }
 
+void PreviewPanel::setupStylesheetWatcher()
+{
+    // Clear previously watched paths
+    if (!m_styleWatcher->files().isEmpty())
+        m_styleWatcher->removePaths(m_styleWatcher->files());
+    if (!m_styleWatcher->directories().isEmpty())
+        m_styleWatcher->removePaths(m_styleWatcher->directories());
+
+    if (!ProjectManager::instance().isProjectOpen()) return;
+
+    // Watch the stylesheets/ directory so we notice files being added/removed
+    QString folderPath = ProjectManager::instance().stylesheetFolderPath();
+    if (QDir(folderPath).exists()) {
+        m_styleWatcher->addPath(folderPath);
+    }
+
+    // Watch each individual CSS file for content changes
+    for (const QString &cssPath : ProjectManager::instance().stylesheetPaths()) {
+        m_styleWatcher->addPath(cssPath);
+    }
+}
+
+QString PreviewPanel::loadProjectStylesheets() const
+{
+    const QStringList paths = ProjectManager::instance().stylesheetPaths();
+    if (paths.isEmpty()) return {};
+
+    QString combined;
+    for (const QString &path : paths) {
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly)) {
+            combined += QString::fromUtf8(f.readAll());
+            combined += QLatin1Char('\n');
+        }
+    }
+    return combined;
+}
+
 QString PreviewPanel::wrapHtml(const QString &body) const
 {
-    // Basic CSS and KaTeX integration
-    static const QString head = QStringLiteral(
-        "<!DOCTYPE html><html><head>"
-        "<meta charset=\"utf-8\">"
-        "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css\">"
-        "<script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js\"></script>"
-        "<script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js\" "
-        "onload=\"window.renderMathInElement = renderMathInElement; renderMathInElement(document.body);\"></script>"
-        "<style>"
+    // Base CSS for preview — provides sensible defaults
+    static const QString baseCss = QStringLiteral(
         "body { font-family: sans-serif; line-height: 1.6; padding: 2em; max-width: 800px; margin: 0 auto; color: #333; }"
         "pre { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }"
         "code { font-family: monospace; background: #f4f4f4; padding: 0.2em 0.4em; border-radius: 3px; }"
@@ -172,10 +251,25 @@ QString PreviewPanel::wrapHtml(const QString &body) const
         "th { background-color: #f2f2f2; }"
         "blockquote { border-left: 4px solid #ddd; padding-left: 1em; color: #666; margin-left: 0; }"
         "img { max-width: 100%; height: auto; }"
-        "</style>"
-        "</head><body><div id=\"content\">"
     );
-    static const QString foot = QStringLiteral("</div></body></html>");
 
-    return head + body + foot;
+    // Load project stylesheets (if any) — applied after base CSS so they can override
+    QString projectCss = loadProjectStylesheets();
+
+    // Strip @page rules from project CSS — they only apply to PDF/print and cause
+    // WebEngine rendering issues in the preview
+    static const QRegularExpression pageRule(QStringLiteral("@page\\s*\\{[^}]*\\}"));
+    projectCss.remove(pageRule);
+
+    return QStringLiteral(
+        "<!DOCTYPE html><html><head>"
+        "<meta charset=\"utf-8\">"
+        "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css\">"
+        "<script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js\"></script>"
+        "<script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js\" "
+        "onload=\"window.renderMathInElement = renderMathInElement; renderMathInElement(document.body);\"></script>"
+        "<style>%1</style>"
+        "<style>%2</style>"
+        "</head><body><div id=\"content\">%3</div></body></html>"
+    ).arg(baseCss, projectCss, body);
 }

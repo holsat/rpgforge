@@ -45,6 +45,9 @@ class QUrl;
 class QSplitter;
 class QAction;
 class QVBoxLayout;
+#include <QPair>
+#include <QList>
+#include <QUrl>
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -84,6 +87,7 @@ private:
     void saveSession();
     void restoreSession();
     void showCentralView(QWidget *widget);
+    void insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &items);
 
     KTextEditor::Editor *m_editor = nullptr;
     KTextEditor::Document *m_document = nullptr;

@@ -47,12 +47,13 @@
 #include <KTextEditor/Document>
 #include <KTextEditor/Editor>
 #include <KTextEditor/View>
-#include <iostream>
-
 #include <QApplication>
+#include <QDropEvent>
 #include <QEvent>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QMimeData>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
@@ -139,34 +140,21 @@ void MainWindow::setupEditor()
         m_editorView->setAutomaticInvocationEnabled(true);
         auto *completionModel = new VariableCompletionModel(this);
         m_editorView->registerCompletionModel(completionModel);
-        std::cerr << "MainWindow: Variable completion model registered (deferred), auto-invoke="
-                  << m_editorView->isAutomaticInvocationEnabled() << std::endl;
 
-        // Debug: dump all child widgets of the view looking for the completion widget
-        for (QObject *child : m_editorView->children()) {
-            QWidget *w = qobject_cast<QWidget*>(child);
-            if (w) {
-                std::cerr << "  View child: " << w->metaObject()->className()
-                          << " visible=" << w->isVisible()
-                          << " geo=" << w->geometry().x() << "," << w->geometry().y()
-                          << "," << w->geometry().width() << "," << w->geometry().height()
-                          << " parent=" << (w->parentWidget() ? w->parentWidget()->metaObject()->className() : "null")
-                          << std::endl;
-            }
-        }
-        // Also check our top-level window's children and install event filter on completion widget
+        // Install event filter on KateCompletionWidget to fix popup positioning/z-order
         for (QObject *child : this->children()) {
             QWidget *w = qobject_cast<QWidget*>(child);
             if (w && QString::fromLatin1(w->metaObject()->className()).contains(QLatin1String("Completion"))) {
-                std::cerr << "  MainWindow child: " << w->metaObject()->className()
-                          << " visible=" << w->isVisible()
-                          << " geo=" << w->geometry().x() << "," << w->geometry().y()
-                          << "," << w->geometry().width() << "," << w->geometry().height()
-                          << std::endl;
-                // Install event filter to trace positioning
                 w->installEventFilter(this);
-                std::cerr << "  -> Installed event filter on " << w->metaObject()->className() << std::endl;
             }
+        }
+
+        // Install event filter on the editor view and all its child widgets so we
+        // can intercept drops from the project tree and insert markdown links.
+        m_editorView->installEventFilter(this);
+        const auto editorChildren = m_editorView->findChildren<QWidget*>();
+        for (QWidget *child : editorChildren) {
+            child->installEventFilter(this);
         }
     });
 }
@@ -268,12 +256,14 @@ void MainWindow::setupSidebar()
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            showCentralView(m_editorView);
+            // openFileFromUrl already calls showCentralView for the appropriate view
+            // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](ProjectTreeItem *folder) {
-        if (folder->name.toLower() == QStringLiteral("media")) {
-            // Switch to editor or something neutral, or just stay on last view
+        if (!folder) return;
+        const QString nameLower = folder->name.toLower();
+        if (nameLower == QStringLiteral("media") || nameLower == QStringLiteral("stylesheets")) {
             return;
         }
         m_corkboardView->setFolder(folder);
@@ -319,6 +309,25 @@ void MainWindow::setupSidebar()
     connect(&VariableManager::instance(), &VariableManager::variablesChanged, this, [this]() {
         if (m_previewPanel) {
             m_previewPanel->setMarkdown(m_document->text());
+        }
+    });
+
+    // Clear the corkboard when a project opens or closes so it never holds
+    // pointers into a tree that has been rebuilt/destroyed.
+    connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
+        if (m_corkboardView) m_corkboardView->setFolder(nullptr);
+    });
+    connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
+        if (m_corkboardView) {
+            m_corkboardView->setFolder(nullptr);
+            showCentralView(m_editorView);
+        }
+    });
+
+    // Reload preview stylesheet when project settings change (e.g., stylesheet path)
+    connect(&ProjectManager::instance(), &ProjectManager::projectSettingsChanged, this, [this]() {
+        if (m_previewPanel) {
+            m_previewPanel->reloadStylesheet();
         }
     });
 }
@@ -396,11 +405,24 @@ void MainWindow::openFileFromUrl(const QUrl &url)
     if (!url.isEmpty() && url.isLocalFile()) {
         QString path = url.toLocalFile();
         QString suffix = QFileInfo(path).suffix().toLower();
-        
-        static QStringList imgSuffixes = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"), 
-                                        QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"), 
-                                        QStringLiteral("bmp")};
-        
+
+        static const QStringList imgSuffixes = {
+            QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+            QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+            QStringLiteral("bmp")
+        };
+        // Text formats we are willing to open in the editor.
+        // Anything not on this list (e.g. .emf, .docx, .exe) is silently
+        // ignored — handing a binary file to KTextEditor marks the document
+        // read-only, which persists even after a subsequent markdown file is opened.
+        static const QStringList textSuffixes = {
+            QStringLiteral("md"),   QStringLiteral("markdown"), QStringLiteral("mkd"),
+            QStringLiteral("txt"),  QStringLiteral("css"),      QStringLiteral("yaml"),
+            QStringLiteral("yml"),  QStringLiteral("json"),     QStringLiteral("html"),
+            QStringLiteral("htm"),  QStringLiteral("xml"),      QStringLiteral("rpgvars"),
+            QString()               // no extension
+        };
+
         if (imgSuffixes.contains(suffix)) {
             if (m_imagePreview->loadImage(path)) {
                 showCentralView(m_imagePreview);
@@ -412,8 +434,11 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             showCentralView(m_pdfViewer);
             if (m_previewPanel) m_previewPanel->hide();
             return;
+        } else if (!textSuffixes.contains(suffix)) {
+            // Unknown / likely binary — don't open in the editor
+            return;
         }
-        
+
         m_document->openUrl(url);
         showCentralView(m_editorView);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
@@ -469,7 +494,11 @@ void MainWindow::newProject()
                 
                 // Add top level folder with project name
                 QModelIndex rootFolder = m_projectTree->model()->addFolder(name);
-                
+
+                // Add Stylesheets folder with a link to the default style.css
+                QModelIndex stylesheetsFolder = m_projectTree->model()->addFolder(QStringLiteral("Stylesheets"), rootFolder);
+                m_projectTree->model()->addFile(QStringLiteral("style.css"), QStringLiteral("stylesheets/style.css"), stylesheetsFolder);
+
                 // If a file is open, add it to the project
                 if (m_document && !m_document->url().isEmpty()) {
                     QString openFilePath = m_document->url().toLocalFile();
@@ -501,6 +530,17 @@ void MainWindow::openProject()
 void MainWindow::closeProject()
 {
     ProjectManager::instance().closeProject();
+
+    // Clear document and views to prevent stale data from triggering updates
+    if (m_document) {
+        m_document->closeUrl();
+    }
+    if (m_outlinePanel) {
+        m_outlinePanel->documentChanged(QString());
+    }
+    if (m_previewPanel) {
+        m_previewPanel->setMarkdown(QString());
+    }
     updateTitle();
 }
 
@@ -731,19 +771,69 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     y = 0;
                 }
 
-                std::cerr << "COMPLETION FIX: cursorInParent=" << cursorInParent.x() << "," << cursorInParent.y()
-                          << " popup was=" << popup->x() << "," << popup->y()
-                          << "," << popup->width() << "x" << popup->height()
-                          << " moving to y=" << y
-                          << " parentHeight=" << parentHeight
-                          << " visible=" << popup->isVisible()
-                          << std::endl;
-
                 popup->move(x, y);
                 popup->raise(); // Ensure popup is above all sibling widgets (centralWidget etc)
             });
         }
     }
+
+    // Intercept project-tree drops onto the editor view to insert markdown links.
+    // We only handle drops that carry our custom mime type (from ProjectTreeModel::mimeData).
+    const auto evType = event->type();
+    if (evType == QEvent::DragEnter || evType == QEvent::DragMove || evType == QEvent::Drop) {
+        QWidget *w = qobject_cast<QWidget*>(watched);
+        if (w && m_editorView && (w == m_editorView || m_editorView->isAncestorOf(w))) {
+            if (evType == QEvent::DragEnter) {
+                auto *e = static_cast<QDragEnterEvent*>(event);
+                if (e->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))
+                        && e->mimeData()->hasUrls()) {
+                    e->acceptProposedAction();
+                    return true;
+                }
+            } else if (evType == QEvent::DragMove) {
+                auto *e = static_cast<QDragMoveEvent*>(event);
+                if (e->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))
+                        && e->mimeData()->hasUrls()) {
+                    e->acceptProposedAction();
+                    return true;
+                }
+            } else { // Drop
+                auto *e = static_cast<QDropEvent*>(event);
+                if (e->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))
+                        && e->mimeData()->hasUrls()) {
+                    // Map drop position into editor-view coordinates and place the cursor there
+                    QPoint localPt = w->mapTo(m_editorView, e->position().toPoint());
+                    KTextEditor::Cursor cursor = m_editorView->coordinatesToCursor(localPt);
+                    if (cursor.isValid()) {
+                        m_editorView->setCursorPosition(cursor);
+                    }
+
+                    // Decode item pointers to get project names; pair each with its URL
+                    QList<QPair<QString, QUrl>> items;
+                    QByteArray encoded = e->mimeData()->data(QStringLiteral("application/x-rpgforge-treeitem"));
+                    QList<QUrl> urls = e->mimeData()->urls();
+                    const int count = encoded.size() / static_cast<int>(sizeof(ProjectTreeItem*));
+                    for (int i = 0; i < count && i < urls.size(); ++i) {
+                        ProjectTreeItem *dragItem = *reinterpret_cast<ProjectTreeItem**>(
+                            encoded.data() + i * static_cast<int>(sizeof(ProjectTreeItem*)));
+                        QString name = (dragItem && !dragItem->name.isEmpty())
+                            ? dragItem->name
+                            : QFileInfo(urls[i].toLocalFile()).completeBaseName();
+                        items.append({name, urls[i]});
+                    }
+                    // Fallback: if pointer decoding produced fewer entries than URLs
+                    for (int i = items.size(); i < urls.size(); ++i) {
+                        items.append({QFileInfo(urls[i].toLocalFile()).completeBaseName(), urls[i]});
+                    }
+
+                    insertProjectLinksAtCursor(items);
+                    e->acceptProposedAction();
+                    return true;
+                }
+            }
+        }
+    }
+
     return KXmlGuiWindow::eventFilter(watched, event);
 }
 
@@ -831,4 +921,44 @@ void MainWindow::restoreSession()
             m_sidebar->showPanel(panelId);
         }
     }
+}
+
+void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &items)
+{
+    if (!m_document || !m_editorView || items.isEmpty()) return;
+
+    // Base directory: directory of the open document, or the project root
+    QString baseDir;
+    if (!m_document->url().isEmpty() && m_document->url().isLocalFile()) {
+        baseDir = QFileInfo(m_document->url().toLocalFile()).absolutePath();
+    } else if (ProjectManager::instance().isProjectOpen()) {
+        baseDir = ProjectManager::instance().projectPath();
+    }
+
+    static const QStringList imgSuffixes = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+        QStringLiteral("bmp")
+    };
+
+    QStringList parts;
+    for (const auto &[name, url] : items) {
+        if (!url.isLocalFile()) continue;
+        const QString absPath = url.toLocalFile();
+        const QString relPath = baseDir.isEmpty()
+            ? absPath
+            : QDir(baseDir).relativeFilePath(absPath);
+        const QString suffix = QFileInfo(absPath).suffix().toLower();
+
+        if (imgSuffixes.contains(suffix)) {
+            parts << QStringLiteral("![%1](%2)").arg(name, relPath);
+        } else {
+            parts << QStringLiteral("[%1](%2)").arg(name, relPath);
+        }
+    }
+
+    if (parts.isEmpty()) return;
+
+    const QString insertText = parts.join(QLatin1Char('\n'));
+    m_document->insertText(m_editorView->cursorPosition(), insertText);
 }
