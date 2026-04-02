@@ -139,6 +139,30 @@ void MainWindow::setupEditor()
         m_editorView->registerCompletionModel(completionModel);
         std::cerr << "MainWindow: Variable completion model registered (deferred), auto-invoke="
                   << m_editorView->isAutomaticInvocationEnabled() << std::endl;
+
+        // Debug: dump all child widgets of the view looking for the completion widget
+        for (QObject *child : m_editorView->children()) {
+            QWidget *w = qobject_cast<QWidget*>(child);
+            if (w) {
+                std::cerr << "  View child: " << w->metaObject()->className()
+                          << " visible=" << w->isVisible()
+                          << " geo=" << w->geometry().x() << "," << w->geometry().y()
+                          << "," << w->geometry().width() << "," << w->geometry().height()
+                          << " parent=" << (w->parentWidget() ? w->parentWidget()->metaObject()->className() : "null")
+                          << std::endl;
+            }
+        }
+        // Also check our top-level window's children
+        for (QObject *child : this->children()) {
+            QWidget *w = qobject_cast<QWidget*>(child);
+            if (w && QString::fromLatin1(w->metaObject()->className()).contains(QLatin1String("Completion"))) {
+                std::cerr << "  MainWindow child: " << w->metaObject()->className()
+                          << " visible=" << w->isVisible()
+                          << " geo=" << w->geometry().x() << "," << w->geometry().y()
+                          << "," << w->geometry().width() << "," << w->geometry().height()
+                          << std::endl;
+            }
+        }
     });
 }
 
@@ -194,16 +218,29 @@ void MainWindow::setupSidebar()
     vbox->setSpacing(0);
     vbox->addWidget(m_breadcrumbBar);
     
-    m_centralStack = new QStackedWidget(editorContainer);
+    // Use a plain container with QVBoxLayout instead of QStackedWidget.
+    // QStackedWidget interferes with KateCompletionWidget popup positioning
+    // because it clips child widgets and affects coordinate mapping.
+    auto *viewContainer = new QWidget(editorContainer);
+    m_centralViewLayout = new QVBoxLayout(viewContainer);
+    m_centralViewLayout->setContentsMargins(0, 0, 0, 0);
+    m_centralViewLayout->setSpacing(0);
+
     m_corkboardView = new CorkboardView(this);
     m_imagePreview = new ImagePreview(this);
     m_pdfViewer = new QWebEngineView(this);
-    m_centralStack->addWidget(m_editorView);
-    m_centralStack->addWidget(m_corkboardView);
-    m_centralStack->addWidget(m_imagePreview);
-    m_centralStack->addWidget(m_pdfViewer);
-    
-    vbox->addWidget(m_centralStack);
+
+    m_centralViewLayout->addWidget(m_editorView);
+    m_centralViewLayout->addWidget(m_corkboardView);
+    m_centralViewLayout->addWidget(m_imagePreview);
+    m_centralViewLayout->addWidget(m_pdfViewer);
+
+    // Only show the editor view initially; hide the rest
+    m_corkboardView->hide();
+    m_imagePreview->hide();
+    m_pdfViewer->hide();
+
+    vbox->addWidget(viewContainer);
 
     m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(editorContainer);
@@ -226,7 +263,7 @@ void MainWindow::setupSidebar()
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            m_centralStack->setCurrentWidget(m_editorView);
+            showCentralView(m_editorView);
         }
     });
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](ProjectTreeItem *folder) {
@@ -235,13 +272,13 @@ void MainWindow::setupSidebar()
             return;
         }
         m_corkboardView->setFolder(folder);
-        m_centralStack->setCurrentWidget(m_corkboardView);
+        showCentralView(m_corkboardView);
     });
     connect(m_corkboardView, &CorkboardView::fileActivated, this, [this](const QString &relativePath) {
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            m_centralStack->setCurrentWidget(m_editorView);
+            showCentralView(m_editorView);
         }
     });
     connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](ProjectTreeItem *folder, ProjectTreeItem *draggedItem, ProjectTreeItem *targetItem) {
@@ -361,19 +398,19 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         
         if (imgSuffixes.contains(suffix)) {
             if (m_imagePreview->loadImage(path)) {
-                m_centralStack->setCurrentWidget(m_imagePreview);
+                showCentralView(m_imagePreview);
                 if (m_previewPanel) m_previewPanel->hide();
                 return;
             }
         } else if (suffix == QLatin1String("pdf")) {
             m_pdfViewer->setUrl(url);
-            m_centralStack->setCurrentWidget(m_pdfViewer);
+            showCentralView(m_pdfViewer);
             if (m_previewPanel) m_previewPanel->hide();
             return;
         }
         
         m_document->openUrl(url);
-        m_centralStack->setCurrentWidget(m_editorView);
+        showCentralView(m_editorView);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
             m_previewPanel->show();
             m_previewPanel->setBaseUrl(url);
@@ -600,6 +637,14 @@ void MainWindow::updateTitle()
         title.prepend(QStringLiteral("* "));
     }
     setWindowTitle(title);
+}
+
+void MainWindow::showCentralView(QWidget *widget)
+{
+    m_editorView->setVisible(widget == m_editorView);
+    m_corkboardView->setVisible(widget == m_corkboardView);
+    m_imagePreview->setVisible(widget == m_imagePreview);
+    m_pdfViewer->setVisible(widget == m_pdfViewer);
 }
 
 void MainWindow::saveSession()
