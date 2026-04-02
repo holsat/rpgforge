@@ -20,11 +20,30 @@
 #define VARIABLESPANEL_H
 
 #include <QWidget>
+#include <QTreeWidget>
 #include <QMap>
 
-class QTreeWidget;
 class QTreeWidgetItem;
 class QToolButton;
+
+/**
+ * QTreeWidget subclass that supports dragging variable names into the editor.
+ * Produces text/plain MIME data in the format {{variable_name}}.
+ */
+class DraggableVariableTree : public QTreeWidget
+{
+    Q_OBJECT
+public:
+    explicit DraggableVariableTree(QWidget *parent = nullptr);
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+
+private:
+    QPoint m_dragStartPos;
+    QString fullVariableName(QTreeWidgetItem *item) const;
+};
 
 struct Variable {
     QString name;
@@ -54,7 +73,7 @@ private Q_SLOTS:
     void onCustomContextMenu(const QPoint &pos);
 
 private:
-    QTreeWidget *m_treeWidget;
+    DraggableVariableTree *m_treeWidget;
     QToolButton *m_addButton;
     QToolButton *m_addVariantButton;
     QToolButton *m_removeButton;
