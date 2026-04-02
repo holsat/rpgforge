@@ -269,6 +269,7 @@ QMap<QString, QString> VariablesPanel::variables() const
             bool vShouldCalc = vItem->checkState(3) == Qt::Checked;
             vars.insert(vName, vShouldCalc ? (QStringLiteral("CALC:") + vItem->text(2)) : vItem->text(2));
         }
+
     }
     return vars;
 }

@@ -20,7 +20,6 @@
 #define MAINWINDOW_H
 
 #include <KXmlGuiWindow>
-#include <QStackedWidget>
 
 namespace KTextEditor {
     class Document;
@@ -45,6 +44,7 @@ class QTimer;
 class QUrl;
 class QSplitter;
 class QAction;
+class QVBoxLayout;
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -53,6 +53,9 @@ class MainWindow : public KXmlGuiWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private Q_SLOTS:
     void newFile();
@@ -80,12 +83,13 @@ private:
     void updateTitle();
     void saveSession();
     void restoreSession();
+    void showCentralView(QWidget *widget);
 
     KTextEditor::Editor *m_editor = nullptr;
     KTextEditor::Document *m_document = nullptr;
     KTextEditor::View *m_editorView = nullptr;
 
-    QStackedWidget *m_centralStack = nullptr;
+    QVBoxLayout *m_centralViewLayout = nullptr;
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
     QWebEngineView *m_pdfViewer = nullptr;
@@ -103,6 +107,7 @@ private:
     QAction *m_togglePreviewAction = nullptr;
 
     QTimer *m_cursorDebounce = nullptr;
+    QTimer *m_textChangeDebounce = nullptr;
 
     int m_fileExplorerId = -1;
     int m_projectTreeId = -1;

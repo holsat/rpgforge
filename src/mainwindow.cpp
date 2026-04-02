@@ -47,8 +47,10 @@
 #include <KTextEditor/Document>
 #include <KTextEditor/Editor>
 #include <KTextEditor/View>
+#include <iostream>
 
 #include <QApplication>
+#include <QEvent>
 #include <QDir>
 #include <QFileDialog>
 #include <QHBoxLayout>
@@ -113,6 +115,12 @@ void MainWindow::setupEditor()
     m_cursorDebounce->setInterval(100);
     connect(m_cursorDebounce, &QTimer::timeout, this, &MainWindow::updateCursorContext);
 
+    // Debounce text changes to prevent UI stutter and recursion crashes
+    m_textChangeDebounce = new QTimer(this);
+    m_textChangeDebounce->setSingleShot(true);
+    m_textChangeDebounce->setInterval(500);
+    connect(m_textChangeDebounce, &QTimer::timeout, this, &MainWindow::updateErrorHighlighting);
+
     // Connect signals
     connect(m_document, &KTextEditor::Document::textChanged,
             this, &MainWindow::onTextChanged);
@@ -125,9 +133,41 @@ void MainWindow::setupEditor()
     connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged,
             this, &MainWindow::syncScroll);
 
-    // Register variable autocomplete
-    auto *completionModel = new VariableCompletionModel(this);
-    m_editorView->registerCompletionModel(completionModel);
+    // Register variable autocomplete safely after the view is fully initialized
+    QTimer::singleShot(500, this, [this]() {
+        m_editorView->setAutomaticInvocationEnabled(true);
+        auto *completionModel = new VariableCompletionModel(this);
+        m_editorView->registerCompletionModel(completionModel);
+        std::cerr << "MainWindow: Variable completion model registered (deferred), auto-invoke="
+                  << m_editorView->isAutomaticInvocationEnabled() << std::endl;
+
+        // Debug: dump all child widgets of the view looking for the completion widget
+        for (QObject *child : m_editorView->children()) {
+            QWidget *w = qobject_cast<QWidget*>(child);
+            if (w) {
+                std::cerr << "  View child: " << w->metaObject()->className()
+                          << " visible=" << w->isVisible()
+                          << " geo=" << w->geometry().x() << "," << w->geometry().y()
+                          << "," << w->geometry().width() << "," << w->geometry().height()
+                          << " parent=" << (w->parentWidget() ? w->parentWidget()->metaObject()->className() : "null")
+                          << std::endl;
+            }
+        }
+        // Also check our top-level window's children and install event filter on completion widget
+        for (QObject *child : this->children()) {
+            QWidget *w = qobject_cast<QWidget*>(child);
+            if (w && QString::fromLatin1(w->metaObject()->className()).contains(QLatin1String("Completion"))) {
+                std::cerr << "  MainWindow child: " << w->metaObject()->className()
+                          << " visible=" << w->isVisible()
+                          << " geo=" << w->geometry().x() << "," << w->geometry().y()
+                          << "," << w->geometry().width() << "," << w->geometry().height()
+                          << std::endl;
+                // Install event filter to trace positioning
+                w->installEventFilter(this);
+                std::cerr << "  -> Installed event filter on " << w->metaObject()->className() << std::endl;
+            }
+        }
+    });
 }
 
 void MainWindow::setupSidebar()
@@ -182,16 +222,29 @@ void MainWindow::setupSidebar()
     vbox->setSpacing(0);
     vbox->addWidget(m_breadcrumbBar);
     
-    m_centralStack = new QStackedWidget(editorContainer);
+    // Use a plain container with QVBoxLayout instead of QStackedWidget.
+    // QStackedWidget interferes with KateCompletionWidget popup positioning
+    // because it clips child widgets and affects coordinate mapping.
+    auto *viewContainer = new QWidget(editorContainer);
+    m_centralViewLayout = new QVBoxLayout(viewContainer);
+    m_centralViewLayout->setContentsMargins(0, 0, 0, 0);
+    m_centralViewLayout->setSpacing(0);
+
     m_corkboardView = new CorkboardView(this);
     m_imagePreview = new ImagePreview(this);
     m_pdfViewer = new QWebEngineView(this);
-    m_centralStack->addWidget(m_editorView);
-    m_centralStack->addWidget(m_corkboardView);
-    m_centralStack->addWidget(m_imagePreview);
-    m_centralStack->addWidget(m_pdfViewer);
-    
-    vbox->addWidget(m_centralStack);
+
+    m_centralViewLayout->addWidget(m_editorView);
+    m_centralViewLayout->addWidget(m_corkboardView);
+    m_centralViewLayout->addWidget(m_imagePreview);
+    m_centralViewLayout->addWidget(m_pdfViewer);
+
+    // Only show the editor view initially; hide the rest
+    m_corkboardView->hide();
+    m_imagePreview->hide();
+    m_pdfViewer->hide();
+
+    vbox->addWidget(viewContainer);
 
     m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(editorContainer);
@@ -214,7 +267,7 @@ void MainWindow::setupSidebar()
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            m_centralStack->setCurrentWidget(m_editorView);
+            showCentralView(m_editorView);
         }
     });
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](ProjectTreeItem *folder) {
@@ -223,13 +276,13 @@ void MainWindow::setupSidebar()
             return;
         }
         m_corkboardView->setFolder(folder);
-        m_centralStack->setCurrentWidget(m_corkboardView);
+        showCentralView(m_corkboardView);
     });
     connect(m_corkboardView, &CorkboardView::fileActivated, this, [this](const QString &relativePath) {
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            m_centralStack->setCurrentWidget(m_editorView);
+            showCentralView(m_editorView);
         }
     });
     connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](ProjectTreeItem *folder, ProjectTreeItem *draggedItem, ProjectTreeItem *targetItem) {
@@ -349,19 +402,19 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         
         if (imgSuffixes.contains(suffix)) {
             if (m_imagePreview->loadImage(path)) {
-                m_centralStack->setCurrentWidget(m_imagePreview);
+                showCentralView(m_imagePreview);
                 if (m_previewPanel) m_previewPanel->hide();
                 return;
             }
         } else if (suffix == QLatin1String("pdf")) {
             m_pdfViewer->setUrl(url);
-            m_centralStack->setCurrentWidget(m_pdfViewer);
+            showCentralView(m_pdfViewer);
             if (m_previewPanel) m_previewPanel->hide();
             return;
         }
         
         m_document->openUrl(url);
-        m_centralStack->setCurrentWidget(m_editorView);
+        showCentralView(m_editorView);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
             m_previewPanel->show();
             m_previewPanel->setBaseUrl(url);
@@ -498,23 +551,9 @@ void MainWindow::compileToPdf()
 
 void MainWindow::onTextChanged()
 {
-    if (m_document) {
-        QString text = m_document->text();
-
-        // Parse YAML front-matter
-        auto frontMatterVars = VariableManager::parseFrontMatter(text);
-        VariableManager::instance().setDocumentVariables(frontMatterVars);
-
-        QString contentOnly = VariableManager::stripMetadata(text);
-
-        if (m_outlinePanel) {
-            m_outlinePanel->documentChanged(contentOnly);
-        }
-        if (m_previewPanel) {
-            m_previewPanel->setMarkdown(contentOnly);
-        }
-        
-        updateErrorHighlighting();
+    // Minimal work during typing to prevent hangs/crashes
+    if (m_document && m_textChangeDebounce) {
+        m_textChangeDebounce->start();
     }
 }
 
@@ -522,58 +561,20 @@ void MainWindow::updateErrorHighlighting()
 {
     if (!m_document) return;
 
-    // Clear old ranges
+    QString text = m_document->text();
+    
+    // 1. Sync front-matter variables
+    auto frontMatterVars = VariableManager::parseFrontMatter(text);
+    VariableManager::instance().setDocumentVariables(frontMatterVars);
+
+    // 2. Update auxiliary views
+    QString contentOnly = VariableManager::stripMetadata(text);
+    if (m_outlinePanel) m_outlinePanel->documentChanged(contentOnly);
+    if (m_previewPanel) m_previewPanel->setMarkdown(contentOnly);
+
+    // 3. Clear expensive highlights (Disabled for now)
     qDeleteAll(m_errorRanges);
     m_errorRanges.clear();
-
-    static KTextEditor::Attribute::Ptr errorAttr;
-    if (!errorAttr) {
-        errorAttr = new KTextEditor::Attribute();
-        errorAttr->setUnderlineStyle(QTextCharFormat::WaveUnderline);
-        errorAttr->setUnderlineColor(Qt::red);
-    }
-
-    QString text = m_document->text();
-    auto vars = VariableManager::instance().variableNames();
-
-    auto offsetToCursor = [&text](int offset) -> KTextEditor::Cursor {
-        int line = 0;
-        int col = 0;
-        for (int i = 0; i < offset && i < text.length(); ++i) {
-            if (text.at(i) == QLatin1Char('\n')) {
-                line++;
-                col = 0;
-            } else {
-                col++;
-            }
-        }
-        return KTextEditor::Cursor(line, col);
-    };
-
-    // Pattern 1: Unresolved variables {{var}}
-    static QRegularExpression unresolvedRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
-    auto it = unresolvedRegex.globalMatch(text);
-    while (it.hasNext()) {
-        auto match = it.next();
-        QString name = match.captured(1);
-        if (!vars.contains(name)) {
-            KTextEditor::Range range(offsetToCursor(match.capturedStart()), offsetToCursor(match.capturedEnd()));
-            auto *mRange = m_document->newMovingRange(range);
-            mRange->setAttribute(errorAttr);
-            m_errorRanges.append(mRange);
-        }
-    }
-
-    // Pattern 2: Potential syntax errors {var} (single braces)
-    static QRegularExpression singleBraceRegex(QStringLiteral("(?<!\\{)\\{([A-Za-z0-9_\\.]+)\\}(?!\\})"));
-    auto it2 = singleBraceRegex.globalMatch(text);
-    while (it2.hasNext()) {
-        auto match = it2.next();
-        KTextEditor::Range range(offsetToCursor(match.capturedStart()), offsetToCursor(match.capturedEnd()));
-        auto *mRange = m_document->newMovingRange(range);
-        mRange->setAttribute(errorAttr);
-        m_errorRanges.append(mRange);
-    }
 }
 
 void MainWindow::onCursorPositionChanged()
@@ -640,6 +641,71 @@ void MainWindow::updateTitle()
         title.prepend(QStringLiteral("* "));
     }
     setWindowTitle(title);
+}
+
+void MainWindow::showCentralView(QWidget *widget)
+{
+    m_editorView->setVisible(widget == m_editorView);
+    m_corkboardView->setVisible(widget == m_corkboardView);
+    m_imagePreview->setVisible(widget == m_imagePreview);
+    m_pdfViewer->setVisible(widget == m_pdfViewer);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    // Fix KateCompletionWidget positioning.
+    // Kate's updatePosition() uses parentWidget()->geometry() for bounds checking,
+    // but on Wayland the geometry position includes window decoration offsets (e.g. y=25
+    // for title bar) while mapFromGlobal treats the widget's (0,0) as global (0,0).
+    // This causes the bounds check to use wrong values, letting the popup extend
+    // below the visible window area. We fix this by deferring a reposition after show.
+    if (event->type() == QEvent::Show
+        && QString::fromLatin1(watched->metaObject()->className()).contains(QLatin1String("Completion"))
+        && m_editorView) {
+        QWidget *popup = qobject_cast<QWidget*>(watched);
+        if (popup && popup->parentWidget()) {
+            // Defer repositioning to after the Show event is fully processed
+            QTimer::singleShot(0, this, [this, popup]() {
+                if (!popup->isVisible() || !m_editorView) return;
+
+                KTextEditor::Cursor cursor = m_editorView->cursorPosition();
+                QPoint cursorLocal = m_editorView->cursorToCoordinate(cursor);
+
+                if (cursorLocal == QPoint(-1, -1)) return;
+
+                // Map cursor position to popup's parent coordinate space
+                QPoint cursorInParent = m_editorView->mapTo(popup->parentWidget(), cursorLocal);
+
+                // Estimate line height from the editor view's font
+                int lineHeight = m_editorView->fontMetrics().height() + 2;
+
+                int x = popup->x(); // Keep Kate's x positioning
+                int y = cursorInParent.y() + lineHeight; // Below cursor
+                int parentHeight = popup->parentWidget()->height();
+
+                // If popup would extend below the window, move it above the cursor
+                if (y + popup->height() > parentHeight) {
+                    y = cursorInParent.y() - popup->height();
+                }
+                // Clamp to top of window
+                if (y < 0) {
+                    y = 0;
+                }
+
+                std::cerr << "COMPLETION FIX: cursorInParent=" << cursorInParent.x() << "," << cursorInParent.y()
+                          << " popup was=" << popup->x() << "," << popup->y()
+                          << "," << popup->width() << "x" << popup->height()
+                          << " moving to y=" << y
+                          << " parentHeight=" << parentHeight
+                          << " visible=" << popup->isVisible()
+                          << std::endl;
+
+                popup->move(x, y);
+                popup->raise(); // Ensure popup is above all sibling widgets (centralWidget etc)
+            });
+        }
+    }
+    return KXmlGuiWindow::eventFilter(watched, event);
 }
 
 void MainWindow::saveSession()

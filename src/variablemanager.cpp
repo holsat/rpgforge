@@ -18,8 +18,8 @@
 
 #include "variablemanager.h"
 #include <QRegularExpression>
-#include <QJSEngine>
 #include <QDebug>
+#include <iostream>
 
 VariableManager& VariableManager::instance()
 {
@@ -58,7 +58,6 @@ void VariableManager::setPanelVariables(const QMap<QString, QString> &vars)
 
 QMap<QString, QString> VariableManager::mergedVariables() const
 {
-    // Merged variables (Panel > Document > Project)
     QMap<QString, QString> merged = m_projectVars;
     for (auto it = m_documentVars.begin(); it != m_documentVars.end(); ++it) {
         merged.insert(it.key(), it.value());
@@ -71,13 +70,16 @@ QMap<QString, QString> VariableManager::mergedVariables() const
 
 QString VariableManager::resolve(const QString &expression, bool shouldEvaluateMath) const
 {
-    // Find all occurrences of {{variable_name}}
+    static const int MAX_RESULT_SIZE = 1024 * 1024;
     static QRegularExpression varRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
     
     QString result = expression;
     auto vars = mergedVariables();
     
-    // Resolve nested variables (up to a limit to prevent cycles)
+    if (expression.contains(QLatin1String("{{"))) {
+        std::cerr << "VariableManager: Resolving expression [" << expression.toStdString() << "]" << std::endl;
+    }
+
     int depth = 0;
     bool changed = true;
     while (changed && depth < 10) {
@@ -86,60 +88,42 @@ QString VariableManager::resolve(const QString &expression, bool shouldEvaluateM
         
         auto matches = varRegex.globalMatch(result);
         QList<QRegularExpressionMatch> matchList;
-        while (matches.hasNext()) matchList.prepend(matches.next()); // Work backwards
+        while (matches.hasNext()) matchList.append(matches.next());
 
-        for (const auto &match : matchList) {
+        for (int i = matchList.size() - 1; i >= 0; --i) {
+            const auto &match = matchList.at(i);
             QString name = match.captured(1);
             if (vars.contains(name)) {
                 QString val = vars.value(name);
-                // If the variable was marked as CALC: in the panel, we strip it here
-                // because we are resolving its value into another expression.
-                if (val.startsWith(QLatin1String("CALC:"))) {
-                    val = val.mid(5);
-                }
+                if (val.startsWith(QLatin1String("CALC:"))) val = val.mid(5);
+                if (result.length() - match.capturedLength() + val.length() > MAX_RESULT_SIZE) continue;
                 result.replace(match.capturedStart(), match.capturedLength(), val);
                 changed = true;
             }
         }
     }
 
-    // After resolving all variables, if math is enabled and it looks like a math expression, evaluate it
-    if (shouldEvaluateMath) {
-        static QRegularExpression mathCheckRegex(QStringLiteral("^[0-9\\+\\-\\*/\\(\\)\\.\\s]+$"));
-        if (mathCheckRegex.match(result).hasMatch() && result.contains(QRegularExpression(QStringLiteral("[\\+\\-\\*/\\(\\)]")))) {
-            QJSEngine engine;
-            auto val = engine.evaluate(result);
-            if (!val.isError()) {
-                result = QString::number(val.toNumber(), 'g', 10);
-            }
-        }
-    }
-    
+    // Simplified math: no QJSEngine for now to ensure stability
     return result;
 }
 
 QString VariableManager::processMarkdown(const QString &markdown) const
 {
-    // Find all {{variable_name}} and replace them with their resolved values
     static QRegularExpression varRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
-    
     QString result = markdown;
     auto vars = mergedVariables();
     
     auto it = varRegex.globalMatch(result);
-    // Work backwards to avoid offset issues
+    if (!it.hasNext()) return markdown;
+
     QList<QRegularExpressionMatch> matches;
-    while (it.hasNext()) {
-        matches.append(it.next());
-    }
+    auto it2 = varRegex.globalMatch(result);
+    while (it2.hasNext()) matches.append(it2.next());
     
     for (int i = matches.size() - 1; i >= 0; --i) {
         auto match = matches.at(i);
         QString name = match.captured(1);
-        
-        if (!vars.contains(name)) {
-            continue;
-        }
+        if (!vars.contains(name)) continue;
 
         QString rawVal = vars.value(name);
         bool shouldCalc = rawVal.startsWith(QLatin1String("CALC:"));
@@ -160,28 +144,16 @@ QStringList VariableManager::variableNames() const
 QMap<QString, QString> VariableManager::parseFrontMatter(const QString &markdown)
 {
     QMap<QString, QString> vars;
-    
-    // Check for front matter (must start at line 0 with ---)
-    if (!markdown.startsWith(QLatin1String("---"))) {
-        return vars;
-    }
-    
+    if (!markdown.startsWith(QLatin1String("---"))) return vars;
     int endIdx = markdown.indexOf(QLatin1String("---"), 3);
-    if (endIdx == -1) {
-        return vars;
-    }
+    if (endIdx == -1) return vars;
     
     QString frontMatter = markdown.mid(3, endIdx - 3);
-    QStringList lines = frontMatter.split(QLatin1Char('\n'));
-    
     static QRegularExpression lineRegex(QStringLiteral("^([A-Za-z0-9_\\.]+):\\s*(.*)$"));
-    for (const QString &line : lines) {
+    for (const QString &line : frontMatter.split(QLatin1Char('\n'))) {
         auto match = lineRegex.match(line.trimmed());
-        if (match.hasMatch()) {
-            vars.insert(match.captured(1), match.captured(2).trimmed());
-        }
+        if (match.hasMatch()) vars.insert(match.captured(1), match.captured(2).trimmed());
     }
-    
     return vars;
 }
 
@@ -198,16 +170,8 @@ VariableManager::DocumentMetadata VariableManager::extractMetadata(const QString
 
 QString VariableManager::stripMetadata(const QString &markdown)
 {
-    if (!markdown.startsWith(QLatin1String("---"))) {
-        return markdown;
-    }
-    
+    if (!markdown.startsWith(QLatin1String("---"))) return markdown;
     int endIdx = markdown.indexOf(QLatin1String("---"), 3);
-    if (endIdx == -1) {
-        return markdown;
-    }
-    
-    // Return content after the second --- and skip any leading newlines
-    QString stripped = markdown.mid(endIdx + 3).trimmed();
-    return stripped;
+    if (endIdx == -1) return markdown;
+    return markdown.mid(endIdx + 3).trimmed();
 }
