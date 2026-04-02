@@ -27,7 +27,65 @@
 #include <QSettings>
 #include <QMenu>
 #include <QAction>
+#include <QApplication>
+#include <QDrag>
+#include <QMimeData>
+#include <QMouseEvent>
 #include <KLocalizedString>
+
+// --- DraggableVariableTree implementation ---
+
+DraggableVariableTree::DraggableVariableTree(QWidget *parent)
+    : QTreeWidget(parent)
+{
+}
+
+QString DraggableVariableTree::fullVariableName(QTreeWidgetItem *item) const
+{
+    if (!item) return QString();
+    if (item->parent()) {
+        // Variant: parent_name.variant_name
+        return item->parent()->text(0) + QLatin1Char('.') + item->text(0);
+    }
+    return item->text(0);
+}
+
+void DraggableVariableTree::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragStartPos = event->pos();
+    }
+    QTreeWidget::mousePressEvent(event);
+}
+
+void DraggableVariableTree::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!(event->buttons() & Qt::LeftButton)) {
+        QTreeWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    if ((event->pos() - m_dragStartPos).manhattanLength() < QApplication::startDragDistance()) {
+        QTreeWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    QTreeWidgetItem *item = itemAt(m_dragStartPos);
+    if (!item) return;
+
+    QString varName = fullVariableName(item);
+    if (varName.isEmpty()) return;
+
+    QString insertText = QStringLiteral("{{") + varName + QStringLiteral("}}");
+
+    auto *drag = new QDrag(this);
+    auto *mimeData = new QMimeData();
+    mimeData->setText(insertText);
+    drag->setMimeData(mimeData);
+    drag->exec(Qt::CopyAction);
+}
+
+// --- VariablesPanel implementation ---
 
 VariablesPanel::VariablesPanel(QWidget *parent)
     : QWidget(parent)
@@ -69,8 +127,8 @@ void VariablesPanel::setupUi()
     
     layout->addWidget(toolbar);
 
-    // Tree widget
-    m_treeWidget = new QTreeWidget(this);
+    // Tree widget (with drag support)
+    m_treeWidget = new DraggableVariableTree(this);
     m_treeWidget->setColumnCount(4);
     m_treeWidget->setHeaderLabels({i18n("Name"), i18n("Computed"), i18n("Expression"), i18n("Calc")});
     m_treeWidget->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);

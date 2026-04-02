@@ -57,6 +57,7 @@
 #include <QInputDialog>
 #include <QMenu>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
@@ -562,7 +563,7 @@ void MainWindow::updateErrorHighlighting()
     if (!m_document) return;
 
     QString text = m_document->text();
-    
+
     // 1. Sync front-matter variables
     auto frontMatterVars = VariableManager::parseFrontMatter(text);
     VariableManager::instance().setDocumentVariables(frontMatterVars);
@@ -572,9 +573,47 @@ void MainWindow::updateErrorHighlighting()
     if (m_outlinePanel) m_outlinePanel->documentChanged(contentOnly);
     if (m_previewPanel) m_previewPanel->setMarkdown(contentOnly);
 
-    // 3. Clear expensive highlights (Disabled for now)
+    // 3. Highlight undefined variable references with red squiggly underline
     qDeleteAll(m_errorRanges);
     m_errorRanges.clear();
+
+    // Build set of known variable names (without CALC: prefix)
+    QSet<QString> knownVars;
+    const auto names = VariableManager::instance().variableNames();
+    for (const QString &name : names) {
+        if (name.startsWith(QLatin1String("CALC:"))) {
+            knownVars.insert(name.mid(5));
+        } else {
+            knownVars.insert(name);
+        }
+    }
+
+    // Scan document for {{varname}} patterns
+    static const QRegularExpression varRefRegex(QStringLiteral("\\{\\{([A-Za-z0-9_.]+)\\}\\}"));
+
+    // Create error attribute (red squiggly underline)
+    KTextEditor::Attribute::Ptr errorAttr(new KTextEditor::Attribute());
+    errorAttr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+    errorAttr->setUnderlineColor(Qt::red);
+
+    for (int line = 0; line < m_document->lines(); ++line) {
+        const QString lineText = m_document->line(line);
+        QRegularExpressionMatchIterator it = varRefRegex.globalMatch(lineText);
+        while (it.hasNext()) {
+            QRegularExpressionMatch match = it.next();
+            QString varName = match.captured(1);
+            if (!knownVars.contains(varName)) {
+                // Unknown variable — mark the entire {{varname}} with error underline
+                int startCol = match.capturedStart(0);
+                int endCol = match.capturedEnd(0);
+                KTextEditor::Range range(line, startCol, line, endCol);
+                KTextEditor::MovingRange *mr = m_document->newMovingRange(range);
+                mr->setAttribute(errorAttr);
+                mr->setZDepth(-100.0);
+                m_errorRanges.append(mr);
+            }
+        }
+    }
 }
 
 void MainWindow::onCursorPositionChanged()
