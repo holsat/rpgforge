@@ -21,11 +21,15 @@
 #include <KTextEditor/View>
 #include <KTextEditor/Document>
 #include <QIcon>
+#include <KLocalizedString>
 #include <iostream>
 
 VariableCompletionModel::VariableCompletionModel(QObject *parent)
     : KTextEditor::CodeCompletionModel(parent)
 {
+    // Important: Kate Word Completion says setHasGroups(false) but implements a hierarchy
+    // Actually, setting it to false means Kate's internal engine handles the ungrouped items
+    // but the model can still provide its own grouping structure.
     setHasGroups(false);
     updateVariables();
 }
@@ -42,33 +46,96 @@ void VariableCompletionModel::updateVariables()
         }
     }
     m_variables.sort(Qt::CaseInsensitive);
-    setRowCount(m_variables.size());
 }
 
 int VariableCompletionModel::rowCount(const QModelIndex &parent) const
 {
-    if (parent.isValid()) return 0;
-    return m_variables.size();
+    if (!parent.isValid()) {
+        // Toplevel: 1 row for the "Variables" group header
+        return m_variables.isEmpty() ? 0 : 1;
+    }
+    
+    if (!parent.parent().isValid()) {
+        // Parent is the group header: return the actual variables
+        return m_variables.size();
+    }
+    
+    // Items themselves have no children
+    return 0;
+}
+
+QModelIndex VariableCompletionModel::index(int row, int column, const QModelIndex &parent) const
+{
+    if (!parent.isValid()) {
+        if (row == 0) {
+            return createIndex(row, column, quintptr(0)); // ID 0 for header
+        }
+        return QModelIndex();
+    }
+    
+    if (!parent.parent().isValid()) {
+        if (row >= 0 && row < m_variables.size()) {
+            return createIndex(row, column, quintptr(1)); // ID 1 for items
+        }
+    }
+    
+    return QModelIndex();
+}
+
+QModelIndex VariableCompletionModel::parent(const QModelIndex &index) const
+{
+    if (index.isValid() && index.internalId() == 1) {
+        // Item's parent is the header at (0,0)
+        return createIndex(0, 0, quintptr(0));
+    }
+    return QModelIndex();
 }
 
 QVariant VariableCompletionModel::data(const QModelIndex &index, int role) const
 {
-    if (!index.isValid() || index.row() < 0 || index.row() >= m_variables.size()) {
+    if (!index.isValid()) return QVariant();
+
+    // Group Header Handling
+    if (!index.parent().isValid()) {
+        if (role == Qt::DisplayRole) {
+            return i18n("Variables");
+        }
+        if (role == GroupRole) {
+            return Qt::DisplayRole;
+        }
+        if (role == InheritanceDepth) {
+            return 1000; // Show after normal code completions
+        }
         return QVariant();
     }
 
-    if (index.column() == KTextEditor::CodeCompletionModel::Name && role == Qt::DisplayRole) {
-        return m_variables.at(index.row());
+    // Item Handling
+    int row = index.row();
+    if (row < 0 || row >= m_variables.size()) return QVariant();
+
+    const QString &name = m_variables.at(row);
+
+    if (role == Qt::DisplayRole || role == KTextEditor::CodeCompletionModel::Name) {
+        if (index.column() == KTextEditor::CodeCompletionModel::Name) {
+            return name;
+        }
     }
 
-    if (index.column() == KTextEditor::CodeCompletionModel::Icon && role == Qt::DecorationRole) {
-        static QIcon icon(QIcon::fromTheme(QStringLiteral("code-variable")));
+    if (role == KTextEditor::CodeCompletionModel::Icon && index.column() == KTextEditor::CodeCompletionModel::Icon) {
+        static QIcon icon = QIcon::fromTheme(QStringLiteral("code-variable"));
         return icon;
     }
 
     if (role == KTextEditor::CodeCompletionModel::CompletionRole) {
         return (int)KTextEditor::CodeCompletionModel::Variable;
     }
+
+    if (role == KTextEditor::CodeCompletionModel::MatchQuality) {
+        return 10;
+    }
+
+    if (role == InheritanceDepth) return 0;
+    if (role == UnimportantItemRole) return false;
 
     return QVariant();
 }
@@ -79,25 +146,21 @@ void VariableCompletionModel::completionInvoked(KTextEditor::View *view, const K
     Q_UNUSED(range);
     Q_UNUSED(invocationType);
 
+    std::cerr << "VCM: completionInvoked" << std::endl;
     beginResetModel();
     updateVariables();
     endResetModel();
-    std::cerr << "completionInvoked: " << m_variables.size() << " variables available" << std::endl;
 }
 
 bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, const QString &insertedText, bool userBehaved, const KTextEditor::Cursor &position)
 {
     Q_UNUSED(userBehaved);
-    if (!view || !view->document()) return false;
-
-    std::cerr << "shouldStartCompletion called: insertedText='" << insertedText.toStdString()
-              << "' pos=(" << position.line() << "," << position.column() << ")" << std::endl;
+    if (!view || !view->document() || !position.isValid()) return false;
 
     QString line = view->document()->line(position.line());
     int col = position.column();
     if (col > line.length()) return false;
 
-    // Walk backwards from cursor over variable-name chars
     int searchCol = col;
     while (searchCol > 0) {
         QChar c = line.at(searchCol - 1);
@@ -108,9 +171,7 @@ bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, con
         }
     }
 
-    // Check if we're right after {{ (with optional partial variable name between {{ and cursor)
     if (searchCol >= 2 && line.at(searchCol - 1) == QLatin1Char('{') && line.at(searchCol - 2) == QLatin1Char('{')) {
-        std::cerr << "  -> TRIGGER completion (inside {{)" << std::endl;
         return true;
     }
 
@@ -139,9 +200,22 @@ KTextEditor::Range VariableCompletionModel::completionRange(KTextEditor::View *v
     return KTextEditor::Range(position.line(), start, position.line(), col);
 }
 
+bool VariableCompletionModel::shouldAbortCompletion(KTextEditor::View *view, const KTextEditor::Range &range, const QString &currentCompletion)
+{
+    Q_UNUSED(view);
+    Q_UNUSED(range);
+    Q_UNUSED(currentCompletion);
+    return false; 
+}
+
+QString VariableCompletionModel::filterString(KTextEditor::View *view, const KTextEditor::Range &range, const KTextEditor::Cursor &position)
+{
+    return view->document()->text(KTextEditor::Range(range.start(), position));
+}
+
 void VariableCompletionModel::executeCompletionItem(KTextEditor::View *view, const KTextEditor::Range &word, const QModelIndex &index) const
 {
-    if (!index.isValid() || index.row() < 0 || index.row() >= m_variables.size()) return;
+    if (!index.isValid() || !index.parent().isValid()) return;
 
     QString completion = m_variables.at(index.row());
     view->document()->replaceText(word, completion);

@@ -24,7 +24,7 @@
 
 /**
  * A highly stable variable completion model.
- * Uses a pull-only strategy to avoid recursion crashes during typing.
+ * Uses a flat structure and base class defaults for maximum framework compatibility.
  */
 class VariableCompletionModel : public KTextEditor::CodeCompletionModel, public KTextEditor::CodeCompletionModelControllerInterface
 {
@@ -36,14 +36,18 @@ public:
     ~VariableCompletionModel() override = default;
 
     // CodeCompletionModel interface
-    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    QModelIndex index(int row, int column, const QModelIndex &parent = QModelIndex()) const override;
+    QModelIndex parent(const QModelIndex &index) const override;
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     void completionInvoked(KTextEditor::View *view, const KTextEditor::Range &range, InvocationType invocationType) override;
 
     // CodeCompletionModelControllerInterface interface
     bool shouldStartCompletion(KTextEditor::View *view, const QString &insertedText, bool userBehaved, const KTextEditor::Cursor &position) override;
     void executeCompletionItem(KTextEditor::View *view, const KTextEditor::Range &word, const QModelIndex &index) const override;
     KTextEditor::Range completionRange(KTextEditor::View *view, const KTextEditor::Cursor &position) override;
+    bool shouldAbortCompletion(KTextEditor::View *view, const KTextEditor::Range &range, const QString &currentCompletion) override;
+    QString filterString(KTextEditor::View *view, const KTextEditor::Range &range, const KTextEditor::Cursor &position) override;
 
 private:
     QStringList m_variables;
