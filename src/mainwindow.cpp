@@ -50,6 +50,7 @@
 #include <iostream>
 
 #include <QApplication>
+#include <QEvent>
 #include <QDir>
 #include <QFileDialog>
 #include <QHBoxLayout>
@@ -152,7 +153,7 @@ void MainWindow::setupEditor()
                           << std::endl;
             }
         }
-        // Also check our top-level window's children
+        // Also check our top-level window's children and install event filter on completion widget
         for (QObject *child : this->children()) {
             QWidget *w = qobject_cast<QWidget*>(child);
             if (w && QString::fromLatin1(w->metaObject()->className()).contains(QLatin1String("Completion"))) {
@@ -161,6 +162,9 @@ void MainWindow::setupEditor()
                           << " geo=" << w->geometry().x() << "," << w->geometry().y()
                           << "," << w->geometry().width() << "," << w->geometry().height()
                           << std::endl;
+                // Install event filter to trace positioning
+                w->installEventFilter(this);
+                std::cerr << "  -> Installed event filter on " << w->metaObject()->className() << std::endl;
             }
         }
     });
@@ -645,6 +649,63 @@ void MainWindow::showCentralView(QWidget *widget)
     m_corkboardView->setVisible(widget == m_corkboardView);
     m_imagePreview->setVisible(widget == m_imagePreview);
     m_pdfViewer->setVisible(widget == m_pdfViewer);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    // Fix KateCompletionWidget positioning.
+    // Kate's updatePosition() uses parentWidget()->geometry() for bounds checking,
+    // but on Wayland the geometry position includes window decoration offsets (e.g. y=25
+    // for title bar) while mapFromGlobal treats the widget's (0,0) as global (0,0).
+    // This causes the bounds check to use wrong values, letting the popup extend
+    // below the visible window area. We fix this by deferring a reposition after show.
+    if (event->type() == QEvent::Show
+        && QString::fromLatin1(watched->metaObject()->className()).contains(QLatin1String("Completion"))
+        && m_editorView) {
+        QWidget *popup = qobject_cast<QWidget*>(watched);
+        if (popup && popup->parentWidget()) {
+            // Defer repositioning to after the Show event is fully processed
+            QTimer::singleShot(0, this, [this, popup]() {
+                if (!popup->isVisible() || !m_editorView) return;
+
+                KTextEditor::Cursor cursor = m_editorView->cursorPosition();
+                QPoint cursorLocal = m_editorView->cursorToCoordinate(cursor);
+
+                if (cursorLocal == QPoint(-1, -1)) return;
+
+                // Map cursor position to popup's parent coordinate space
+                QPoint cursorInParent = m_editorView->mapTo(popup->parentWidget(), cursorLocal);
+
+                // Estimate line height from the editor view's font
+                int lineHeight = m_editorView->fontMetrics().height() + 2;
+
+                int x = popup->x(); // Keep Kate's x positioning
+                int y = cursorInParent.y() + lineHeight; // Below cursor
+                int parentHeight = popup->parentWidget()->height();
+
+                // If popup would extend below the window, move it above the cursor
+                if (y + popup->height() > parentHeight) {
+                    y = cursorInParent.y() - popup->height();
+                }
+                // Clamp to top of window
+                if (y < 0) {
+                    y = 0;
+                }
+
+                std::cerr << "COMPLETION FIX: cursorInParent=" << cursorInParent.x() << "," << cursorInParent.y()
+                          << " popup was=" << popup->x() << "," << popup->y()
+                          << "," << popup->width() << "x" << popup->height()
+                          << " moving to y=" << y
+                          << " parentHeight=" << parentHeight
+                          << " visible=" << popup->isVisible()
+                          << std::endl;
+
+                popup->move(x, y);
+                popup->raise(); // Ensure popup is above all sibling widgets (centralWidget etc)
+            });
+        }
+    }
+    return KXmlGuiWindow::eventFilter(watched, event);
 }
 
 void MainWindow::saveSession()

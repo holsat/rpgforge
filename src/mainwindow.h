@@ -54,6 +54,9 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private Q_SLOTS:
     void newFile();
     void openFile();
