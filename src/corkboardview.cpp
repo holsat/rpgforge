@@ -58,7 +58,9 @@ void CorkboardView::clear()
 {
     QLayoutItem *item;
     while ((item = m_layout->takeAt(0)) != nullptr) {
-        delete item->widget();
+        // Use deleteLater so we don't destroy a card widget that may still be
+        // on the call stack (e.g., the source of an active QDrag::exec()).
+        if (item->widget()) item->widget()->deleteLater();
         delete item;
     }
 }

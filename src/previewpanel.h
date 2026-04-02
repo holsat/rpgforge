@@ -25,6 +25,7 @@
 #include "markdownparser.h"
 
 class QWebEngineView;
+class QFileSystemWatcher;
 
 class PreviewPanel : public QWidget
 {
@@ -39,6 +40,7 @@ public:
     void scrollBy(int x, int y);
     void scrollToPercentage(double percentage);
     void scrollToLine(int line, bool smooth = true);
+    void reloadStylesheet();
 
 private Q_SLOTS:
     void updatePreview();
@@ -46,6 +48,7 @@ private Q_SLOTS:
 
 private:
     QWebEngineView *m_webView;
+    QFileSystemWatcher *m_styleWatcher;
     MarkdownParser m_parser;
     QString m_pendingMarkdown;
     QUrl m_baseUrl;
@@ -53,7 +56,9 @@ private:
     bool m_needsFullReload = true;
     bool m_isLoaded = false;
 
+    void setupStylesheetWatcher();
     QString wrapHtml(const QString &body) const;
+    QString loadProjectStylesheets() const;
 };
 
 #endif // PREVIEWPANEL_H

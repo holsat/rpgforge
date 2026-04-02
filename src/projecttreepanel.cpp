@@ -31,6 +31,7 @@
 #include <QInputDialog>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
 
@@ -41,8 +42,10 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     m_refreshTimer->setSingleShot(true);
     m_refreshTimer->setInterval(100);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        if (m_activeFolder) {
-            Q_EMIT folderActivated(m_activeFolder);
+        // Use persistent index — automatically invalid after model reset or item removal
+        if (m_activeFolderIndex.isValid()) {
+            ProjectTreeItem *item = m_model->itemFromIndex(m_activeFolderIndex);
+            if (item) Q_EMIT folderActivated(item);
         }
     });
 
@@ -97,6 +100,15 @@ void ProjectTreePanel::setupUi()
     connect(m_model, &ProjectTreeModel::dataChanged, this, &ProjectTreePanel::saveTree);
     connect(m_model, &ProjectTreeModel::rowsInserted, this, &ProjectTreePanel::saveTree);
     connect(m_model, &ProjectTreeModel::rowsRemoved, this, &ProjectTreePanel::saveTree);
+    connect(m_model, &ProjectTreeModel::rowsRemoved, this, [this]() {
+        // Show the empty state / create button when the tree becomes empty
+        if (m_model->rowCount(QModelIndex()) == 0) {
+            m_treeView->hide();
+            m_emptyWidget->show();
+            m_addFolderBtn->setEnabled(false);
+            m_addFileBtn->setEnabled(false);
+        }
+    });
     connect(m_model, &ProjectTreeModel::rowsMoved, this, &ProjectTreePanel::saveTree);
 
     m_treeView = new QTreeView(this);
@@ -108,7 +120,7 @@ void ProjectTreePanel::setupUi()
     m_treeView->setDropIndicatorShown(true);
     m_treeView->setDragDropMode(QAbstractItemView::DragDrop);
     m_treeView->setDefaultDropAction(Qt::LinkAction);
-    m_treeView->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
     m_treeView->hide(); // hidden until project open
 
@@ -121,7 +133,7 @@ void ProjectTreePanel::setupUi()
         QModelIndex index = selected.indexes().first();
         ProjectTreeItem *item = m_model->itemFromIndex(index);
         if (item->type == ProjectTreeItem::Folder) {
-            m_activeFolder = item;
+            m_activeFolderIndex = QPersistentModelIndex(index);
             Q_EMIT folderActivated(item);
         }
     });
@@ -131,6 +143,10 @@ void ProjectTreePanel::setupUi()
 
 void ProjectTreePanel::onProjectOpened()
 {
+    // Stop any pending refresh and invalidate the stored index before
+    // setProjectData() deletes all existing ProjectTreeItem objects.
+    m_refreshTimer->stop();
+    m_activeFolderIndex = QPersistentModelIndex();
     m_emptyWidget->hide();
     m_treeView->show();
     m_model->setProjectData(ProjectManager::instance().tree());
@@ -141,9 +157,11 @@ void ProjectTreePanel::onProjectOpened()
 
 void ProjectTreePanel::onProjectClosed()
 {
+    // Same guard: stop timer and clear index before items are destroyed.
+    m_refreshTimer->stop();
+    m_activeFolderIndex = QPersistentModelIndex();
     m_treeView->hide();
     m_emptyWidget->show();
-    m_activeFolder = nullptr;
     m_model->setProjectData(QJsonObject());
     m_addFolderBtn->setEnabled(false);
     m_addFileBtn->setEnabled(false);
@@ -168,7 +186,11 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
     
     if (index.isValid()) {
         menu.addSeparator();
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Rename"), this, &ProjectTreePanel::renameItem);
+        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
+        ProjectTreeItem *item = m_model->itemFromIndex(index);
+        if (item->type == ProjectTreeItem::File) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
+        }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);
         menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
     }
@@ -206,6 +228,9 @@ void ProjectTreePanel::removeItem()
     QModelIndex index = m_treeView->currentIndex();
     if (index.isValid()) {
         m_model->removeItem(index);
+        // m_activeFolderIndex (QPersistentModelIndex) is automatically
+        // invalidated by Qt if the indexed item was removed or is an ancestor
+        // of the removed item.
     }
 }
 
@@ -215,6 +240,36 @@ void ProjectTreePanel::renameItem()
     if (index.isValid()) {
         m_treeView->edit(index);
     }
+}
+
+void ProjectTreePanel::renameFile()
+{
+    QModelIndex index = m_treeView->currentIndex();
+    if (!index.isValid()) return;
+
+    ProjectTreeItem *item = m_model->itemFromIndex(index);
+    if (item->type != ProjectTreeItem::File) return;
+
+    QString projectPath = ProjectManager::instance().projectPath();
+    QString oldAbsPath = QDir(projectPath).absoluteFilePath(item->path);
+    QFileInfo fi(oldAbsPath);
+
+    bool ok = false;
+    QString newName = QInputDialog::getText(this, i18n("File Rename"),
+        i18n("New file name:"), QLineEdit::Normal, fi.fileName(), &ok);
+    if (!ok || newName.isEmpty() || newName == fi.fileName()) return;
+
+    QString newAbsPath = fi.dir().filePath(newName);
+    if (!QFile::rename(oldAbsPath, newAbsPath)) {
+        QMessageBox::warning(this, i18n("File Rename"),
+            i18n("Could not rename \"%1\" to \"%2\".", fi.fileName(), newName));
+        return;
+    }
+
+    // Update the stored relative path
+    item->path = QDir(projectPath).relativeFilePath(newAbsPath);
+    Q_EMIT m_model->dataChanged(index, index);
+    saveTree();
 }
 
 void ProjectTreePanel::editMetadata()
@@ -278,11 +333,17 @@ void ProjectTreePanel::editMetadata()
     }
 }
 
+ProjectTreeItem* ProjectTreePanel::activeFolder() const
+{
+    if (!m_activeFolderIndex.isValid()) return nullptr;
+    return m_model->itemFromIndex(m_activeFolderIndex);
+}
+
 ProjectTreeItem* ProjectTreePanel::currentFolder() const
 {
     QModelIndex index = m_treeView->currentIndex();
     if (!index.isValid()) return m_model->itemFromIndex(QModelIndex());
-    
+
     ProjectTreeItem *item = m_model->itemFromIndex(index);
     if (item->type == ProjectTreeItem::Folder) return item;
     return item->parent;

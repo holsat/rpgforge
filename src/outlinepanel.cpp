@@ -91,6 +91,8 @@ void OutlinePanel::rebuildTree()
     QVector<QTreeWidgetItem *> stack;
 
     for (const auto &h : m_headings) {
+        if (h.level <= 0) continue; // Skip malformed headings
+
         auto *item = new QTreeWidgetItem();
         item->setText(0, h.text);
         item->setData(0, Qt::UserRole, h.line);

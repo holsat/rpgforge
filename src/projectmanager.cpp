@@ -53,7 +53,7 @@ void ProjectManager::loadDefaults()
     pdf[QStringLiteral("showPageNumbers")] = true;
     m_data[QStringLiteral("pdf")] = pdf;
 
-    m_data[QStringLiteral("stylesheet")] = QStringLiteral("style.css");
+    m_data[QStringLiteral("stylesheet")] = QStringLiteral("stylesheets/style.css");
     m_data[QStringLiteral("tree")] = QJsonObject();
     m_data[QStringLiteral("version")] = 1;
 }
@@ -106,8 +106,9 @@ bool ProjectManager::createProject(const QString &dirPath, const QString &projec
     loadDefaults();
     setProjectName(projectName);
     
-    // Create default style.css
-    QString stylePath = dir.absoluteFilePath(QStringLiteral("style.css"));
+    // Create stylesheets/ directory and default style.css
+    dir.mkdir(QStringLiteral("stylesheets"));
+    QString stylePath = dir.absoluteFilePath(QStringLiteral("stylesheets/style.css"));
     if (!QFile::exists(stylePath)) {
         QFile styleFile(stylePath);
         if (styleFile.open(QIODevice::WriteOnly)) {
@@ -293,4 +294,32 @@ void ProjectManager::setStylesheetPath(const QString &path)
         m_data[QStringLiteral("stylesheet")] = path;
         Q_EMIT projectSettingsChanged();
     }
+}
+
+QString ProjectManager::stylesheetFolderPath() const
+{
+    if (!isProjectOpen()) return {};
+    return QDir(projectPath()).absoluteFilePath(QStringLiteral("stylesheets"));
+}
+
+QStringList ProjectManager::stylesheetPaths() const
+{
+    if (!isProjectOpen()) return {};
+
+    QDir folder(stylesheetFolderPath());
+    if (folder.exists()) {
+        QStringList result;
+        for (const QString &entry : folder.entryList({QStringLiteral("*.css")}, QDir::Files, QDir::Name)) {
+            result << folder.absoluteFilePath(entry);
+        }
+        return result;
+    }
+
+    // Fallback: legacy single stylesheet path
+    QString single = stylesheetPath();
+    if (!single.isEmpty()) {
+        QString full = QDir(projectPath()).absoluteFilePath(single);
+        if (QFile::exists(full)) return { full };
+    }
+    return {};
 }

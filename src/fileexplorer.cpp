@@ -188,10 +188,12 @@ void FileExplorer::setupUi()
     m_treeView->setSortingEnabled(true);
     m_treeView->sortByColumn(0, Qt::AscendingOrder);
 
-    // Drag and drop for moving files
+    // Allow Ctrl+click and Shift+click for multi-file selection
+    m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+
+    // Drag and drop — DragOnly so the file system itself is never modified
     m_treeView->setDragEnabled(true);
-    m_treeView->setAcceptDrops(true);
-    m_treeView->setDropIndicatorShown(true);
+    m_treeView->setAcceptDrops(false);
     m_treeView->setDragDropMode(QAbstractItemView::DragOnly);
     m_treeView->setDefaultDropAction(Qt::LinkAction);
 

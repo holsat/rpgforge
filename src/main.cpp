@@ -28,11 +28,9 @@
 
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
-#include <iostream>
 
 int main(int argc, char *argv[])
 {
-    std::cerr << "RPG Forge: Starting up..." << std::endl;
     QApplication app(argc, argv);
 
     // Disable and clear WebEngine cache for debugging and safety
