@@ -51,3 +51,11 @@
 - `shouldAbortCompletion()` returns false to keep popup open during typing
 - `filterString()` returns text from completion range start to cursor for progressive filtering
 - `executeCompletionItem()` inserts the variable name and appends `}}` if not already present
+
+## 2026-04-03: Diff Tool & History Refinement (Phase 8 Foundation)
+- **Fixed Stale Content:** Added 'Save Changes' to `VisualDiffView` with signals (`saveRequested`, `reloadRequested`) to `MainWindow` for auto-reloading the editor document.
+- **Added Diff Direction Swap:** Implemented bi-directional diffing in `VisualDiffView` via a 'Swap Direction' button.
+- **Enhanced Cross-Branch History:** Updated `GitService::getHistory` to walk all local branches (`refs/heads/*`) and correctly map commits to their respective branches.
+- **Improved History UI:** Added 'Branch' column to `HistoryDialog` and enabled multi-column sorting.
+- **Visual Refinements:** Standardized Kompare-like color bands (Salmon/Green/Blue) and implemented 40% control point Bezier curves for smoother flow.
+- **Build Fixes:** Resolved several libgit2 and KF6 API usage errors (e.g., `git_repository_head_id`, `git_signature_name`, and `KTextEditor::View` scrolling methods).

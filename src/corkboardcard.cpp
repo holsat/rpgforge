@@ -110,7 +110,7 @@ void CorkboardCard::mouseMoveEvent(QMouseEvent *event)
     QMimeData *mimeData = new QMimeData();
 
     QByteArray data;
-    auto *ptr = this;
+    auto *ptr = m_item;
     data.append(reinterpret_cast<const char*>(&ptr), sizeof(ptr));
     mimeData->setData(QStringLiteral("application/x-rpgforge-corkboard-card"), data);
     

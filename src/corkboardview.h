@@ -41,15 +41,18 @@ Q_SIGNALS:
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
+    void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
 
 private:
     void clear();
     void addCard(ProjectTreeItem *item);
+    void updateDropIndicator(const QPoint &pos);
 
     QWidget *m_contentWidget = nullptr;
     QGridLayout *m_layout = nullptr;
     ProjectTreeItem *m_currentFolder = nullptr;
+    QWidget *m_dropIndicator = nullptr;
 };
 
 #endif // CORKBOARDVIEW_H

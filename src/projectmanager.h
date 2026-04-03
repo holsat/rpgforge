@@ -75,6 +75,10 @@ public:
     QString stylesheetPath() const;
     void setStylesheetPath(const QString &path);
 
+    // AutoSync
+    bool autoSync() const;
+    void setAutoSync(bool enabled);
+
     // Returns the absolute path to the stylesheets/ directory
     QString stylesheetFolderPath() const;
     // Returns absolute paths of all .css files in the stylesheets/ directory

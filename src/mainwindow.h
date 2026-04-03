@@ -31,6 +31,7 @@ namespace KTextEditor {
 class BreadcrumbBar;
 class CorkboardView;
 class ImagePreview;
+class VisualDiffView;
 class FileExplorer;
 class GitPanel;
 class OutlinePanel;
@@ -69,6 +70,7 @@ private Q_SLOTS:
     void newProject();
     void openProject();
     void closeProject();
+    void cloneProject();
     void projectSettings();
     void compileToPdf();
     void onCursorPositionChanged();
@@ -78,6 +80,13 @@ private Q_SLOTS:
     void togglePreview();
     void syncScroll();
     void updateErrorHighlighting();
+    /**
+     * @brief Shows a diff between two files or two Git versions.
+     * @param path1 Either an absolute file path OR the first path for git diff.
+     * @param oldOrNewPath2 If hash1 is a git hash, this is the other hash (or empty). 
+     *                      If path1 is a file path, this is the second file path.
+     */
+    void showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2 = QString());
 
 private:
     void setupEditor();
@@ -96,6 +105,7 @@ private:
     QVBoxLayout *m_centralViewLayout = nullptr;
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
+    VisualDiffView *m_diffView = nullptr;
     QWebEngineView *m_pdfViewer = nullptr;
 
     Sidebar *m_sidebar = nullptr;

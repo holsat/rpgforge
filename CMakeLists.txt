@@ -13,7 +13,7 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent)
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -22,6 +22,7 @@ find_package(KF6 REQUIRED COMPONENTS
     KIO
     WidgetsAddons
     Parts
+    Wallet
 )
 
 find_package(PkgConfig REQUIRED)
@@ -40,6 +41,18 @@ add_executable(rpgforge
     src/markdownparser.h
     src/outlinepanel.cpp
     src/outlinepanel.h
+    src/gitservice.cpp
+    src/gitservice.h
+    src/githubservice.cpp
+    src/githubservice.h
+    src/githubonboardingdialog.cpp
+    src/githubonboardingdialog.h
+    src/historydialog.cpp
+    src/historydialog.h
+    src/visualdiffview.cpp
+    src/visualdiffview.h
+    src/clonedialog.cpp
+    src/clonedialog.h
     src/breadcrumbbar.cpp
     src/breadcrumbbar.h
     src/sidebar.cpp
@@ -87,6 +100,7 @@ target_link_libraries(rpgforge
     Qt6::Gui
     Qt6::WebEngineWidgets
     Qt6::Qml
+    Qt6::Concurrent
     KF6::CoreAddons
     KF6::I18n
     KF6::XmlGui
@@ -94,6 +108,7 @@ target_link_libraries(rpgforge
     KF6::KIOWidgets
     KF6::WidgetsAddons
     KF6::Parts
+    KF6::Wallet
     PkgConfig::LIBGIT2
     PkgConfig::CMARK_GFM
 )
