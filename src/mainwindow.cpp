@@ -36,6 +36,8 @@
 #include "variablecompletionmodel.h"
 #include "projectmanager.h"
 #include "projectsettingsdialog.h"
+#include "settingsdialog.h"
+#include "chatpanel.h"
 #include "metadatadialog.h"
 #include "newprojectdialog.h"
 #include "projecttreemodel.h"
@@ -182,6 +184,7 @@ void MainWindow::setupSidebar()
     m_breadcrumbBar = new BreadcrumbBar(this);
     m_previewPanel = new PreviewPanel(this);
     m_variablesPanel = new VariablesPanel(this);
+    m_chatPanel = new ChatPanel(this);
 
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
@@ -202,6 +205,10 @@ void MainWindow::setupSidebar()
                          QIcon::fromTheme(QStringLiteral("git"))),
         QStringLiteral("Git / Versioning"),
         m_gitPanel);
+    m_chatId = m_sidebar->addPanel(
+        QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
+        i18n("AI Writing Assistant"),
+        m_chatPanel);
 
     connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
 
@@ -392,6 +399,28 @@ void MainWindow::setupActions()
     projectSettingsAct->setIcon(QIcon::fromTheme(QStringLiteral("configure")));
     actionCollection()->addAction(QStringLiteral("project_settings"), projectSettingsAct);
     connect(projectSettingsAct, &QAction::triggered, this, &MainWindow::projectSettings);
+
+    auto *globalSettingsAct = KStandardAction::preferences(this, &MainWindow::globalSettings, actionCollection());
+    globalSettingsAct->setText(i18n("Configure RPG Forge..."));
+    actionCollection()->addAction(QStringLiteral("global_settings"), globalSettingsAct);
+
+    auto *expandAct = new QAction(this);
+    expandAct->setText(i18n("AI: Expand Selection"));
+    expandAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    actionCollection()->addAction(QStringLiteral("ai_expand"), expandAct);
+    connect(expandAct, &QAction::triggered, this, &MainWindow::aiExpand);
+
+    auto *rewriteAct = new QAction(this);
+    rewriteAct->setText(i18n("AI: Rewrite Selection"));
+    rewriteAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    actionCollection()->addAction(QStringLiteral("ai_rewrite"), rewriteAct);
+    connect(rewriteAct, &QAction::triggered, this, &MainWindow::aiRewrite);
+
+    auto *summarizeAct = new QAction(this);
+    summarizeAct->setText(i18n("AI: Summarize Selection"));
+    summarizeAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    actionCollection()->addAction(QStringLiteral("ai_summarize"), summarizeAct);
+    connect(summarizeAct, &QAction::triggered, this, &MainWindow::aiSummarize);
 
     auto *compileAct = new QAction(this);
     compileAct->setText(i18n("Compile to PDF..."));
@@ -1047,3 +1076,66 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     const QString insertText = parts.join(QLatin1Char('\n'));
     m_document->insertText(m_editorView->cursorPosition(), insertText);
 }
+
+void MainWindow::globalSettings()
+{
+    SettingsDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        // Models might have changed, refresh the list in chat panel
+    }
+}
+
+void MainWindow::aiExpand()
+{
+    if (!m_editorView || !m_chatPanel) return;
+    QString selection = m_editorView->selectionText();
+    if (selection.isEmpty()) return;
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
+    QString prompt = i18n("Please expand on the following worldbuilding text, adding more detail and lore.");
+    if (!promptsJson.isEmpty()) {
+        QJsonObject obj = QJsonDocument::fromJson(promptsJson.toUtf8()).object();
+        prompt = obj.value(i18n("Expand")).toString();
+    }
+
+    m_sidebar->showPanel(m_chatId);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+}
+
+void MainWindow::aiRewrite()
+{
+    if (!m_editorView || !m_chatPanel) return;
+    QString selection = m_editorView->selectionText();
+    if (selection.isEmpty()) return;
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
+    QString prompt = i18n("Please rewrite the following text for better flow and impact.");
+    if (!promptsJson.isEmpty()) {
+        QJsonObject obj = QJsonDocument::fromJson(promptsJson.toUtf8()).object();
+        prompt = obj.value(i18n("Rewrite")).toString();
+    }
+
+    m_sidebar->showPanel(m_chatId);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+}
+
+void MainWindow::aiSummarize()
+{
+    if (!m_editorView || !m_chatPanel) return;
+    QString selection = m_editorView->selectionText();
+    if (selection.isEmpty()) return;
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
+    QString prompt = i18n("Please summarize the following rules or worldbuilding text.");
+    if (!promptsJson.isEmpty()) {
+        QJsonObject obj = QJsonDocument::fromJson(promptsJson.toUtf8()).object();
+        prompt = obj.value(i18n("Summarize")).toString();
+    }
+
+    m_sidebar->showPanel(m_chatId);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+}
+

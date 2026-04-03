@@ -77,6 +77,12 @@ add_executable(rpgforge
     src/projecttreepanel.h
     src/metadatadialog.cpp
     src/metadatadialog.h
+    src/llmservice.cpp
+    src/llmservice.h
+    src/settingsdialog.cpp
+    src/settingsdialog.h
+    src/chatpanel.cpp
+    src/chatpanel.h
     src/compiledialog.cpp
     src/compiledialog.h
     src/newprojectdialog.cpp

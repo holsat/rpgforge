@@ -59,3 +59,12 @@
 - **Improved History UI:** Added 'Branch' column to `HistoryDialog` and enabled multi-column sorting.
 - **Visual Refinements:** Standardized Kompare-like color bands (Salmon/Green/Blue) and implemented 40% control point Bezier curves for smoother flow.
 - **Build Fixes:** Resolved several libgit2 and KF6 API usage errors (e.g., `git_repository_head_id`, `git_signature_name`, and `KTextEditor::View` scrolling methods).
+
+## 2026-04-03: LLM Integration Foundation (Phase 9)
+- **`LLMService` Implementation:** Created a singleton service to handle OpenAI, Anthropic, and Ollama APIs. Implemented SSE (Server-Sent Events) streaming for real-time response updates.
+- **Secure Key Storage:** Integrated `KWallet` for secure storage of LLM API keys.
+- **`SettingsDialog`:** Added a global configuration dialog with tabs for LLM Providers and reusable Prompt Templates.
+- **`ChatPanel` UI:** Implemented a new sidebar panel using `QWebEngineView` for rich message history and `QTextEdit` for input.
+- **Editor AI Actions:** Added "Expand", "Rewrite", and "Summarize" actions that send selected text to the AI with pre-configured prompts.
+- **Build Integration:** Updated `CMakeLists.txt` and `rpgforgeui.rc` to register the new service, dialog, and panel.
+

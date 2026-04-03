@@ -189,7 +189,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 9 — LLM Integration (Foundation)
 
-**Status:** Not Started
+**Status:** In Progress
 
 **Goal:** Connect to LLMs and provide basic writing assistance.
 
