@@ -50,6 +50,7 @@ void SettingsDialog::setupUi()
 
     m_tabWidget->addTab(createLLMTab(), i18n("LLM Integration"));
     m_tabWidget->addTab(createPromptsTab(), i18n("Prompt Templates"));
+    m_tabWidget->addTab(createAnalyzerTab(), i18n("Game Analyzer"));
 
     mainLayout->addWidget(m_tabWidget);
 
@@ -74,6 +75,10 @@ QWidget* SettingsDialog::createLLMTab()
     
     auto *providerLayout = new QFormLayout();
     providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
+    // Provider agnostic
+    m_embeddingModelEdit = new QLineEdit(this);
+    m_embeddingModelEdit->setPlaceholderText(QStringLiteral("text-embedding-3-small"));
+    providerLayout->addRow(i18n("Embedding Model:"), m_embeddingModelEdit);
     layout->addLayout(providerLayout);
 
     // OpenAI Group
@@ -150,11 +155,32 @@ QWidget* SettingsDialog::createPromptsTab()
     return tab;
 }
 
+QWidget* SettingsDialog::createAnalyzerTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QFormLayout(tab);
+
+    m_analyzerRunModeCombo = new QComboBox(this);
+    m_analyzerRunModeCombo->addItems({i18n("Continuous (On Save)"), i18n("On-Demand"), i18n("Paused")});
+    layout->addRow(i18n("Run Mode:"), m_analyzerRunModeCombo);
+
+    m_analyzerProviderCombo = new QComboBox(this);
+    m_analyzerProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama")});
+    layout->addRow(i18n("Analyzer Provider:"), m_analyzerProviderCombo);
+
+    m_analyzerModelEdit = new QLineEdit(this);
+    m_analyzerModelEdit->setPlaceholderText(i18n("Fast/cheap model recommended (e.g. gpt-4o-mini)"));
+    layout->addRow(i18n("Analyzer Model:"), m_analyzerModelEdit);
+
+    return tab;
+}
+
 void SettingsDialog::load()
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
 
     m_activeProviderCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
+    m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model"), QStringLiteral("text-embedding-3-small")).toString());
 
     m_openaiModelEdit->setText(settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString());
     m_openaiEndpointEdit->setText(settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString());
@@ -165,6 +191,10 @@ void SettingsDialog::load()
 
     m_ollamaModelEdit->setText(settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString());
     m_ollamaEndpointEdit->setText(settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434/api/chat")).toString());
+
+    m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
+    m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/provider"), 0).toInt());
+    m_analyzerModelEdit->setText(settings.value(QStringLiteral("analyzer/model"), QStringLiteral("gpt-4o-mini")).toString());
 
     // Load Prompts
     QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
@@ -193,6 +223,7 @@ void SettingsDialog::save()
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
 
     settings.setValue(QStringLiteral("llm/provider"), m_activeProviderCombo->currentIndex());
+    settings.setValue(QStringLiteral("llm/embedding_model"), m_embeddingModelEdit->text());
 
     settings.setValue(QStringLiteral("llm/openai/model"), m_openaiModelEdit->text());
     settings.setValue(QStringLiteral("llm/openai/endpoint"), m_openaiEndpointEdit->text());
@@ -203,6 +234,10 @@ void SettingsDialog::save()
 
     settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelEdit->text());
     settings.setValue(QStringLiteral("llm/ollama/endpoint"), m_ollamaEndpointEdit->text());
+
+    settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
+    settings.setValue(QStringLiteral("analyzer/provider"), m_analyzerProviderCombo->currentIndex());
+    settings.setValue(QStringLiteral("analyzer/model"), m_analyzerModelEdit->text());
 
     // Save Prompts
     QJsonObject obj;

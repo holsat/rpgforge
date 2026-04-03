@@ -68,3 +68,11 @@
 - **Editor AI Actions:** Added "Expand", "Rewrite", and "Summarize" actions that send selected text to the AI with pre-configured prompts.
 - **Build Integration:** Updated `CMakeLists.txt` and `rpgforgeui.rc` to register the new service, dialog, and panel.
 
+## 2026-04-03: LLM Game Analyzer & RAG (Phase 10)
+- **`KnowledgeBase` Implementation:** Created a SQLite-backed local vector index for semantic search across project markdown files.
+- **RAG Integration:** Added `generateEmbedding` to `LLMService` to augment analysis context with semantically similar project chunks.
+- **`AnalyzerService`:** Implemented background debounced analysis (5s) using JSON-mode LLM prompts to detect rule conflicts.
+- **`ProblemsPanel`:** Added a bottom dock panel listing project-wide diagnostics, filterable by severity, with double-click navigation.
+- **Inline Diagnostics:** Rendered diagnostic results directly in `KTextEditor` using squiggly underlines via `MovingRange`.
+- **Status Bar Integration:** Added a live diagnostic counter to the IDE's status bar.
+

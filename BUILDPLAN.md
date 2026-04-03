@@ -207,11 +207,11 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ---
 
-## Phase 10 — LLM Game Analyzer (Inline Diagnostics)
+## Phase 10 — LLM Game Analyzer (Inline Diagnostics & RAG)
 
-**Status:** Not Started
+**Status:** Complete
 
-**Goal:** Continuous LLM-powered analysis that surfaces rule conflicts, ambiguities, and issues as inline editor diagnostics.
+**Goal:** Continuous LLM-powered analysis that surfaces rule conflicts, ambiguities, and issues as inline editor diagnostics, utilizing a local vector KnowledgeBase for cross-file context.
 
 **Prompt:**
 > Add an LLM-powered game analyzer to RPG Forge. The analyzer reads all project documents (rules, mechanics, worldbuilding) and checks for: conflicting definitions, ambiguities, redundancies, omissions, playability concerns, and completeness gaps. Results are displayed as inline diagnostics in the KTextEditor using KTextEditor::MovingInterface to place diagnostic ranges — errors (red underline) for conflicts, warnings (yellow) for ambiguities/playability, and info (blue) for suggestions. On mouse hover, show a tooltip with the issue description and cross-references to conflicting locations (clickable to navigate). Implement three run modes toggled from the toolbar: (1) continuous — re-analyzes on every save with a 5-second debounce, (2) on-demand — manual trigger via button/shortcut, (3) paused — disabled entirely. The analyzer sends project context + a system prompt to the configured LLM and parses structured JSON responses containing issue type, severity, affected text ranges, description, and cross-references. Add a "Problems" panel (docked at the bottom, like VS Code) listing all current diagnostics, filterable by severity. The system prompt for analysis is user-customizable in project settings (provide a sensible default). The user selects which LLM provider/model to use for analysis independently from other LLM features (so they can use a cheap local model for continuous analysis and a cloud model for simulation).
