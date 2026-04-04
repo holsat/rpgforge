@@ -31,6 +31,7 @@ struct ProjectTreeItem {
     QString path; // Relative to project root
     QString synopsis;
     QString status;
+    bool transient = false;
     QList<ProjectTreeItem*> children;
     ProjectTreeItem *parent = nullptr;
 
@@ -44,6 +45,9 @@ class ProjectTreeModel : public QAbstractItemModel
     Q_OBJECT
 
 public:
+    enum Roles {
+        TransientRole = Qt::UserRole + 100
+    };
     explicit ProjectTreeModel(QObject *parent = nullptr);
     ~ProjectTreeModel() override;
 
@@ -62,6 +66,7 @@ public:
     // Manipulation
     QModelIndex addFolder(const QString &name, const QModelIndex &parent = QModelIndex());
     QModelIndex addFile(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
+    QModelIndex addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent);
     void addFileWithSmartDiscovery(const QString &absolutePath, const QModelIndex &parent = QModelIndex());
     bool removeItem(const QModelIndex &index);
     bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);

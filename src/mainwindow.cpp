@@ -17,6 +17,9 @@
 */
 
 #include "mainwindow.h"
+#include "gitservice.h"
+#include "clonedialog.h"
+#include "visualdiffview.h"
 #include "breadcrumbbar.h"
 #include "compiledialog.h"
 #include "explorersidebar.h"
@@ -33,6 +36,8 @@
 #include "variablecompletionmodel.h"
 #include "projectmanager.h"
 #include "projectsettingsdialog.h"
+#include "settingsdialog.h"
+#include "chatpanel.h"
 #include "metadatadialog.h"
 #include "newprojectdialog.h"
 #include "projecttreemodel.h"
@@ -59,6 +64,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QRegularExpression>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
@@ -135,6 +141,13 @@ void MainWindow::setupEditor()
     connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged,
             this, &MainWindow::syncScroll);
 
+    // Step 1: Seamless Version Control (Auto-Sync)
+    connect(m_document, &KTextEditor::Document::documentSavedOrUploaded, this, [this](KTextEditor::Document *doc) {
+        if (ProjectManager::instance().isProjectOpen() && ProjectManager::instance().autoSync()) {
+            GitService::instance().autoCommit(doc->url().toLocalFile());
+        }
+    });
+
     // Register variable autocomplete safely after the view is fully initialized
     QTimer::singleShot(500, this, [this]() {
         m_editorView->setAutomaticInvocationEnabled(true);
@@ -171,6 +184,7 @@ void MainWindow::setupSidebar()
     m_breadcrumbBar = new BreadcrumbBar(this);
     m_previewPanel = new PreviewPanel(this);
     m_variablesPanel = new VariablesPanel(this);
+    m_chatPanel = new ChatPanel(this);
 
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
@@ -191,6 +205,10 @@ void MainWindow::setupSidebar()
                          QIcon::fromTheme(QStringLiteral("git"))),
         QStringLiteral("Git / Versioning"),
         m_gitPanel);
+    m_chatId = m_sidebar->addPanel(
+        QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
+        i18n("AI Writing Assistant"),
+        m_chatPanel);
 
     connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
 
@@ -221,18 +239,30 @@ void MainWindow::setupSidebar()
 
     m_corkboardView = new CorkboardView(this);
     m_imagePreview = new ImagePreview(this);
+    m_diffView = new VisualDiffView(this);
+    connect(m_diffView, &VisualDiffView::saveRequested, this, [this](const QString &path) {
+        if (m_document->url().toLocalFile() == path) {
+            m_document->openUrl(QUrl::fromLocalFile(path));
+        }
+    });
+    connect(m_diffView, &VisualDiffView::reloadRequested, this, [this](const QString &path) {
+        if (m_document->url().toLocalFile() == path) {
+            m_document->openUrl(QUrl::fromLocalFile(path));
+        }
+    });
     m_pdfViewer = new QWebEngineView(this);
 
     m_centralViewLayout->addWidget(m_editorView);
     m_centralViewLayout->addWidget(m_corkboardView);
     m_centralViewLayout->addWidget(m_imagePreview);
+    m_centralViewLayout->addWidget(m_diffView);
     m_centralViewLayout->addWidget(m_pdfViewer);
 
     // Only show the editor view initially; hide the rest
     m_corkboardView->hide();
     m_imagePreview->hide();
+    m_diffView->hide();
     m_pdfViewer->hide();
-
     vbox->addWidget(viewContainer);
 
     m_mainSplitter->addWidget(m_sidebar);
@@ -269,6 +299,7 @@ void MainWindow::setupSidebar()
         m_corkboardView->setFolder(folder);
         showCentralView(m_corkboardView);
     });
+    connect(m_projectTree, &ProjectTreePanel::diffRequested, this, &MainWindow::showDiff);
     connect(m_corkboardView, &CorkboardView::fileActivated, this, [this](const QString &relativePath) {
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
@@ -351,6 +382,12 @@ void MainWindow::setupActions()
     actionCollection()->addAction(QStringLiteral("project_open"), openProjectAct);
     connect(openProjectAct, &QAction::triggered, this, &MainWindow::openProject);
 
+    auto *cloneProjectAct = new QAction(this);
+    cloneProjectAct->setText(i18n("Clone Project from GitHub..."));
+    cloneProjectAct->setIcon(QIcon::fromTheme(QStringLiteral("project-development-pull")));
+    actionCollection()->addAction(QStringLiteral("project_clone"), cloneProjectAct);
+    connect(cloneProjectAct, &QAction::triggered, this, &MainWindow::cloneProject);
+
     auto *closeProjectAct = new QAction(this);
     closeProjectAct->setText(i18n("Close Project"));
     closeProjectAct->setIcon(QIcon::fromTheme(QStringLiteral("project-development-close")));
@@ -362,6 +399,28 @@ void MainWindow::setupActions()
     projectSettingsAct->setIcon(QIcon::fromTheme(QStringLiteral("configure")));
     actionCollection()->addAction(QStringLiteral("project_settings"), projectSettingsAct);
     connect(projectSettingsAct, &QAction::triggered, this, &MainWindow::projectSettings);
+
+    auto *globalSettingsAct = KStandardAction::preferences(this, &MainWindow::globalSettings, actionCollection());
+    globalSettingsAct->setText(i18n("Configure RPG Forge..."));
+    actionCollection()->addAction(QStringLiteral("global_settings"), globalSettingsAct);
+
+    auto *expandAct = new QAction(this);
+    expandAct->setText(i18n("AI: Expand Selection"));
+    expandAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    actionCollection()->addAction(QStringLiteral("ai_expand"), expandAct);
+    connect(expandAct, &QAction::triggered, this, &MainWindow::aiExpand);
+
+    auto *rewriteAct = new QAction(this);
+    rewriteAct->setText(i18n("AI: Rewrite Selection"));
+    rewriteAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    actionCollection()->addAction(QStringLiteral("ai_rewrite"), rewriteAct);
+    connect(rewriteAct, &QAction::triggered, this, &MainWindow::aiRewrite);
+
+    auto *summarizeAct = new QAction(this);
+    summarizeAct->setText(i18n("AI: Summarize Selection"));
+    summarizeAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    actionCollection()->addAction(QStringLiteral("ai_summarize"), summarizeAct);
+    connect(summarizeAct, &QAction::triggered, this, &MainWindow::aiSummarize);
 
     auto *compileAct = new QAction(this);
     compileAct->setText(i18n("Compile to PDF..."));
@@ -523,6 +582,47 @@ void MainWindow::openProject()
         if (ProjectManager::instance().openProject(filePath)) {
             m_fileExplorer->setRootPath(ProjectManager::instance().projectPath());
             updateTitle();
+        }
+    }
+}
+
+void MainWindow::cloneProject()
+{
+    CloneDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        QString url = dialog.url();
+        QString path = dialog.localPath();
+
+        if (url.isEmpty() || path.isEmpty()) return;
+
+        QProgressDialog progress(i18n("Cloning Project..."), i18n("Cancel"), 0, 0, this);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.show();
+
+        auto future = GitService::instance().cloneRepo(url, path);
+        
+        // Wait for clone to finish (non-blocking for UI events due to processEvents)
+        while (!future.isFinished()) {
+            QApplication::processEvents();
+            if (progress.wasCanceled()) break;
+        }
+
+        if (future.result()) {
+            // Check for rpgforge.project in the cloned directory
+            QString projectFile = QDir(path).absoluteFilePath(QStringLiteral("rpgforge.project"));
+            if (QFile::exists(projectFile)) {
+                if (ProjectManager::instance().openProject(projectFile)) {
+                    m_fileExplorer->setRootPath(ProjectManager::instance().projectPath());
+                    updateTitle();
+                    QMessageBox::information(this, i18n("Clone Success"), i18n("Project cloned and opened successfully."));
+                }
+            } else {
+                QMessageBox::warning(this, i18n("Clone Complete"), 
+                    i18n("Project cloned, but no 'rpgforge.project' file was found in the repository."));
+                m_fileExplorer->setRootPath(path);
+            }
+        } else if (!progress.wasCanceled()) {
+            QMessageBox::critical(this, i18n("Clone Error"), i18n("Failed to clone the repository. Check your URL and internet connection."));
         }
     }
 }
@@ -727,7 +827,21 @@ void MainWindow::showCentralView(QWidget *widget)
     m_editorView->setVisible(widget == m_editorView);
     m_corkboardView->setVisible(widget == m_corkboardView);
     m_imagePreview->setVisible(widget == m_imagePreview);
+    m_diffView->setVisible(widget == m_diffView);
     m_pdfViewer->setVisible(widget == m_pdfViewer);
+}
+
+void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2)
+{
+    // If path2OrHash1 looks like a file path (starts with /), compare files.
+    // Otherwise, treat as git hashes.
+    if (path2OrHash1.startsWith(QLatin1Char('/'))) {
+        m_diffView->setFiles(path1, path2OrHash1);
+    } else {
+        m_diffView->setDiff(path1, path2OrHash1, hash2);
+    }
+    showCentralView(m_diffView);
+    if (m_previewPanel) m_previewPanel->hide();
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -962,3 +1076,66 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     const QString insertText = parts.join(QLatin1Char('\n'));
     m_document->insertText(m_editorView->cursorPosition(), insertText);
 }
+
+void MainWindow::globalSettings()
+{
+    SettingsDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        // Models might have changed, refresh the list in chat panel
+    }
+}
+
+void MainWindow::aiExpand()
+{
+    if (!m_editorView || !m_chatPanel) return;
+    QString selection = m_editorView->selectionText();
+    if (selection.isEmpty()) return;
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
+    QString prompt = i18n("Please expand on the following worldbuilding text, adding more detail and lore.");
+    if (!promptsJson.isEmpty()) {
+        QJsonObject obj = QJsonDocument::fromJson(promptsJson.toUtf8()).object();
+        prompt = obj.value(i18n("Expand")).toString();
+    }
+
+    m_sidebar->showPanel(m_chatId);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+}
+
+void MainWindow::aiRewrite()
+{
+    if (!m_editorView || !m_chatPanel) return;
+    QString selection = m_editorView->selectionText();
+    if (selection.isEmpty()) return;
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
+    QString prompt = i18n("Please rewrite the following text for better flow and impact.");
+    if (!promptsJson.isEmpty()) {
+        QJsonObject obj = QJsonDocument::fromJson(promptsJson.toUtf8()).object();
+        prompt = obj.value(i18n("Rewrite")).toString();
+    }
+
+    m_sidebar->showPanel(m_chatId);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+}
+
+void MainWindow::aiSummarize()
+{
+    if (!m_editorView || !m_chatPanel) return;
+    QString selection = m_editorView->selectionText();
+    if (selection.isEmpty()) return;
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
+    QString prompt = i18n("Please summarize the following rules or worldbuilding text.");
+    if (!promptsJson.isEmpty()) {
+        QJsonObject obj = QJsonDocument::fromJson(promptsJson.toUtf8()).object();
+        prompt = obj.value(i18n("Summarize")).toString();
+    }
+
+    m_sidebar->showPanel(m_chatId);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+}
+

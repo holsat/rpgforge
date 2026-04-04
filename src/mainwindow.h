@@ -31,12 +31,14 @@ namespace KTextEditor {
 class BreadcrumbBar;
 class CorkboardView;
 class ImagePreview;
+class VisualDiffView;
 class FileExplorer;
 class GitPanel;
 class OutlinePanel;
 class PreviewPanel;
 class ProjectTreePanel;
 class VariablesPanel;
+class ChatPanel;
 class Sidebar;
 class QWebEngineView;
 class QPushButton;
@@ -69,7 +71,9 @@ private Q_SLOTS:
     void newProject();
     void openProject();
     void closeProject();
+    void cloneProject();
     void projectSettings();
+    void globalSettings();
     void compileToPdf();
     void onCursorPositionChanged();
     void updateCursorContext();
@@ -78,6 +82,18 @@ private Q_SLOTS:
     void togglePreview();
     void syncScroll();
     void updateErrorHighlighting();
+    /**
+     * @brief Shows a diff between two files or two Git versions.
+     * @param path1 Either an absolute file path OR the first path for git diff.
+     * @param oldOrNewPath2 If hash1 is a git hash, this is the other hash (or empty). 
+     *                      If path1 is a file path, this is the second file path.
+     */
+    void showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2 = QString());
+
+    // AI Actions
+    void aiExpand();
+    void aiRewrite();
+    void aiSummarize();
 
 private:
     void setupEditor();
@@ -96,6 +112,7 @@ private:
     QVBoxLayout *m_centralViewLayout = nullptr;
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
+    VisualDiffView *m_diffView = nullptr;
     QWebEngineView *m_pdfViewer = nullptr;
 
     Sidebar *m_sidebar = nullptr;
@@ -106,6 +123,7 @@ private:
     BreadcrumbBar *m_breadcrumbBar = nullptr;
     PreviewPanel *m_previewPanel = nullptr;
     VariablesPanel *m_variablesPanel = nullptr;
+    ChatPanel *m_chatPanel = nullptr;
 
     QSplitter *m_mainSplitter = nullptr;
     QAction *m_togglePreviewAction = nullptr;
@@ -118,6 +136,7 @@ private:
     int m_outlineId = -1;
     int m_gitId = -1;
     int m_variablesId = -1;
+    int m_chatId = -1;
 
     QList<KTextEditor::MovingRange*> m_errorRanges;
 };

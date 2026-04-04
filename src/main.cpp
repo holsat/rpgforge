@@ -37,6 +37,9 @@ int main(int argc, char *argv[])
     QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);
     QWebEngineProfile::defaultProfile()->clearHttpCache();
 
+    QCoreApplication::setApplicationName(QStringLiteral("rpgforge"));
+    QCoreApplication::setOrganizationDomain(QStringLiteral("kde.org"));
+
     KLocalizedString::setApplicationDomain("rpgforge");
 
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("rpgforge"),

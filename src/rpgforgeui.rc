@@ -24,6 +24,18 @@
     <Menu name="view">
       <Action name="toggle_preview"/>
     </Menu>
+    <Menu name="ai">
+      <text>&amp;AI Assistant</text>
+      <Action name="ai_expand"/>
+      <Action name="ai_rewrite"/>
+      <Action name="ai_summarize"/>
+    </Menu>
+    <Menu name="settings">
+      <text>&amp;Settings</text>
+      <Action name="project_settings"/>
+      <Separator/>
+      <Action name="global_settings"/>
+    </Menu>
     <!-- Remove the empty Search menu that KTextEditor creates -->
     <Menu name="search" deleted="true"/>
   </MenuBar>

@@ -54,8 +54,22 @@ void ProjectManager::loadDefaults()
     m_data[QStringLiteral("pdf")] = pdf;
 
     m_data[QStringLiteral("stylesheet")] = QStringLiteral("stylesheets/style.css");
+    m_data[QStringLiteral("autoSync")] = true; // Enabled by default as per requirement
     m_data[QStringLiteral("tree")] = QJsonObject();
     m_data[QStringLiteral("version")] = 1;
+}
+
+bool ProjectManager::autoSync() const
+{
+    return m_data.value(QStringLiteral("autoSync")).toBool(true);
+}
+
+void ProjectManager::setAutoSync(bool enabled)
+{
+    if (autoSync() != enabled) {
+        m_data[QStringLiteral("autoSync")] = enabled;
+        Q_EMIT projectSettingsChanged();
+    }
 }
 
 QJsonObject ProjectManager::tree() const

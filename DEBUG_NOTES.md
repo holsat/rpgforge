@@ -51,3 +51,20 @@
 - `shouldAbortCompletion()` returns false to keep popup open during typing
 - `filterString()` returns text from completion range start to cursor for progressive filtering
 - `executeCompletionItem()` inserts the variable name and appends `}}` if not already present
+
+## 2026-04-03: Diff Tool & History Refinement (Phase 8 Foundation)
+- **Fixed Stale Content:** Added 'Save Changes' to `VisualDiffView` with signals (`saveRequested`, `reloadRequested`) to `MainWindow` for auto-reloading the editor document.
+- **Added Diff Direction Swap:** Implemented bi-directional diffing in `VisualDiffView` via a 'Swap Direction' button.
+- **Enhanced Cross-Branch History:** Updated `GitService::getHistory` to walk all local branches (`refs/heads/*`) and correctly map commits to their respective branches.
+- **Improved History UI:** Added 'Branch' column to `HistoryDialog` and enabled multi-column sorting.
+- **Visual Refinements:** Standardized Kompare-like color bands (Salmon/Green/Blue) and implemented 40% control point Bezier curves for smoother flow.
+- **Build Fixes:** Resolved several libgit2 and KF6 API usage errors (e.g., `git_repository_head_id`, `git_signature_name`, and `KTextEditor::View` scrolling methods).
+
+## 2026-04-03: LLM Integration Foundation (Phase 9)
+- **`LLMService` Implementation:** Created a singleton service to handle OpenAI, Anthropic, and Ollama APIs. Implemented SSE (Server-Sent Events) streaming for real-time response updates.
+- **Secure Key Storage:** Integrated `KWallet` for secure storage of LLM API keys.
+- **`SettingsDialog`:** Added a global configuration dialog with tabs for LLM Providers and reusable Prompt Templates.
+- **`ChatPanel` UI:** Implemented a new sidebar panel using `QWebEngineView` for rich message history and `QTextEdit` for input.
+- **Editor AI Actions:** Added "Expand", "Rewrite", and "Summarize" actions that send selected text to the AI with pre-configured prompts.
+- **Build Integration:** Updated `CMakeLists.txt` and `rpgforgeui.rc` to register the new service, dialog, and panel.
+

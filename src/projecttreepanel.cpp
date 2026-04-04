@@ -21,6 +21,13 @@
 #include "projectmanager.h"
 #include "metadatadialog.h"
 #include "variablemanager.h"
+#include "gitservice.h"
+#include "githubservice.h"
+#include "githubonboardingdialog.h"
+#include "historydialog.h"
+#include "markdownparser.h"
+#include <QComboBox>
+#include <QLabel>
 
 #include <KLocalizedString>
 #include <QVBoxLayout>
@@ -34,6 +41,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
+#include <QProgressDialog>
 
 ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     : QWidget(parent)
@@ -54,6 +62,8 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, &ProjectTreePanel::onProjectOpened);
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, &ProjectTreePanel::onProjectClosed);
     
+    connect(&GitHubService::instance(), &GitHubService::repoCreated, this, &ProjectTreePanel::onRepoCreated);
+
     if (ProjectManager::instance().isProjectOpen()) {
         onProjectOpened();
     }
@@ -92,6 +102,26 @@ void ProjectTreePanel::setupUi()
     m_addFileBtn->setToolTip(i18n("Add File Link"));
     connect(m_addFileBtn, &QToolButton::clicked, this, &ProjectTreePanel::addFile);
     toolbar->addWidget(m_addFileBtn);
+
+    toolbar->addSpacing(10);
+    m_syncBtn = new QToolButton(this);
+    m_syncBtn->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));
+    m_syncBtn->setToolTip(i18n("Sync Project (Asset Import & Alignment)"));
+    connect(m_syncBtn, &QToolButton::clicked, this, &ProjectTreePanel::syncProject);
+    toolbar->addWidget(m_syncBtn);
+
+    toolbar->addSpacing(10);
+    toolbar->addWidget(new QLabel(i18n("Draft:"), this));
+    m_explorationCombo = new QComboBox(this);
+    m_explorationCombo->setFixedWidth(120);
+    connect(m_explorationCombo, &QComboBox::currentTextChanged, this, &ProjectTreePanel::switchExploration);
+    toolbar->addWidget(m_explorationCombo);
+
+    m_newExplorationBtn = new QToolButton(this);
+    m_newExplorationBtn->setIcon(QIcon::fromTheme(QStringLiteral("vcs-branch")));
+    m_newExplorationBtn->setToolTip(i18n("New Exploration (Draft Branch)"));
+    connect(m_newExplorationBtn, &QToolButton::clicked, this, &ProjectTreePanel::createExploration);
+    toolbar->addWidget(m_newExplorationBtn);
 
     toolbar->addStretch();
     layout->addLayout(toolbar);
@@ -153,6 +183,10 @@ void ProjectTreePanel::onProjectOpened()
     m_treeView->expandAll();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
+    m_syncBtn->setEnabled(true);
+    m_explorationCombo->setEnabled(true);
+    m_newExplorationBtn->setEnabled(true);
+    updateExplorationList();
 }
 
 void ProjectTreePanel::onProjectClosed()
@@ -165,6 +199,260 @@ void ProjectTreePanel::onProjectClosed()
     m_model->setProjectData(QJsonObject());
     m_addFolderBtn->setEnabled(false);
     m_addFileBtn->setEnabled(false);
+    m_syncBtn->setEnabled(false);
+    m_explorationCombo->clear();
+    m_explorationCombo->setEnabled(false);
+    m_newExplorationBtn->setEnabled(false);
+}
+
+void ProjectTreePanel::syncProject()
+{
+    if (!ProjectManager::instance().isProjectOpen()) return;
+
+    QString projectPath = ProjectManager::instance().projectPath();
+    
+    // 1. Initialize Git if not already done
+    if (!GitService::instance().isRepo(projectPath)) {
+        if (!GitService::instance().initRepo(projectPath)) {
+            QMessageBox::critical(this, i18n("Sync Error"), i18n("Failed to initialize Git repository."));
+            return;
+        }
+    }
+
+    QProgressDialog progress(i18n("Syncing Project..."), i18n("Cancel"), 0, 100, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.show();
+
+    // 2. Collect all files from the project tree
+    auto treeData = m_model->projectData();
+    
+    struct FileTask {
+        QString name;
+        QString oldRelPath;
+        QString newRelPath;
+        ProjectTreeItem::Type type;
+    };
+    
+    QList<ProjectTreeItem*> allItems;
+    std::function<void(ProjectTreeItem*)> collectItems = [&](ProjectTreeItem *item) {
+        if (item != m_model->itemFromIndex(QModelIndex())) {
+            allItems.append(item);
+        }
+        for (auto *child : item->children) {
+            collectItems(child);
+        }
+    };
+    collectItems(m_model->itemFromIndex(QModelIndex()));
+
+    progress.setValue(10);
+    if (progress.wasCanceled()) return;
+
+    // 3. Asset Import (Scan Markdown files for external links)
+    MarkdownParser parser;
+    QString mediaDir = QDir(projectPath).absoluteFilePath(QStringLiteral("media"));
+    QDir().mkpath(mediaDir);
+
+    for (auto *item : allItems) {
+        if (item->type != ProjectTreeItem::File) continue;
+        
+        QString suffix = QFileInfo(item->path).suffix().toLower();
+        if (suffix != QLatin1String("md") && suffix != QLatin1String("markdown") && suffix != QLatin1String("txt")) {
+            continue;
+        }
+
+        QString fullPath = QDir(projectPath).absoluteFilePath(item->path);
+        QFile file(fullPath);
+        if (!file.open(QIODevice::ReadWrite)) continue;
+
+        QString content = QString::fromUtf8(file.readAll());
+        auto links = parser.extractLinks(content);
+        bool contentChanged = false;
+
+        for (const auto &link : links) {
+            // Resolve link relative to the file it's in
+            QString linkAbsPath = QDir(QFileInfo(fullPath).absolutePath()).absoluteFilePath(link.url);
+            
+            // If the file exists and is outside the project directory
+            if (QFile::exists(linkAbsPath) && !linkAbsPath.startsWith(projectPath)) {
+                QFileInfo fi(linkAbsPath);
+                QString newFileName = fi.fileName();
+                QString targetPath = QDir(mediaDir).absoluteFilePath(newFileName);
+                
+                // Copy to media/
+                if (QFile::copy(linkAbsPath, targetPath) || QFile::exists(targetPath)) {
+                    // Update the link in markdown
+                    QString newRelLink = QDir(QFileInfo(fullPath).absolutePath()).relativeFilePath(targetPath);
+                    content.replace(link.url, newRelLink);
+                    contentChanged = true;
+                    
+                    // Add the new file to the project tree if not there
+                    m_model->addFileWithSmartDiscovery(targetPath, QModelIndex());
+                }
+            }
+        }
+
+        if (contentChanged) {
+            file.seek(0);
+            file.resize(0);
+            file.write(content.toUtf8());
+        }
+        file.close();
+    }
+
+    progress.setValue(50);
+    if (progress.wasCanceled()) return;
+
+    // 4. Hierarchy Alignment (Move files on disk to match logical tree)
+    // We do this by calculating the "target" path for every file in the tree
+    // Target path is based on the names of parent folders.
+    
+    std::function<QString(ProjectTreeItem*)> getLogicalPath = [&](ProjectTreeItem *item) -> QString {
+        if (!item || !item->parent || item->parent == m_model->itemFromIndex(QModelIndex())) {
+            return item->name;
+        }
+        return getLogicalPath(item->parent) + QDir::separator() + item->name;
+    };
+
+    for (auto *item : allItems) {
+        if (item->type != ProjectTreeItem::File) continue;
+
+        QString logicalName = getLogicalPath(item->parent) + QDir::separator() + QFileInfo(item->path).fileName();
+        QString targetRelPath = logicalName;
+        QString oldAbsPath = QDir(projectPath).absoluteFilePath(item->path);
+        QString newAbsPath = QDir(projectPath).absoluteFilePath(targetRelPath);
+
+        if (oldAbsPath != newAbsPath && QFile::exists(oldAbsPath)) {
+            QDir().mkpath(QFileInfo(newAbsPath).absolutePath());
+            if (QFile::rename(oldAbsPath, newAbsPath)) {
+                item->path = targetRelPath;
+            }
+        }
+    }
+
+    progress.setValue(90);
+
+    // 5. Final Save
+    saveTree();
+    m_model->setProjectData(m_model->projectData()); // Refresh view
+    m_treeView->expandAll();
+
+    // Check if there are any uncommitted changes before committing
+    // This prevents duplicate "Initial sync" commits if Sync is hit twice.
+    if (!GitService::instance().hasUncommittedChanges(projectPath)) {
+        // No changes, skip commit and go straight to push
+        auto pushResult = GitService::instance().push(projectPath);
+        pushResult.then(this, [this, projectPath](bool success) {
+            if (success) {
+                QMessageBox::information(this, i18n("Sync Success"), i18n("Project synchronized and pushed to GitHub."));
+            } else {
+                if (QMessageBox::question(this, i18n("Connect to GitHub"), 
+                    i18n("Project is synchronized locally. Would you like to also back it up to GitHub?")) == QMessageBox::Yes) {
+                    GitHubOnboardingDialog dialog(this);
+                    dialog.exec();
+                }
+            }
+        });
+        return;
+    }
+    
+    // Perform an initial commit of everything
+    auto commitFuture = GitService::instance().commitAll(projectPath, i18n("Initial sync and project organization"));
+    
+    commitFuture.then(this, [this, projectPath](bool success) {
+        if (!success) {
+            // Log error but continue? Or notify?
+        }
+
+        // 6. GitHub Remote & Push
+        auto pushResult = GitService::instance().push(projectPath);
+        pushResult.then(this, [this, projectPath](bool success) {
+            if (success) {
+                QMessageBox::information(this, i18n("Sync Success"), i18n("Project synchronized and pushed to GitHub."));
+            } else {
+                // No remote or push failed. Ask to connect.
+                if (QMessageBox::question(this, i18n("Connect to GitHub"), 
+                    i18n("Project is synchronized locally. Would you like to also back it up to GitHub?")) == QMessageBox::Yes) {
+                    
+                    GitHubOnboardingDialog dialog(this);
+                    if (dialog.exec() == QDialog::Accepted) {
+                        // onRepoCreated will handle the push
+                    } else {
+                        QMessageBox::information(this, i18n("Sync Complete"), i18n("Project structure and assets have been synchronized locally."));
+                    }
+                } else {
+                    QMessageBox::information(this, i18n("Sync Complete"), i18n("Project structure and assets have been synchronized locally."));
+                }
+            }
+        });
+    });
+}
+
+void ProjectTreePanel::onRepoCreated(const QString &cloneUrl)
+{
+    if (!ProjectManager::instance().isProjectOpen()) return;
+    QString projectPath = ProjectManager::instance().projectPath();
+
+    if (GitService::instance().setRemote(projectPath, cloneUrl)) {
+        GitService::instance().push(projectPath).then(this, [this](bool success) {
+            if (success) {
+                QMessageBox::information(this, i18n("Sync Success"), i18n("Project pushed to GitHub."));
+            }
+        });
+    }
+}
+
+void ProjectTreePanel::createExploration()
+{
+    if (!ProjectManager::instance().isProjectOpen()) return;
+    QString projectPath = ProjectManager::instance().projectPath();
+
+    bool ok;
+    QString name = QInputDialog::getText(this, i18n("New Exploration"),
+        i18n("Exploration (Branch) Name:"), QLineEdit::Normal, QString(), &ok);
+    
+    if (ok && !name.isEmpty()) {
+        if (GitService::instance().createBranch(projectPath, name)) {
+            updateExplorationList();
+            // Re-open project to refresh from disk? 
+            // In hidden Git, we should ensure project state is saved.
+            ProjectManager::instance().saveProject();
+            // Trigger a refresh of the tree
+            m_model->setProjectData(ProjectManager::instance().tree());
+        } else {
+            QMessageBox::critical(this, i18n("Error"), i18n("Failed to create exploration branch."));
+        }
+    }
+}
+
+void ProjectTreePanel::switchExploration(const QString &name)
+{
+    if (name.isEmpty() || !ProjectManager::instance().isProjectOpen()) return;
+    QString projectPath = ProjectManager::instance().projectPath();
+
+    if (name == GitService::instance().currentBranch(projectPath)) return;
+
+    if (GitService::instance().checkoutBranch(projectPath, name)) {
+        // Refresh project data from disk
+        ProjectManager::instance().openProject(ProjectManager::instance().projectFilePath());
+        m_model->setProjectData(ProjectManager::instance().tree());
+        m_treeView->expandAll();
+    }
+}
+
+void ProjectTreePanel::updateExplorationList()
+{
+    if (!ProjectManager::instance().isProjectOpen()) return;
+    QString projectPath = ProjectManager::instance().projectPath();
+
+    m_explorationCombo->blockSignals(true);
+    m_explorationCombo->clear();
+    
+    QStringList branches = GitService::instance().listBranches(projectPath);
+    QString current = GitService::instance().currentBranch(projectPath);
+    
+    m_explorationCombo->addItems(branches);
+    m_explorationCombo->setCurrentText(current);
+    m_explorationCombo->blockSignals(false);
 }
 
 void ProjectTreePanel::onItemActivated(const QModelIndex &index)
@@ -181,13 +469,75 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
     QModelIndex index = m_treeView->indexAt(pos);
     QMenu menu(this);
 
+    auto selected = m_treeView->selectionModel()->selectedRows();
+    if (selected.count() == 2) {
+        ProjectTreeItem *item1 = m_model->itemFromIndex(selected.at(0));
+        ProjectTreeItem *item2 = m_model->itemFromIndex(selected.at(1));
+        
+        if (item1->type == ProjectTreeItem::File && item2->type == ProjectTreeItem::File) {
+            QString path1 = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(item1->path);
+            QString path2 = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(item2->path);
+            
+            menu.addAction(QIcon::fromTheme(QStringLiteral("document-compare")), i18n("Compare Selected Files"), this, [this, path1, path2]() {
+                Q_EMIT diffRequested(path1, path2);
+            });
+            menu.addSeparator();
+        }
+    }
+
     menu.addAction(QIcon::fromTheme(QStringLiteral("folder-new")), i18n("Add Folder"), this, &ProjectTreePanel::addFolder);
     menu.addAction(QIcon::fromTheme(QStringLiteral("document-new")), i18n("Add File Link"), this, &ProjectTreePanel::addFile);
     
     if (index.isValid()) {
         menu.addSeparator();
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
         ProjectTreeItem *item = m_model->itemFromIndex(index);
+        if (item->type == ProjectTreeItem::File) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("document-history")), i18n("View History..."), this, [this, item, index]() {
+                QString projectPath = ProjectManager::instance().projectPath();
+                QString fullPath = QDir(projectPath).absoluteFilePath(item->path);
+                
+                auto *dialog = new HistoryDialog(fullPath, this);
+                connect(dialog, &HistoryDialog::viewVersion, this, [this, fullPath, index](const QString &hash, int vIndex, const QDateTime &date, const QStringList &tags) {
+                    QString tempDir = QDir::homePath() + QStringLiteral("/.rpgforge/.versions/");
+                    QString tempPath = tempDir + hash + QStringLiteral("_") + QFileInfo(fullPath).fileName();
+                    
+                    auto future = GitService::instance().extractVersion(fullPath, hash, tempPath);
+                    future.then(this, [this, tempPath, index, vIndex, date, tags](bool success) {
+                        if (success) {
+                            QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
+                            if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
+                            
+                            m_model->addTransientVersionLink(label, tempPath, index);
+                            m_treeView->expand(index);
+                            
+                            // Persist the change
+                            ProjectManager::instance().setTree(m_model->projectData());
+                            ProjectManager::instance().saveProject();
+
+                            Q_EMIT fileActivated(tempPath);
+                        }
+                    });
+                });
+                connect(dialog, &HistoryDialog::restoreVersion, this, [this, fullPath](const QString &hash) {
+                    auto future = GitService::instance().extractVersion(fullPath, hash, fullPath);
+                    future.then(this, [this, fullPath](bool success) {
+                        if (success) {
+                            Q_EMIT fileActivated(fullPath);
+                        }
+                    });
+                });
+                connect(dialog, &HistoryDialog::compareVersion, this, [this, fullPath](const QString &hash) {
+                    // Emit signal or call MainWindow to show diff
+                    // We need a way to reach MainWindow. In this app, it's the parent of the panel's parent usually.
+                    // Or we can emit a signal from ProjectTreePanel.
+                    Q_EMIT diffRequested(fullPath, hash);
+                });
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->show();
+            });
+        }
+        menu.addSeparator();
+        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
         if (item->type == ProjectTreeItem::File) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
         }

@@ -28,6 +28,12 @@ struct HeadingInfo {
     int line;       // 0-based line number in the source document
 };
 
+struct LinkInfo {
+    bool isImage;
+    QString url;
+    QString text;
+};
+
 // Parses markdown text and extracts heading information using cmark-gfm.
 // Call MarkdownParser::init() once at application startup before using.
 class MarkdownParser
@@ -44,6 +50,9 @@ public:
 
     // Render markdown to HTML with GFM extensions
     QString renderHtml(const QString &markdown) const;
+
+    // Extract all links and images from the markdown
+    QVector<LinkInfo> extractLinks(const QString &markdown) const;
 
     // Find the heading context (ancestor chain) for a given line number.
     static QVector<HeadingInfo> headingContextForLine(const QVector<HeadingInfo> &headings, int line);

@@ -66,6 +66,62 @@ QString MarkdownParser::renderHtml(const QString &markdown) const
     return html;
 }
 
+QVector<LinkInfo> MarkdownParser::extractLinks(const QString &markdown) const
+{
+    QVector<LinkInfo> links;
+    if (markdown.isEmpty()) return links;
+
+    QByteArray utf8 = markdown.toUtf8();
+    cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
+    if (!parser) return links;
+
+    cmark_parser_feed(parser, utf8.constData(), utf8.size());
+    cmark_node *doc = cmark_parser_finish(parser);
+
+    if (!doc) {
+        cmark_parser_free(parser);
+        return links;
+    }
+
+    cmark_iter *iter = cmark_iter_new(doc);
+    cmark_event_type evType;
+    while ((evType = cmark_iter_next(iter)) != CMARK_EVENT_DONE) {
+        if (evType != CMARK_EVENT_ENTER) continue;
+
+        cmark_node *node = cmark_iter_get_node(iter);
+        cmark_node_type type = cmark_node_get_type(node);
+
+        if (type == CMARK_NODE_LINK || type == CMARK_NODE_IMAGE) {
+            LinkInfo info;
+            info.isImage = (type == CMARK_NODE_IMAGE);
+            
+            const char *url = cmark_node_get_url(node);
+            if (url) {
+                info.url = QString::fromUtf8(url);
+            }
+
+            // Extract display text/alt text
+            QString text;
+            cmark_node *child = cmark_node_first_child(node);
+            while (child) {
+                if (cmark_node_get_type(child) == CMARK_NODE_TEXT) {
+                    const char *literal = cmark_node_get_literal(child);
+                    if (literal) text += QString::fromUtf8(literal);
+                }
+                child = cmark_node_next(child);
+            }
+            info.text = text;
+            links.append(info);
+        }
+    }
+
+    cmark_iter_free(iter);
+    cmark_node_free(doc);
+    cmark_parser_free(parser);
+
+    return links;
+}
+
 QVector<HeadingInfo> MarkdownParser::parseHeadings(const QString &markdown) const
 {
     QVector<HeadingInfo> headings;

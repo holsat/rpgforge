@@ -65,6 +65,7 @@ ProjectTreeItem* ProjectTreeModel::loadItem(const QJsonObject &obj, ProjectTreeI
     item->path = obj.value(QStringLiteral("path")).toString();
     item->synopsis = obj.value(QStringLiteral("synopsis")).toString();
     item->status = obj.value(QStringLiteral("status")).toString();
+    item->transient = obj.value(QStringLiteral("transient")).toBool(false);
 
     QJsonArray children = obj.value(QStringLiteral("children")).toArray();
     for (const auto &childVal : children) {
@@ -82,6 +83,7 @@ QJsonObject ProjectTreeModel::saveItem(ProjectTreeItem *item) const
     obj[QStringLiteral("path")] = item->path;
     obj[QStringLiteral("synopsis")] = item->synopsis;
     obj[QStringLiteral("status")] = item->status;
+    obj[QStringLiteral("transient")] = item->transient;
 
     QJsonArray children;
     for (auto *child : item->children) {
@@ -144,11 +146,14 @@ QVariant ProjectTreeModel::data(const QModelIndex &index, int role) const
         if (item->type == ProjectTreeItem::Folder) {
             return QIcon::fromTheme(QStringLiteral("folder"));
         } else {
+            if (item->transient) return QIcon::fromTheme(QStringLiteral("document-history"));
             QString suffix = QFileInfo(item->path).suffix().toLower();
             if (suffix == QLatin1String("pdf")) return QIcon::fromTheme(QStringLiteral("application-pdf"));
             if (suffix == QLatin1String("png") || suffix == QLatin1String("jpg")) return QIcon::fromTheme(QStringLiteral("image-x-generic"));
             return QIcon::fromTheme(QStringLiteral("text-x-markdown"));
         }
+    } else if (role == TransientRole) {
+        return item->transient;
     }
     return QVariant();
 }
@@ -208,6 +213,24 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
     item->type = ProjectTreeItem::File;
     item->name = name;
     item->path = path;
+    item->parent = parentItem;
+    parentItem->children.append(item);
+    endInsertRows();
+    
+    return index(row, 0, parent);
+}
+
+QModelIndex ProjectTreeModel::addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent)
+{
+    ProjectTreeItem *parentItem = itemFromIndex(parent);
+    int row = parentItem->children.count();
+    
+    beginInsertRows(parent, row, row);
+    auto *item = new ProjectTreeItem();
+    item->type = ProjectTreeItem::File;
+    item->name = name;
+    item->path = path;
+    item->transient = true;
     item->parent = parentItem;
     parentItem->children.append(item);
     endInsertRows();

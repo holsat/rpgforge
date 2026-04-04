@@ -27,6 +27,7 @@ class QTreeView;
 class ProjectTreeModel;
 class QToolButton;
 class QPushButton;
+class QComboBox;
 struct ProjectTreeItem;
 
 class ProjectTreePanel : public QWidget
@@ -44,6 +45,7 @@ public:
 Q_SIGNALS:
     void fileActivated(const QString &relativePath);
     void folderActivated(ProjectTreeItem *folderItem);
+    void diffRequested(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
 
 private Q_SLOTS:
     void onProjectOpened();
@@ -57,6 +59,11 @@ private Q_SLOTS:
     void renameItem();
     void renameFile();
     void editMetadata();
+    void syncProject();
+    void onRepoCreated(const QString &cloneUrl);
+    void createExploration();
+    void switchExploration(const QString &name);
+    void updateExplorationList();
     ProjectTreeItem* currentFolder() const;
 
 private:
@@ -73,6 +80,9 @@ private:
     ProjectTreeModel *m_model = nullptr;
     QToolButton *m_addFolderBtn = nullptr;
     QToolButton *m_addFileBtn = nullptr;
+    QToolButton *m_syncBtn = nullptr;
+    QComboBox *m_explorationCombo = nullptr;
+    QToolButton *m_newExplorationBtn = nullptr;
 };
 
 #endif // PROJECTTREEPANEL_H
