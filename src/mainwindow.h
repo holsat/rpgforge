@@ -99,6 +99,12 @@ private Q_SLOTS:
     void aiSummarize();
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
 
+public:
+    KTextEditor::Document* editorDocument() const { return m_document; }
+
+private Q_SLOTS:
+    void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
+
 private:
     void setupEditor();
     void setupSidebar();

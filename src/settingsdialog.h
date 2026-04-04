@@ -53,6 +53,7 @@ private:
     QLineEdit *m_openaiEndpointEdit;
     QLineEdit *m_anthropicKeyEdit;
     QLineEdit *m_anthropicModelEdit;
+    QLineEdit *m_anthropicEndpointEdit;
     QLineEdit *m_ollamaModelEdit;
     QLineEdit *m_ollamaEndpointEdit;
     QLineEdit *m_embeddingModelEdit;

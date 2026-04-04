@@ -125,7 +125,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 6 — Git Integration
 
-**Status:** Not Started
+**Status:** Complete
 
 **Goal:** Built-in version control with GitHub support.
 
@@ -146,7 +146,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 7 — Visual Diff / Merge Tool (Kompare-style)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Goal:** Side-by-side visual diff with inline merge controls.
 
@@ -169,7 +169,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 8 — PDF Export
 
-**Status:** Not Started
+**Status:** Complete
 
 **Goal:** Export rendered documents to PDF.
 
@@ -189,7 +189,7 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 9 — LLM Integration (Foundation)
 
-**Status:** In Progress
+**Status:** Complete
 
 **Goal:** Connect to LLMs and provide basic writing assistance.
 

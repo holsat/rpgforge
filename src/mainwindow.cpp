@@ -186,6 +186,8 @@ void MainWindow::setupEditor()
         for (QWidget *child : editorChildren) {
             child->installEventFilter(this);
         }
+
+        connect(m_editorView, &KTextEditor::View::contextMenuAboutToShow, this, &MainWindow::showEditorContextMenu);
     });
 }
 
@@ -226,6 +228,13 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
         i18n("AI Writing Assistant"),
         m_chatPanel);
+
+    connect(m_chatPanel, &ChatPanel::insertTextAtCursor, this, [this](const QString &text) {
+        if (m_document && m_editorView) {
+            m_document->insertText(m_editorView->cursorPosition(), text);
+            m_editorView->setFocus();
+        }
+    });
 
     connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
 
@@ -1215,4 +1224,27 @@ void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagn
         m_diagnosticRanges.append(mr);
     }
 }
+
+void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
+{
+    if (!view || !menu) return;
+
+    menu->addSeparator();
+    auto *aiMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("chat-conversation")), i18n("AI Assistant"));
+    
+    auto *expand = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Expand Selection"));
+    connect(expand, &QAction::triggered, this, &MainWindow::aiExpand);
+    
+    auto *rewrite = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Rewrite Selection"));
+    connect(rewrite, &QAction::triggered, this, &MainWindow::aiRewrite);
+    
+    auto *summarize = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Summarize Selection"));
+    connect(summarize, &QAction::triggered, this, &MainWindow::aiSummarize);
+
+    if (!view->selection()) {
+        aiMenu->setEnabled(false);
+        aiMenu->setToolTip(i18n("Please select text to use AI actions."));
+    }
+}
+
 

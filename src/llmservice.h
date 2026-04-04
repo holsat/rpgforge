@@ -94,6 +94,16 @@ public:
      */
     void sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback);
 
+    /**
+     * @brief Pings the Anthropic API to verify connectivity.
+     */
+    void pingAnthropic(std::function<void(bool, const QString&)> callback);
+
+    /**
+     * @brief Fetches available models from the provider.
+     */
+    void fetchModels(LLMProvider provider, std::function<void(const QStringList&)> callback);
+
 Q_SIGNALS:
     void requestStarted();
     void responseChunk(const QString &text);

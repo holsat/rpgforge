@@ -46,6 +46,9 @@ public:
      */
     void askAI(const QString &userPrompt);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private Q_SLOTS:
     void sendMessage();
     void onResponseChunk(const QString &chunk);
@@ -53,6 +56,11 @@ private Q_SLOTS:
     void onError(const QString &message);
     void clearChat();
     void updateModelList();
+    void onProviderChanged();
+    void handleInsert(const QString &text);
+
+Q_SIGNALS:
+    void insertTextAtCursor(const QString &text);
 
 private:
     void setupUi();
@@ -61,12 +69,14 @@ private:
     LLMProvider currentProvider() const;
     
     // JS helpers
-    void appendMessageToView(const QString &role, const QString &text);
-    void updateLastMessageInView(const QString &text);
+    void appendMessageToView(const QString &role, const QString &text, const QString &rawText);
+    void updateLastMessageInView(const QString &text, const QString &rawText);
 
     QWebEngineView *m_webView;
     QTextEdit *m_inputEdit;
+    QComboBox *m_providerCombo;
     QComboBox *m_modelCombo;
+    QPushButton *m_refreshModelsBtn;
     QPushButton *m_sendBtn;
     QPushButton *m_clearBtn;
     QProgressBar *m_progressBar;

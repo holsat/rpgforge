@@ -102,8 +102,11 @@ QWidget* SettingsDialog::createLLMTab()
     m_anthropicKeyEdit->setEchoMode(QLineEdit::Password);
     anthropicLayout->addRow(i18n("API Key:"), m_anthropicKeyEdit);
     m_anthropicModelEdit = new QLineEdit(this);
-    m_anthropicModelEdit->setPlaceholderText(QStringLiteral("claude-3-5-sonnet-20240620"));
+    m_anthropicModelEdit->setPlaceholderText(QStringLiteral("claude-sonnet-4-6"));
     anthropicLayout->addRow(i18n("Default Model:"), m_anthropicModelEdit);
+    m_anthropicEndpointEdit = new QLineEdit(this);
+    m_anthropicEndpointEdit->setPlaceholderText(QStringLiteral("https://api.anthropic.com/v1/messages"));
+    anthropicLayout->addRow(i18n("Endpoint:"), m_anthropicEndpointEdit);
     layout->addWidget(anthropicGroup);
 
     // Ollama Group
@@ -186,7 +189,8 @@ void SettingsDialog::load()
     m_openaiEndpointEdit->setText(settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString());
     m_openaiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::OpenAI));
 
-    m_anthropicModelEdit->setText(settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20240620")).toString());
+    m_anthropicModelEdit->setText(settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString());
+    m_anthropicEndpointEdit->setText(settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString());
     m_anthropicKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Anthropic));
 
     m_ollamaModelEdit->setText(settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString());
@@ -230,6 +234,7 @@ void SettingsDialog::save()
     LLMService::instance().setApiKey(LLMProvider::OpenAI, m_openaiKeyEdit->text());
 
     settings.setValue(QStringLiteral("llm/anthropic/model"), m_anthropicModelEdit->text());
+    settings.setValue(QStringLiteral("llm/anthropic/endpoint"), m_anthropicEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Anthropic, m_anthropicKeyEdit->text());
 
     settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelEdit->text());

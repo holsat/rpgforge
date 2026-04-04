@@ -18,6 +18,8 @@
 
 #include "chatpanel.h"
 #include "markdownparser.h"
+#include "mainwindow.h"
+#include <KTextEditor/Document>
 #include <KLocalizedString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -31,6 +33,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <QKeyEvent>
+#include <QWebChannel>
 
 ChatPanel::ChatPanel(QWidget *parent)
     : QWidget(parent)
@@ -38,11 +42,15 @@ ChatPanel::ChatPanel(QWidget *parent)
     setupUi();
     initChatView();
 
+    auto *channel = new QWebChannel(this);
+    channel->registerObject(QStringLiteral("chatPanel"), this);
+    m_webView->page()->setWebChannel(channel);
+
     connect(&LLMService::instance(), &LLMService::requestStarted, this, [this]() {
         m_progressBar->show();
         m_sendBtn->setEnabled(false);
         m_currentAiResponse.clear();
-        appendMessageToView(QStringLiteral("assistant"), i18n("AI is thinking..."));
+        appendMessageToView(QStringLiteral("assistant"), i18n("AI is thinking..."), QString());
     });
 
     connect(&LLMService::instance(), &LLMService::responseChunk, this, &ChatPanel::onResponseChunk);
@@ -62,10 +70,24 @@ void ChatPanel::setupUi()
     auto *toolbar = new QHBoxLayout();
     toolbar->setContentsMargins(5, 5, 5, 5);
 
+    m_providerCombo = new QComboBox(this);
+    m_providerCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama")});
+    m_providerCombo->setMinimumWidth(100);
+    
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    m_providerCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
+    connect(m_providerCombo, &QComboBox::currentIndexChanged, this, &ChatPanel::onProviderChanged);
+    toolbar->addWidget(m_providerCombo);
+
     m_modelCombo = new QComboBox(this);
     m_modelCombo->setMinimumWidth(120);
     updateModelList();
     toolbar->addWidget(m_modelCombo);
+
+    m_refreshModelsBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("view-refresh")), QString(), this);
+    m_refreshModelsBtn->setToolTip(i18n("Refresh model list"));
+    connect(m_refreshModelsBtn, &QPushButton::clicked, this, &ChatPanel::updateModelList);
+    toolbar->addWidget(m_refreshModelsBtn);
 
     toolbar->addStretch();
 
@@ -96,6 +118,7 @@ void ChatPanel::setupUi()
     m_inputEdit = new QTextEdit(this);
     m_inputEdit->setPlaceholderText(i18n("Ask the AI about your RPG project..."));
     m_inputEdit->setMaximumHeight(100);
+    m_inputEdit->installEventFilter(this);
     inputLayout->addWidget(m_inputEdit);
 
     auto *btnLayout = new QHBoxLayout();
@@ -156,21 +179,54 @@ void ChatPanel::initChatView()
         </head>
         <body>
             <div id="chat-history"></div>
+            <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
             <script>
-                function appendMessage(role, html) {
+                var backend;
+                new QWebChannel(qt.webChannelTransport, function(channel) {
+                    backend = channel.objects.chatPanel;
+                });
+
+                function appendMessage(role, html, rawText) {
                     const div = document.createElement('div');
                     div.className = 'message ' + role;
-                    div.innerHTML = html;
+                    
+                    let content = html;
+                    if (role === 'assistant' && rawText) {
+                        content += '<div style=\"margin-top: 8px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 5px;\">' +
+                                   '<button onclick=\"insertText(this.getAttribute(\'data-raw\'))\" class=\"insert-btn\" style=\"font-size: 11px; cursor: pointer;\">' +
+                                   'Insert at Cursor' +
+                                   '</button></div>';
+                        div.setAttribute('data-raw', rawText);
+                    }
+                    
+                    div.innerHTML = content;
                     document.getElementById('chat-history').appendChild(div);
                     window.scrollTo(0, document.body.scrollHeight);
                 }
-                function updateLastMessage(html) {
+
+                function updateLastMessage(html, rawText) {
                     const messages = document.getElementsByClassName('message assistant');
                     if (messages.length > 0) {
-                        messages[messages.length - 1].innerHTML = html;
+                        const msg = messages[messages.length - 1];
+                        let content = html;
+                        if (rawText) {
+                            content += '<div style=\"margin-top: 8px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 5px;\">' +
+                                       '<button onclick=\"insertText(this.parentNode.parentNode.getAttribute(\'data-raw\'))\" style=\"font-size: 11px; cursor: pointer;\">' +
+                                       'Insert at Cursor' +
+                                       '</button></div>';
+                            msg.setAttribute('data-raw', rawText);
+                        }
+                        msg.innerHTML = content;
                         window.scrollTo(0, document.body.scrollHeight);
                     }
                 }
+
+                function insertText(text) {
+                    if (backend && text) {
+                        backend.handleInsert(text);
+                    }
+                }
+
                 function clearHistory() {
                     document.getElementById('chat-history').innerHTML = '';
                 }
@@ -182,26 +238,67 @@ void ChatPanel::initChatView()
     m_webView->setHtml(html);
 }
 
+bool ChatPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_inputEdit && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            if (keyEvent->modifiers() & Qt::ControlModifier) {
+                m_inputEdit->insertPlainText(QStringLiteral("\n"));
+            } else {
+                sendMessage();
+            }
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ChatPanel::onProviderChanged()
+{
+    updateModelList();
+}
+
 void ChatPanel::updateModelList()
 {
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     m_modelCombo->clear();
+    m_modelCombo->addItem(i18n("Loading models..."));
+    m_modelCombo->setEnabled(false);
     
-    // For now, we just show the active provider's default model and maybe some hardcoded ones
-    int providerIdx = settings.value(QStringLiteral("llm/provider"), 0).toInt();
-    if (providerIdx == 0) { // OpenAI
-        m_modelCombo->addItem(settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString());
-        m_modelCombo->addItem(QStringLiteral("gpt-4-turbo"));
-        m_modelCombo->addItem(QStringLiteral("gpt-3.5-turbo"));
-    } else if (providerIdx == 1) { // Anthropic
-        m_modelCombo->addItem(settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20240620")).toString());
-        m_modelCombo->addItem(QStringLiteral("claude-3-opus-20240229"));
-        m_modelCombo->addItem(QStringLiteral("claude-3-haiku-20240307"));
-    } else { // Ollama
-        m_modelCombo->addItem(settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString());
-        m_modelCombo->addItem(QStringLiteral("mistral"));
-        m_modelCombo->addItem(QStringLiteral("phi3"));
-    }
+    int providerIdx = m_providerCombo->currentIndex();
+    LLMProvider provider = static_cast<LLMProvider>(providerIdx);
+
+    LLMService::instance().fetchModels(provider, [this, provider](const QStringList &models) {
+        m_modelCombo->clear();
+        m_modelCombo->setEnabled(true);
+
+        QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+
+        if (!models.isEmpty()) {
+            m_modelCombo->addItems(models);
+            
+            // Try to select the default from settings
+            QString defaultModel;
+            if (provider == LLMProvider::OpenAI) defaultModel = settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString();
+            else if (provider == LLMProvider::Anthropic) defaultModel = settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString();
+            else defaultModel = settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString();
+
+            int idx = m_modelCombo->findText(defaultModel);
+            if (idx != -1) m_modelCombo->setCurrentIndex(idx);
+        } else {
+            // Fallback to hardcoded defaults if fetch failed
+            if (provider == LLMProvider::OpenAI) {
+                m_modelCombo->addItem(settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString());
+                m_modelCombo->addItems({QStringLiteral("gpt-4o-mini"), QStringLiteral("gpt-4-turbo"), QStringLiteral("gpt-3.5-turbo")});
+            } else if (provider == LLMProvider::Anthropic) {
+                m_modelCombo->addItem(settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString());
+                m_modelCombo->addItems({QStringLiteral("claude-sonnet-4-5"), QStringLiteral("claude-opus-4-6"), QStringLiteral("claude-haiku-4-5")});
+            } else { // Ollama
+                m_modelCombo->addItem(settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString());
+                m_modelCombo->addItems({QStringLiteral("qwen3.5"), QStringLiteral("mistral"), QStringLiteral("phi3")});
+            }
+        }
+    });
 }
 
 void ChatPanel::sendMessage()
@@ -217,14 +314,70 @@ void ChatPanel::askAI(const QString &userPrompt)
 {
     MarkdownParser parser;
     QString html = parser.renderHtml(userPrompt);
-    appendMessageToView(QStringLiteral("user"), html);
+    appendMessageToView(QStringLiteral("user"), html, userPrompt);
     
+    // Add current document context if history is empty
+    if (m_history.isEmpty()) {
+        auto *mw = qobject_cast<MainWindow*>(window());
+        if (!mw) {
+            QWidget *p = parentWidget();
+            while (p && !mw) {
+                mw = qobject_cast<MainWindow*>(p);
+                p = p->parentWidget();
+            }
+        }
+
+        if (mw && mw->editorDocument()) {
+            QString docText = mw->editorDocument()->text();
+            QString filePath = mw->editorDocument()->url().toLocalFile();
+
+            if (docText.length() < 32000) {
+                // File is small enough to send in full
+                m_history.append({QStringLiteral("system"), 
+                    QStringLiteral("The user is currently working on an RPG project. Here is the content of the active document for context:\n\n%1").arg(docText)});
+                
+                // Proceed immediately
+                m_history.append({QStringLiteral("user"), userPrompt});
+                LLMRequest request;
+                request.provider = currentProvider();
+                request.model = m_modelCombo->currentText();
+                request.messages = m_history;
+                LLMService::instance().sendRequest(request);
+                return;
+            } else {
+                // File is LARGE. Use RAG to pull relevant snippets from this specific file.
+                // Note: We search the KnowledgeBase but filter results to this file (or let it pull from others too if useful)
+                // For now, let's pull the top 10 relevant chunks from the project.
+                KnowledgeBase::instance().search(userPrompt, 10, QString(), [this, userPrompt](const QList<SearchResult> &results) {
+                    QString context;
+                    for (const auto &res : results) {
+                        context += QStringLiteral("--- Source: %1 (Heading: %2) ---\n%3\n\n").arg(res.filePath, res.heading, res.content);
+                    }
+
+                    m_history.append({QStringLiteral("system"), 
+                        QStringLiteral("The user is working on a large RPG document. Here are the most relevant snippets found in the project for this query:\n\n%1").arg(context)});
+                    
+                    m_history.append({QStringLiteral("user"), userPrompt});
+                    
+                    LLMRequest request;
+                    request.provider = currentProvider();
+                    request.model = m_modelCombo->currentText().trimmed();
+                    request.messages = m_history;
+                    request.stream = true;
+                    LLMService::instance().sendRequest(request);
+                });
+                return;
+            }
+        }
+    }
+
     m_history.append({QStringLiteral("user"), userPrompt});
     
     LLMRequest request;
     request.provider = currentProvider();
-    request.model = m_modelCombo->currentText();
+    request.model = m_modelCombo->currentText().trimmed();
     request.messages = m_history;
+    request.stream = true;
     
     LLMService::instance().sendRequest(request);
 }
@@ -235,7 +388,7 @@ void ChatPanel::onResponseChunk(const QString &chunk)
     
     MarkdownParser parser;
     QString html = parser.renderHtml(m_currentAiResponse);
-    updateLastMessageInView(html);
+    updateLastMessageInView(html, m_currentAiResponse);
 }
 
 void ChatPanel::onResponseFinished(const QString &fullText)
@@ -246,14 +399,15 @@ void ChatPanel::onResponseFinished(const QString &fullText)
     
     MarkdownParser parser;
     QString html = parser.renderHtml(fullText);
-    updateLastMessageInView(html);
+    updateLastMessageInView(html, fullText);
 }
 
 void ChatPanel::onError(const QString &message)
 {
     m_progressBar->hide();
     m_sendBtn->setEnabled(true);
-    updateLastMessageInView(i18n("<b>Error:</b> %1").arg(message));
+    // Use a literal string for the HTML tags to avoid i18n placeholder conflicts
+    updateLastMessageInView(QStringLiteral("<b>") + i18n("Error") + QStringLiteral(":</b> ") + message, QString());
 }
 
 void ChatPanel::clearChat()
@@ -271,20 +425,28 @@ void ChatPanel::setPrompt(const QString &prompt)
 
 LLMProvider ChatPanel::currentProvider() const
 {
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    return static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
+    return static_cast<LLMProvider>(m_providerCombo->currentIndex());
 }
 
-void ChatPanel::appendMessageToView(const QString &role, const QString &text)
+void ChatPanel::appendMessageToView(const QString &role, const QString &text, const QString &rawText)
 {
     // text is already HTML
-    QString js = QStringLiteral("appendMessage('%1', %2)").arg(role, QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("h"), text}}).toJson(QJsonDocument::Compact)).mid(5).chopped(1));
+    QString js = QStringLiteral("appendMessage('%1', %2, %3)").arg(role, 
+        QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("h"), text}}).toJson(QJsonDocument::Compact)).mid(5).chopped(1),
+        QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("r"), rawText}}).toJson(QJsonDocument::Compact)).mid(5).chopped(1));
     m_webView->page()->runJavaScript(js);
 }
 
-void ChatPanel::updateLastMessageInView(const QString &text)
+void ChatPanel::updateLastMessageInView(const QString &text, const QString &rawText)
 {
     // text is already HTML
-    QString js = QStringLiteral("updateLastMessage(%1)").arg(QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("h"), text}}).toJson(QJsonDocument::Compact)).mid(5).chopped(1));
+    QString js = QStringLiteral("updateLastMessage(%1, %2)").arg(
+        QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("h"), text}}).toJson(QJsonDocument::Compact)).mid(5).chopped(1),
+        QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("r"), rawText}}).toJson(QJsonDocument::Compact)).mid(5).chopped(1));
     m_webView->page()->runJavaScript(js);
+}
+
+void ChatPanel::handleInsert(const QString &text)
+{
+    Q_EMIT insertTextAtCursor(text);
 }

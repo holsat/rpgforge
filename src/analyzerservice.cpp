@@ -89,7 +89,13 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
 
     LLMRequest req;
     req.provider = provider;
-    req.model = settings.value(QStringLiteral("analyzer/model"), settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o"))).toString();
+    
+    QString defaultModel;
+    if (provider == LLMProvider::OpenAI) defaultModel = settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o-mini")).toString();
+    else if (provider == LLMProvider::Anthropic) defaultModel = settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-latest")).toString();
+    else defaultModel = settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString();
+
+    req.model = settings.value(QStringLiteral("analyzer/model"), defaultModel).toString();
     req.temperature = 0.2; // Low temp for analytical tasks
     req.stream = false;
     

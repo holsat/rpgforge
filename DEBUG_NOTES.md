@@ -76,3 +76,12 @@
 - **Inline Diagnostics:** Rendered diagnostic results directly in `KTextEditor` using squiggly underlines via `MovingRange`.
 - **Status Bar Integration:** Added a live diagnostic counter to the IDE's status bar.
 
+## 2026-04-03: Phase 10 Refinements & AI Assistant UX
+- **Dynamic Model Fetching:** Implemented `/v1/models` (OpenAI/Anthropic) and `/api/tags` (Ollama) integration to auto-populate model dropdowns.
+- **Insert into Document:** Added "Insert at Cursor" buttons to AI responses using `QWebChannel` for secure JS-to-C++ communication.
+- **Smart Context (RAG):** Implemented automatic context injection for chat. Large files (>32KB) now use vector search to pull the top 10 relevant snippets instead of sending the whole file.
+- **Anthropic Hardening:** Fixed 404 errors by implementing system message merging, compact JSON, exact 2026 model IDs (`claude-sonnet-4-6`), and HTTP/2 support.
+- **UX Polish:** Added `Enter` to send (with `Ctrl+Enter` for newline) and integrated AI actions into the editor's right-click context menu.
+- **Security:** Hardened `.gitignore` to protect `.rpgforge-vectors.db` and credential files.
+
+

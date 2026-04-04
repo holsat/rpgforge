@@ -27,6 +27,26 @@
 #include <QJsonArray>
 #include <QSettings>
 #include <QDebug>
+#include <QFile>
+#include <QTextStream>
+
+static void logRequest(const QUrl &url, const QJsonObject &body, const QNetworkRequest &netRequest) {
+    QFile dbg(QStringLiteral("llm_debug.log"));
+    if (dbg.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream out(&dbg);
+        out << "\n--- NEW REQUEST ---\n";
+        out << "URL: " << url.toString() << "\n";
+        out << "HEADERS:\n";
+        for (const auto &header : netRequest.rawHeaderList()) {
+            if (header.toLower().contains("key") || header.toLower().contains("auth")) {
+                out << "  " << header << ": [REDACTED]\n";
+            } else {
+                out << "  " << header << ": " << netRequest.rawHeader(header) << "\n";
+            }
+        }
+        out << "BODY: " << QJsonDocument(body).toJson() << "\n";
+    }
+}
 
 LLMService& LLMService::instance()
 {
@@ -90,6 +110,29 @@ QString LLMService::apiKey(LLMProvider provider) const
     return QString();
 }
 
+static QUrl normalizeOllamaUrl(const QString &rawEndpoint, const QString &targetPath) {
+    QString endpoint = rawEndpoint.trimmed();
+    
+    // Target path is usually "/api/chat" or "/api/embeddings"
+    
+    // If it's just a base URL like http://localhost:11434
+    if (!endpoint.contains(QStringLiteral("/api/"))) {
+        if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
+        return QUrl(endpoint + targetPath);
+    }
+    
+    // If it has /api/... but it's the wrong one
+    if (endpoint.contains(QStringLiteral("/api/generate"))) {
+        endpoint.replace(QStringLiteral("/api/generate"), targetPath);
+    } else if (endpoint.contains(QStringLiteral("/api/chat")) && targetPath != QStringLiteral("/api/chat")) {
+        endpoint.replace(QStringLiteral("/api/chat"), targetPath);
+    } else if (endpoint.contains(QStringLiteral("/api/embeddings")) && targetPath != QStringLiteral("/api/embeddings")) {
+        endpoint.replace(QStringLiteral("/api/embeddings"), targetPath);
+    }
+    
+    return QUrl(endpoint);
+}
+
 void LLMService::sendRequest(const LLMRequest &request)
 {
     if (m_activeReply) {
@@ -127,19 +170,53 @@ void LLMService::sendRequest(const LLMRequest &request)
         body[QStringLiteral("max_tokens")] = request.maxTokens;
     } 
     else if (request.provider == LLMProvider::Anthropic) {
-        url = QUrl(QStringLiteral("https://api.anthropic.com/v1/messages"));
+        QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString().trimmed();
+        if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
+        url = QUrl(endpoint);
+        
+        netRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
         netRequest.setRawHeader("x-api-key", key.toUtf8());
         netRequest.setRawHeader("anthropic-version", "2023-06-01");
+        netRequest.setRawHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        if (request.stream) {
+            netRequest.setRawHeader("Accept", "text/event-stream");
+        }
         
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20240620")).toString() : request.model;
-        body[QStringLiteral("messages")] = messagesArray;
+        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString() : request.model;
+        
+        // Anthropic: system message must be a single top-level string
+        QStringList systemParts;
+        QJsonArray anthropicMessages;
+        for (const auto &msg : request.messages) {
+            if (msg.role == QLatin1String("system")) {
+                QString content = msg.content.trimmed();
+                if (!content.isEmpty()) systemParts << content;
+            } else {
+                QJsonObject m;
+                m[QStringLiteral("role")] = msg.role;
+                m[QStringLiteral("content")] = msg.content;
+                anthropicMessages.append(m);
+            }
+        }
+
+        if (!systemParts.isEmpty()) {
+            body[QStringLiteral("system")] = systemParts.join(QStringLiteral("\n\n"));
+        }
+
+        // Anthropic requires the first message to be "user"
+        if (anthropicMessages.isEmpty()) {
+             anthropicMessages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QStringLiteral("Hello")}});
+        }
+        
+        body[QStringLiteral("messages")] = anthropicMessages;
         body[QStringLiteral("stream")] = request.stream;
-        body[QStringLiteral("max_tokens")] = request.maxTokens;
+        body[QStringLiteral("max_tokens")] = request.maxTokens > 0 ? request.maxTokens : 4096;
         body[QStringLiteral("temperature")] = request.temperature;
     }
     else if (request.provider == LLMProvider::Ollama) {
-        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434/api/chat")).toString();
-        url = QUrl(endpoint);
+        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
+        url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/chat"));
         
         body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString() : request.model;
         body[QStringLiteral("messages")] = messagesArray;
@@ -152,7 +229,9 @@ void LLMService::sendRequest(const LLMRequest &request)
     netRequest.setUrl(url);
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
 
-    m_activeReply = m_networkManager->post(netRequest, QJsonDocument(body).toJson());
+    logRequest(url, body, netRequest);
+
+    m_activeReply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
     
     Q_EMIT requestStarted();
 
@@ -187,7 +266,12 @@ void LLMService::handleFinished()
     if (!m_activeReply) return;
 
     if (m_activeReply->error() != QNetworkReply::NoError && m_activeReply->error() != QNetworkReply::OperationCanceledError) {
-        handleError(m_activeReply->errorString());
+        QString errorMsg = m_activeReply->errorString();
+        QByteArray serverResponse = m_activeReply->readAll();
+        if (!serverResponse.isEmpty()) {
+            errorMsg += QStringLiteral(" - ") + QString::fromUtf8(serverResponse);
+        }
+        handleError(errorMsg);
     } else if (m_activeReply->error() == QNetworkReply::NoError) {
         Q_EMIT responseFinished(m_fullResponse);
     }
@@ -283,9 +367,7 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
         body[QStringLiteral("input")] = text;
     } else if (provider == LLMProvider::Ollama) {
         QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
-        // The embeddings endpoint in ollama is usually /api/embeddings
-        endpoint.replace(QStringLiteral("/api/chat"), QStringLiteral("/api/embeddings"));
-        url = QUrl(endpoint);
+        url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/embeddings"));
         body[QStringLiteral("model")] = model.isEmpty() ? QStringLiteral("nomic-embed-text") : model;
         body[QStringLiteral("prompt")] = text;
     } else {
@@ -297,7 +379,7 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
     netRequest.setUrl(url);
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
 
-    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson());
+    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [reply, callback, provider]() {
         QVector<float> embedding;
         if (reply->error() == QNetworkReply::NoError) {
@@ -356,19 +438,50 @@ void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::functio
         body[QStringLiteral("max_tokens")] = request.maxTokens;
     } 
     else if (request.provider == LLMProvider::Anthropic) {
-        url = QUrl(QStringLiteral("https://api.anthropic.com/v1/messages"));
+        QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString().trimmed();
+        if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
+        url = QUrl(endpoint);
+        
+        netRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
         netRequest.setRawHeader("x-api-key", key.toUtf8());
         netRequest.setRawHeader("anthropic-version", "2023-06-01");
+        netRequest.setRawHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
         
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20240620")).toString() : request.model;
-        body[QStringLiteral("messages")] = messagesArray;
+        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString() : request.model;
+        
+        // Anthropic: system message must be a single top-level string
+        QStringList systemParts;
+        QJsonArray anthropicMessages;
+        for (const auto &msg : request.messages) {
+            if (msg.role == QLatin1String("system")) {
+                QString content = msg.content.trimmed();
+                if (!content.isEmpty()) systemParts << content;
+            } else {
+                QJsonObject m;
+                m[QStringLiteral("role")] = msg.role;
+                m[QStringLiteral("content")] = msg.content;
+                anthropicMessages.append(m);
+            }
+        }
+
+        if (!systemParts.isEmpty()) {
+            body[QStringLiteral("system")] = systemParts.join(QStringLiteral("\n\n"));
+        }
+
+        // Anthropic requires the first message to be "user"
+        if (anthropicMessages.isEmpty()) {
+             anthropicMessages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QStringLiteral("Hello")}});
+        }
+        
+        body[QStringLiteral("messages")] = anthropicMessages;
         body[QStringLiteral("stream")] = false;
-        body[QStringLiteral("max_tokens")] = request.maxTokens;
+        body[QStringLiteral("max_tokens")] = request.maxTokens > 0 ? request.maxTokens : 4096;
         body[QStringLiteral("temperature")] = request.temperature;
     }
     else if (request.provider == LLMProvider::Ollama) {
-        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434/api/chat")).toString();
-        url = QUrl(endpoint);
+        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
+        url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/chat"));
         
         body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString() : request.model;
         body[QStringLiteral("messages")] = messagesArray;
@@ -381,7 +494,9 @@ void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::functio
     netRequest.setUrl(url);
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
 
-    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson());
+    logRequest(url, body, netRequest);
+
+    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [reply, callback, provider = request.provider]() {
         QString result;
         if (reply->error() == QNetworkReply::NoError) {
@@ -401,6 +516,8 @@ void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::functio
                     result = doc.object().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
                 }
             }
+        } else {
+            qWarning() << "LLM Non-Streaming Error:" << reply->errorString() << reply->readAll();
         }
         if (callback) {
             callback(result);
@@ -408,4 +525,95 @@ void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::functio
         reply->deleteLater();
     });
 }
+
+void LLMService::pingAnthropic(std::function<void(bool, const QString&)> callback)
+{
+    LLMRequest req;
+    req.provider = LLMProvider::Anthropic;
+    req.model = QStringLiteral("claude-haiku-4-5"); // Smallest/cheapest for ping
+    req.maxTokens = 1;
+    req.messages.append({QStringLiteral("user"), QStringLiteral("ping")});
+    req.stream = false;
+
+    sendNonStreamingRequest(req, [callback](const QString &result) {
+        if (!result.isEmpty()) {
+            callback(true, QString());
+        } else {
+            callback(false, i18n("API test failed. Check your key and logs."));
+        }
+    });
+}
+
+void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStringList&)> callback)
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QUrl url;
+    QNetworkRequest netRequest;
+    QString key = apiKey(provider);
+
+    if (provider == LLMProvider::OpenAI) {
+        QString endpoint = settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString().trimmed();
+        // Models endpoint is usually /v1/models
+        if (endpoint.endsWith(QStringLiteral("/chat/completions"))) {
+            endpoint.replace(QStringLiteral("/chat/completions"), QStringLiteral("/models"));
+        } else if (!endpoint.contains(QStringLiteral("/models"))) {
+            // best effort fallback
+            endpoint = QStringLiteral("https://api.openai.com/v1/models");
+        }
+        url = QUrl(endpoint);
+        netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
+    } else if (provider == LLMProvider::Anthropic) {
+        // Base is api.anthropic.com/v1/models
+        QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString().trimmed();
+        if (endpoint.endsWith(QStringLiteral("/messages"))) {
+            endpoint.replace(QStringLiteral("/messages"), QStringLiteral("/models"));
+        } else if (!endpoint.contains(QStringLiteral("/models"))) {
+            endpoint = QStringLiteral("https://api.anthropic.com/v1/models");
+        }
+        url = QUrl(endpoint);
+        netRequest.setRawHeader("x-api-key", key.toUtf8());
+        netRequest.setRawHeader("anthropic-version", "2023-06-01");
+    } else if (provider == LLMProvider::Ollama) {
+        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
+        url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/tags"));
+    }
+
+    netRequest.setUrl(url);
+    netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    netRequest.setRawHeader("User-Agent", "Mozilla/5.0 RPGForge/1.0");
+
+    logRequest(url, QJsonObject(), netRequest);
+
+    QNetworkReply *reply = m_networkManager->get(netRequest);
+    connect(reply, &QNetworkReply::finished, this, [reply, callback, provider, url]() {
+        QStringList models;
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            if (!doc.isNull() && doc.isObject()) {
+                if (provider == LLMProvider::OpenAI || provider == LLMProvider::Anthropic) {
+                    QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
+                    for (const QJsonValue &v : data) {
+                        QString id = v.toObject().value(QStringLiteral("id")).toString();
+                        if (!id.isEmpty()) models << id;
+                    }
+                } else if (provider == LLMProvider::Ollama) {
+                    QJsonArray ms = doc.object().value(QStringLiteral("models")).toArray();
+                    for (const QJsonValue &v : ms) {
+                        QString name = v.toObject().value(QStringLiteral("name")).toString();
+                        if (!name.isEmpty()) models << name;
+                    }
+                }
+            }
+        } else {
+            qWarning() << "Fetch Models Error (" << url.toString() << "):" << reply->errorString();
+        }
+        
+        // Sort models alphabetically
+        models.sort(Qt::CaseInsensitive);
+        
+        if (callback) callback(models);
+        reply->deleteLater();
+    });
+}
+
 
