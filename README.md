@@ -21,7 +21,7 @@ RPG Forge manages your documents with the same rigor a programmer uses for code,
 *   **Automatic Checkpoints:** Every time you save, RPG Forge creates a "checkpoint" of your work. You can easily retrieve, compare, or merge older versions of any document.
 *   **Exploration Branches:** Want to try a completely different direction for a chapter? Create an "Exploration" (branch). You can work in this alternate timeline without affecting your main manuscript, then merge the changes back or discard them later.
 *   **Worry-Free Switching:** When you switch between different explorations, RPG Forge automatically saves your current work so you never lose a word.
-*   **Data Protection:** Professional versioning protects you from losing your work should anything happen to your computer, allowing you to sync your entire project to remote backups like GitHub.
+*   **Data Protection:** Professional versioning protects you from losing your work should anything happen to your computer, allowing you to sync your entire project to remote file management systems like GitHub.
 
 ### 4. Maintain Consistency with Ease
 For game designers and worldbuilders, consistency is everything. 
@@ -42,15 +42,20 @@ We believe your copyrighted work belongs to you.
 ## 🛠 How It Works
 
 ### Setting Up a Project
-When you create a **New Project**, RPG Forge sets up a professional structure for you:
-*   `/manuscript`: Your story and rules.
+When you first open the application you will see a filesystem view on the bottom right while stacked on top is an empty project view. There should be a large button that says Create Project and it allows you to create a name for your work. Underneath this project view RPG Forge sets up a professional structure for you:
+*   `/manuscript`: Your game book, story and rules.
 *   `/research`: Your lore, characters, and worldbuilding notes.
 *   `/stylesheets`: Where your custom design lives.
 
 ### Writing and Organizing
-*   **Arranging:** The order of files on your Corkboard is the order they will appear in your final document.
+*   **manuscript:** Underneath the Manuscript folder you can create a number of Chapter folders. Each can be named the name of a chapter and within each you can have one or more documents that represent the scenes or sections of that chapter. You can create as many additional chapter folders as you like. We suggest not naming them Chapter 1, Chapter 2, etc. as the app will do this for you when you export it to a particular format. Instead we suggest that you name them the name of the Chapter. The order in which they will appear in the preview view or in the final manuscript will depend on their arrangement in the Manuscript Corkboard.
+*   **Arranging:** Clicking on a folder under the Manuscript folder should bring up a Corkboard view where every chapter folder is arranged in the order in which you want them to appear in your work. THis order can be changed by dragging and dropping the cards around. The sysnopsis on each card is automatically generated for you when you save a file. There is also a corkboard view within each chapter folder that allows you to determine which order the documents in that folder should appear in the output. 
 *   **Categorizing:** Right-click any folder to set its category (like **Chapter** or **Character**). This changes how the folder behaves and how its contents are compiled.
 *   **Linking:** Drag a research note directly into your manuscript to create an instant link.
+
+### Syncing, Versioning and Saving.
+*   RPG Forge treats your manuscript like computer code. Those familiar with software development will recognize that RPG Forge uses git under the hood to version and save your work, both locally on your computer and upstream in the Cloud using a service called Github. THis requires some setup. YOu need a github account and need to create a github access token, which you then need to configure inside of RPG Forge. ONce you have done this, you are able to right click on any manuscript file and retrieve past versions. You can also compare previous versions with each other and merge changes. 
+*   **Exploration:** In addition we use something called branching to allow you to explore taking your work in a different direction that initially anticipated. THis way you can go off and explore new ideas without stomping on your existing ones. Should those ideas not work out, you can easily switch your "branch" back to the one you started with, or to a different exploration altogether. 
 
 ### Compiling Your Work
 When you are ready to share your creation, use the **Compile** function. RPG Forge gathers your manuscript files, applies automatic chapter numbering, resolves all your variables and calculations, and generates a professionally styled PDF.
@@ -63,7 +68,7 @@ When you are ready to share your creation, use the **Compile** function. RPG For
 *   Qt 6 & KDE Frameworks 6
 *   `libgit2`, `cmark-gfm`
 *   **Ollama** (for local AI assistant capabilities)
-*   Recommended Local Model: `mistral` or `llama3`
+*   Recommended Local Model: `qwen3.5`
 
 ### Build Instructions
 ```bash
