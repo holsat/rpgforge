@@ -428,14 +428,35 @@ void ProjectTreePanel::switchExploration(const QString &name)
 {
     if (name.isEmpty() || !ProjectManager::instance().isProjectOpen()) return;
     QString projectPath = ProjectManager::instance().projectPath();
+    QString current = GitService::instance().currentBranch(projectPath);
 
-    if (name == GitService::instance().currentBranch(projectPath)) return;
+    if (name == current) return;
+
+    // Check for uncommitted changes
+    if (GitService::instance().hasUncommittedChanges(projectPath)) {
+        auto result = QMessageBox::question(this, i18n("Save & Switch Exploration"),
+            i18n("You have unsaved changes in your current exploration (%1). "
+                 "They will be automatically saved before switching to %2. "
+                 "\n\nDo you want to proceed?").arg(current, name),
+            QMessageBox::Yes | QMessageBox::No);
+        
+        if (result != QMessageBox::Yes) {
+            updateExplorationList(); // Reset combo to current branch
+            return;
+        }
+
+        // Automatic commit
+        GitService::instance().commitAll(projectPath, i18n("Automatic save before switching to %1").arg(name));
+    }
 
     if (GitService::instance().checkoutBranch(projectPath, name)) {
         // Refresh project data from disk
         ProjectManager::instance().openProject(ProjectManager::instance().projectFilePath());
         m_model->setProjectData(ProjectManager::instance().tree());
         m_treeView->expandAll();
+    } else {
+        QMessageBox::critical(this, i18n("Error"), i18n("Failed to switch to exploration branch."));
+        updateExplorationList();
     }
 }
 
@@ -491,6 +512,33 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
     if (index.isValid()) {
         menu.addSeparator();
         ProjectTreeItem *item = m_model->itemFromIndex(index);
+
+        // Category Submenu
+        auto *categoryMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), i18n("Set Category"));
+        
+        auto addCategoryAction = [&](const QString &text, const QString &icon, ProjectTreeItem::Category cat) {
+            auto *action = categoryMenu->addAction(QIcon::fromTheme(icon), text);
+            action->setCheckable(true);
+            action->setChecked(item->category == cat);
+            connect(action, &QAction::triggered, this, [this, item, index, cat]() {
+                item->category = cat;
+                m_model->dataChanged(index, index, {Qt::DecorationRole});
+                saveTree();
+            });
+        };
+
+        addCategoryAction(i18n("None"), QStringLiteral("folder"), ProjectTreeItem::None);
+        addCategoryAction(i18n("Manuscript"), QStringLiteral("document-edit"), ProjectTreeItem::Manuscript);
+        addCategoryAction(i18n("Research"), QStringLiteral("search"), ProjectTreeItem::Research);
+        addCategoryAction(i18n("Chapter"), QStringLiteral("book-contents"), ProjectTreeItem::Chapter);
+        addCategoryAction(i18n("Scene"), QStringLiteral("document-edit-symbolic"), ProjectTreeItem::Scene);
+        addCategoryAction(i18n("Characters"), QStringLiteral("user-identity"), ProjectTreeItem::Characters);
+        addCategoryAction(i18n("Places"), QStringLiteral("applications-graphics"), ProjectTreeItem::Places);
+        addCategoryAction(i18n("Cultures"), QStringLiteral("view-list-details"), ProjectTreeItem::Cultures);
+        addCategoryAction(i18n("Stylesheet"), QStringLiteral("applications-graphics-symbolic"), ProjectTreeItem::Stylesheet);
+        addCategoryAction(i18n("Notes"), QStringLiteral("note-sticky"), ProjectTreeItem::Notes);
+
+        menu.addSeparator();
         if (item->type == ProjectTreeItem::File) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("document-history")), i18n("View History..."), this, [this, item, index]() {
                 QString projectPath = ProjectManager::instance().projectPath();

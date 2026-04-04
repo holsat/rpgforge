@@ -88,6 +88,8 @@ public:
     QJsonObject tree() const;
     void setTree(const QJsonObject &tree);
 
+    int calculateTotalWordCount() const;
+
 Q_SIGNALS:
     void projectOpened();
     void projectClosed();

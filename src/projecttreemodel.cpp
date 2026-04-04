@@ -56,11 +56,40 @@ QJsonObject ProjectTreeModel::projectData() const
     return saveItem(m_rootItem);
 }
 
+static QString categoryToString(ProjectTreeItem::Category category) {
+    switch (category) {
+        case ProjectTreeItem::Manuscript: return QStringLiteral("manuscript");
+        case ProjectTreeItem::Research: return QStringLiteral("research");
+        case ProjectTreeItem::Chapter: return QStringLiteral("chapter");
+        case ProjectTreeItem::Scene: return QStringLiteral("scene");
+        case ProjectTreeItem::Characters: return QStringLiteral("characters");
+        case ProjectTreeItem::Places: return QStringLiteral("places");
+        case ProjectTreeItem::Cultures: return QStringLiteral("cultures");
+        case ProjectTreeItem::Stylesheet: return QStringLiteral("stylesheet");
+        case ProjectTreeItem::Notes: return QStringLiteral("notes");
+        default: return QStringLiteral("none");
+    }
+}
+
+static ProjectTreeItem::Category stringToCategory(const QString &str) {
+    if (str == QStringLiteral("manuscript")) return ProjectTreeItem::Manuscript;
+    if (str == QStringLiteral("research")) return ProjectTreeItem::Research;
+    if (str == QStringLiteral("chapter")) return ProjectTreeItem::Chapter;
+    if (str == QStringLiteral("scene")) return ProjectTreeItem::Scene;
+    if (str == QStringLiteral("characters")) return ProjectTreeItem::Characters;
+    if (str == QStringLiteral("places")) return ProjectTreeItem::Places;
+    if (str == QStringLiteral("cultures")) return ProjectTreeItem::Cultures;
+    if (str == QStringLiteral("stylesheet")) return ProjectTreeItem::Stylesheet;
+    if (str == QStringLiteral("notes")) return ProjectTreeItem::Notes;
+    return ProjectTreeItem::None;
+}
+
 ProjectTreeItem* ProjectTreeModel::loadItem(const QJsonObject &obj, ProjectTreeItem *parent)
 {
     auto *item = new ProjectTreeItem();
     item->parent = parent;
     item->type = obj.value(QStringLiteral("type")).toString() == QStringLiteral("file") ? ProjectTreeItem::File : ProjectTreeItem::Folder;
+    item->category = stringToCategory(obj.value(QStringLiteral("category")).toString());
     item->name = obj.value(QStringLiteral("name")).toString();
     item->path = obj.value(QStringLiteral("path")).toString();
     item->synopsis = obj.value(QStringLiteral("synopsis")).toString();
@@ -79,6 +108,7 @@ QJsonObject ProjectTreeModel::saveItem(ProjectTreeItem *item) const
 {
     QJsonObject obj;
     obj[QStringLiteral("type")] = item->type == ProjectTreeItem::File ? QStringLiteral("file") : QStringLiteral("folder");
+    obj[QStringLiteral("category")] = categoryToString(item->category);
     obj[QStringLiteral("name")] = item->name;
     obj[QStringLiteral("path")] = item->path;
     obj[QStringLiteral("synopsis")] = item->synopsis;
@@ -144,13 +174,32 @@ QVariant ProjectTreeModel::data(const QModelIndex &index, int role) const
         return item->name;
     } else if (role == Qt::DecorationRole) {
         if (item->type == ProjectTreeItem::Folder) {
-            return QIcon::fromTheme(QStringLiteral("folder"));
+            switch (item->category) {
+                case ProjectTreeItem::Manuscript: return QIcon::fromTheme(QStringLiteral("document-edit"));
+                case ProjectTreeItem::Research: return QIcon::fromTheme(QStringLiteral("search"));
+                case ProjectTreeItem::Chapter: return QIcon::fromTheme(QStringLiteral("book-contents"));
+                case ProjectTreeItem::Characters: return QIcon::fromTheme(QStringLiteral("user-identity"));
+                case ProjectTreeItem::Places: return QIcon::fromTheme(QStringLiteral("applications-graphics"));
+                case ProjectTreeItem::Cultures: return QIcon::fromTheme(QStringLiteral("view-list-details"));
+                case ProjectTreeItem::Stylesheet: return QIcon::fromTheme(QStringLiteral("applications-graphics-symbolic"));
+                case ProjectTreeItem::Notes: return QIcon::fromTheme(QStringLiteral("note-sticky"));
+                default: return QIcon::fromTheme(QStringLiteral("folder"));
+            }
         } else {
             if (item->transient) return QIcon::fromTheme(QStringLiteral("document-history"));
             QString suffix = QFileInfo(item->path).suffix().toLower();
             if (suffix == QLatin1String("pdf")) return QIcon::fromTheme(QStringLiteral("application-pdf"));
             if (suffix == QLatin1String("png") || suffix == QLatin1String("jpg")) return QIcon::fromTheme(QStringLiteral("image-x-generic"));
-            return QIcon::fromTheme(QStringLiteral("text-x-markdown"));
+            
+            switch (item->category) {
+                case ProjectTreeItem::Chapter: return QIcon::fromTheme(QStringLiteral("document-export"));
+                case ProjectTreeItem::Scene: return QIcon::fromTheme(QStringLiteral("document-edit-symbolic"));
+                case ProjectTreeItem::Characters: return QIcon::fromTheme(QStringLiteral("user-identity-symbolic"));
+                case ProjectTreeItem::Places: return QIcon::fromTheme(QStringLiteral("applications-graphics-symbolic"));
+                case ProjectTreeItem::Cultures: return QIcon::fromTheme(QStringLiteral("view-list-details-symbolic"));
+                case ProjectTreeItem::Notes: return QIcon::fromTheme(QStringLiteral("note-sticky-symbolic"));
+                default: return QIcon::fromTheme(QStringLiteral("text-x-markdown"));
+            }
         }
     } else if (role == TransientRole) {
         return item->transient;
@@ -171,9 +220,16 @@ Qt::ItemFlags ProjectTreeModel::flags(const QModelIndex &index) const
 
 bool ProjectTreeModel::setData(const QModelIndex &index, const QVariant &value, int role)
 {
-    if (index.isValid() && role == Qt::EditRole) {
-        itemFromIndex(index)->name = value.toString();
-        Q_EMIT dataChanged(index, index);
+    if (!index.isValid()) return false;
+    
+    ProjectTreeItem *item = itemFromIndex(index);
+    if (role == Qt::EditRole) {
+        item->name = value.toString();
+        Q_EMIT dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole});
+        return true;
+    } else if (role == CategoryRole) {
+        item->category = static_cast<ProjectTreeItem::Category>(value.toInt());
+        Q_EMIT dataChanged(index, index, {Qt::DecorationRole});
         return true;
     }
     return false;
@@ -185,6 +241,20 @@ ProjectTreeItem* ProjectTreeModel::itemFromIndex(const QModelIndex &index) const
         return static_cast<ProjectTreeItem*>(index.internalPointer());
     }
     return m_rootItem;
+}
+
+ProjectTreeItem* ProjectTreeModel::findItem(const QString &relativePath, ProjectTreeItem *root) const
+{
+    if (!root) root = m_rootItem;
+    
+    // Check root and children
+    if (root->path == relativePath) return root;
+
+    for (auto *child : root->children) {
+        ProjectTreeItem *found = findItem(relativePath, child);
+        if (found) return found;
+    }
+    return nullptr;
 }
 
 QModelIndex ProjectTreeModel::addFolder(const QString &name, const QModelIndex &parent)

@@ -41,7 +41,7 @@ Q_SIGNALS:
     void progress(int current, int total);
 
 private:
-    void processFolder(ProjectTreeItem *folder, QString &markdown, const CompileOptions &options, QStringList &errors);
+    void processFolder(ProjectTreeItem *folder, QString &markdown, const CompileOptions &options, QStringList &errors, int &chapterCounter);
     QString wrapHtml(const QString &body, const CompileOptions &options) const;
 
     QWebEnginePage *m_page = nullptr;

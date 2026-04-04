@@ -22,6 +22,7 @@
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QLineEdit>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QTabWidget>
 #include <QGroupBox>
@@ -51,6 +52,7 @@ void SettingsDialog::setupUi()
     m_tabWidget->addTab(createLLMTab(), i18n("LLM Integration"));
     m_tabWidget->addTab(createPromptsTab(), i18n("Prompt Templates"));
     m_tabWidget->addTab(createAnalyzerTab(), i18n("Game Analyzer"));
+    m_tabWidget->addTab(createEditorTab(), i18n("Editor"));
 
     mainLayout->addWidget(m_tabWidget);
 
@@ -178,9 +180,22 @@ QWidget* SettingsDialog::createAnalyzerTab()
     return tab;
 }
 
+QWidget* SettingsDialog::createEditorTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QVBoxLayout(tab);
+
+    m_typewriterScrollingCheck = new QCheckBox(i18n("Enable Typewriter Scrolling (center cursor)"), this);
+    layout->addWidget(m_typewriterScrollingCheck);
+
+    layout->addStretch();
+    return tab;
+}
+
 void SettingsDialog::load()
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    m_typewriterScrollingCheck->setChecked(settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool());
 
     m_activeProviderCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model"), QStringLiteral("text-embedding-3-small")).toString());
@@ -225,6 +240,7 @@ void SettingsDialog::load()
 void SettingsDialog::save()
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    settings.setValue(QStringLiteral("editor/typewriterScrolling"), m_typewriterScrollingCheck->isChecked());
 
     settings.setValue(QStringLiteral("llm/provider"), m_activeProviderCombo->currentIndex());
     settings.setValue(QStringLiteral("llm/embedding_model"), m_embeddingModelEdit->text());

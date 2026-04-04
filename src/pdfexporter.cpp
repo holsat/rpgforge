@@ -62,7 +62,22 @@ void PdfExporter::exportProject(const QString &outputPath, const CompileOptions 
     ProjectTreeModel model;
     model.setProjectData(treeData);
     
-    processFolder(model.itemFromIndex(QModelIndex()), markdown, options, validationErrors);
+    // Find Manuscript folder
+    ProjectTreeItem *manuscript = nullptr;
+    ProjectTreeItem *root = model.itemFromIndex(QModelIndex());
+    for (auto *child : root->children) {
+        if (child->category == ProjectTreeItem::Manuscript) {
+            manuscript = child;
+            break;
+        }
+    }
+
+    int chapterCounter = 0;
+    if (manuscript) {
+        processFolder(manuscript, markdown, options, validationErrors, chapterCounter);
+    } else {
+        processFolder(root, markdown, options, validationErrors, chapterCounter);
+    }
 
     if (!validationErrors.isEmpty()) {
         QString errorMsg = i18n("Found %1 broken image links. Please fix them before exporting:").arg(validationErrors.size());
@@ -136,12 +151,21 @@ void PdfExporter::exportProject(const QString &outputPath, const CompileOptions 
     m_page->setHtml(fullHtml, baseUrl);
 }
 
-void PdfExporter::processFolder(ProjectTreeItem *folder, QString &markdown, const CompileOptions &options, QStringList &errors)
+void PdfExporter::processFolder(ProjectTreeItem *folder, QString &markdown, const CompileOptions &options, QStringList &errors, int &chapterCounter)
 {
-    // Skip internal folders
+    // Skip internal folders if not in Manuscript
     QString folderNameLower = folder->name.toLower();
+    bool isManuscript = (folder->category == ProjectTreeItem::Manuscript);
+    bool isChapter = (folder->category == ProjectTreeItem::Chapter);
+
     if (folderNameLower == QStringLiteral("media") || folderNameLower == QStringLiteral("stylesheets")) {
-        return;
+        if (!isManuscript) return;
+    }
+
+    if (isChapter) {
+        chapterCounter++;
+        if (!markdown.isEmpty()) markdown += QStringLiteral("\n\n<div class=\"page-break\"></div>\n\n");
+        markdown += QStringLiteral("# Chapter %1: %2\n\n").arg(QString::number(chapterCounter), folder->name);
     }
 
     int minLevel = statusToLevel(options.minStatus);
@@ -171,7 +195,9 @@ void PdfExporter::processFolder(ProjectTreeItem *folder, QString &markdown, cons
 
             QFile file(fullPath);
             if (file.open(QIODevice::ReadOnly)) {
-                if (!markdown.isEmpty()) markdown += QStringLiteral("\n\n<div class=\"page-break\"></div>\n\n");
+                if (!markdown.isEmpty() && child->category != ProjectTreeItem::Scene && !isChapter) {
+                    markdown += QStringLiteral("\n\n<div class=\"page-break\"></div>\n\n");
+                }
                 
                 QString content = QString::fromUtf8(file.readAll());
                 
@@ -195,10 +221,10 @@ void PdfExporter::processFolder(ProjectTreeItem *folder, QString &markdown, cons
                     }
                 }
 
-                markdown += VariableManager::stripMetadata(content);
+                markdown += VariableManager::stripMetadata(content) + QStringLiteral("\n\n");
             }
         } else {
-            processFolder(child, markdown, options, errors);
+            processFolder(child, markdown, options, errors, chapterCounter);
         }
     }
 }

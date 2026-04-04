@@ -26,6 +26,7 @@ class QLineEdit;
 class QComboBox;
 class QTabWidget;
 class QListWidget;
+class QCheckBox;
 
 class SettingsDialog : public QDialog
 {
@@ -43,10 +44,14 @@ private:
     QWidget* createLLMTab();
     QWidget* createPromptsTab();
     QWidget* createAnalyzerTab();
+    QWidget* createEditorTab();
 
-    QTabWidget *m_tabWidget;
+    QTabWidget *m_tabWidget = nullptr;
 
-    // LLM Settings
+    // Editor settings
+    QCheckBox *m_typewriterScrollingCheck = nullptr;
+
+    // LLM settings
     QComboBox *m_activeProviderCombo;
     QLineEdit *m_openaiKeyEdit;
     QLineEdit *m_openaiModelEdit;

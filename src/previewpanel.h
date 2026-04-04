@@ -36,6 +36,7 @@ public:
     ~PreviewPanel() override = default;
 
     void setMarkdown(const QString &markdown);
+    void setProjectMode(bool enabled);
     void setBaseUrl(const QUrl &url);
     void scrollBy(int x, int y);
     void scrollToPercentage(double percentage);
@@ -53,6 +54,7 @@ private:
     QString m_pendingMarkdown;
     QUrl m_baseUrl;
     QTimer *m_debounceTimer;
+    bool m_projectMode = false;
     bool m_needsFullReload = true;
     bool m_isLoaded = false;
 

@@ -26,7 +26,9 @@
 
 struct ProjectTreeItem {
     enum Type { Folder, File };
+    enum Category { None, Manuscript, Research, Chapter, Scene, Characters, Places, Cultures, Stylesheet, Notes };
     Type type;
+    Category category = None;
     QString name;
     QString path; // Relative to project root
     QString synopsis;
@@ -46,7 +48,8 @@ class ProjectTreeModel : public QAbstractItemModel
 
 public:
     enum Roles {
-        TransientRole = Qt::UserRole + 100
+        TransientRole = Qt::UserRole + 100,
+        CategoryRole = Qt::UserRole + 101
     };
     explicit ProjectTreeModel(QObject *parent = nullptr);
     ~ProjectTreeModel() override;
@@ -78,6 +81,7 @@ public:
     bool dropMimeData(const QMimeData *data, Qt::DropAction action, int row, int column, const QModelIndex &parent) override;
 
     ProjectTreeItem* itemFromIndex(const QModelIndex &index) const;
+    ProjectTreeItem* findItem(const QString &relativePath, ProjectTreeItem *root = nullptr) const;
 
 private:
     ProjectTreeItem* loadItem(const QJsonObject &obj, ProjectTreeItem *parent);

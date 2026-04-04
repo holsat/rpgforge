@@ -82,6 +82,9 @@ private Q_SLOTS:
     void updateCursorContext();
     void onTextChanged();
     void navigateToLine(int line);
+    void updateProjectStats();
+    void updateProjectPreview();
+    void toggleFocusMode();
     void togglePreview();
     void syncScroll();
     void updateErrorHighlighting();
@@ -101,6 +104,8 @@ private Q_SLOTS:
 
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }
+    KTextEditor::View* activeView() const;
+    KTextEditor::Document* activeDocument() const;
 
 private Q_SLOTS:
     void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
@@ -119,6 +124,10 @@ private:
     KTextEditor::Document *m_document = nullptr;
     KTextEditor::View *m_editorView = nullptr;
 
+    KTextEditor::Document *m_researchDocument = nullptr;
+    KTextEditor::View *m_researchView = nullptr;
+    QSplitter *m_editorSplitter = nullptr;
+
     QVBoxLayout *m_centralViewLayout = nullptr;
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
@@ -136,6 +145,8 @@ private:
     ChatPanel *m_chatPanel = nullptr;
     ProblemsPanel *m_problemsPanel = nullptr;
     QLabel *m_diagnosticsStatus = nullptr;
+    QLabel *m_wordCountStatus = nullptr;
+    QLabel *m_projectStatsStatus = nullptr;
 
     QSplitter *m_mainSplitter = nullptr;
     QSplitter *m_vSplitter = nullptr;
@@ -154,6 +165,8 @@ private:
 
     QList<KTextEditor::MovingRange*> m_errorRanges;
     QList<KTextEditor::MovingRange*> m_diagnosticRanges;
+
+    QUrl m_currentUrl;
 };
 
 #endif // MAINWINDOW_H

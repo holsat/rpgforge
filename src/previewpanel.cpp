@@ -76,6 +76,15 @@ void PreviewPanel::setMarkdown(const QString &markdown)
     m_debounceTimer->start();
 }
 
+void PreviewPanel::setProjectMode(bool enabled)
+{
+    if (m_projectMode != enabled) {
+        m_projectMode = enabled;
+        m_needsFullReload = true; // Refresh layout if switching modes
+        m_debounceTimer->start();
+    }
+}
+
 void PreviewPanel::setBaseUrl(const QUrl &url)
 {
     // Use the project directory as base URL so relative image paths resolve correctly.

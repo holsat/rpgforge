@@ -22,6 +22,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QJsonValue>
 #include <QDir>
 #include <QDebug>
@@ -337,3 +338,35 @@ QStringList ProjectManager::stylesheetPaths() const
     }
     return {};
 }
+
+#include <QRegularExpression>
+#include "variablemanager.h"
+
+static int countWordsInFile(const QString &fullPath) {
+    QFile file(fullPath);
+    if (!file.open(QIODevice::ReadOnly)) return 0;
+    QString text = QString::fromUtf8(file.readAll());
+    QString content = VariableManager::stripMetadata(text);
+    return content.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).count();
+}
+
+static int countWordsInTree(const QJsonObject &item, const QString &projectPath) {
+    int count = 0;
+    if (item.value(QStringLiteral("type")).toString() == QStringLiteral("file")) {
+        QString relPath = item.value(QStringLiteral("path")).toString();
+        count += countWordsInFile(QDir(projectPath).absoluteFilePath(relPath));
+    }
+    
+    QJsonArray children = item.value(QStringLiteral("children")).toArray();
+    for (const auto &child : children) {
+        count += countWordsInTree(child.toObject(), projectPath);
+    }
+    return count;
+}
+
+int ProjectManager::calculateTotalWordCount() const
+{
+    if (!isProjectOpen()) return 0;
+    return countWordsInTree(tree(), projectPath());
+}
+

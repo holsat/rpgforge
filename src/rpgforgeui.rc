@@ -23,6 +23,8 @@
          KTextEditor::View's merged GUI client -->
     <Menu name="view">
       <Action name="toggle_preview"/>
+      <Action name="project_preview_mode"/>
+      <Action name="focus_mode"/>
     </Menu>
     <Menu name="ai">
       <text>&amp;AI Assistant</text>
@@ -49,5 +51,8 @@
     <Action name="compile_project"/>
     <Separator/>
     <Action name="toggle_preview"/>
+    <Action name="project_preview_mode"/>
+    <Separator/>
+    <Action name="focus_mode"/>
   </ToolBar>
 </gui>

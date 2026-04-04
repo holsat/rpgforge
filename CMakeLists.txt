@@ -57,6 +57,8 @@ add_executable(rpgforge
     src/breadcrumbbar.h
     src/sidebar.cpp
     src/sidebar.h
+    src/synopsisservice.cpp
+    src/synopsisservice.h
     src/gitpanel.cpp
     src/gitpanel.h
     src/previewpanel.cpp

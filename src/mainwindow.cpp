@@ -45,10 +45,12 @@
 #include "newprojectdialog.h"
 #include "projecttreemodel.h"
 #include "sidebar.h"
+#include "synopsisservice.h"
 
 #include <KActionCollection>
 #include <KLocalizedString>
 #include <KStandardAction>
+#include <KToolBar>
 #include <KTextEditor/MovingRange>
 #include <KTextEditor/Attribute>
 #include <KXMLGUIFactory>
@@ -114,14 +116,53 @@ MainWindow::~MainWindow()
     m_errorRanges.clear();
 }
 
+KTextEditor::View* MainWindow::activeView() const
+{
+    if (m_researchView && m_researchView->isVisible() && m_researchView->hasFocus()) {
+        return m_researchView;
+    }
+    return m_editorView;
+}
+
+KTextEditor::Document* MainWindow::activeDocument() const
+{
+    auto *view = activeView();
+    if (view == m_researchView) return m_researchDocument;
+    return m_document;
+}
+
 void MainWindow::setupEditor()
 {
     m_editor = KTextEditor::Editor::instance();
+    if (!m_editor) return;
+
+    // Main Manuscript Document
     m_document = m_editor->createDocument(this);
     m_editorView = m_document->createView(this);
-
-    // Enable markdown syntax highlighting
     m_document->setHighlightingMode(QStringLiteral("Markdown"));
+
+    // Research Document (for split view)
+    m_researchDocument = m_editor->createDocument(this);
+    m_researchView = m_researchDocument->createView(this);
+    m_researchDocument->setHighlightingMode(QStringLiteral("Markdown"));
+
+    m_editorSplitter = new QSplitter(Qt::Horizontal, this);
+    m_editorSplitter->addWidget(m_editorView);
+    m_editorSplitter->addWidget(m_researchView);
+    m_researchView->hide(); // hidden until a research file is opened
+
+    // Shared signals for both editors
+    auto setupConnections = [this](KTextEditor::Document *doc, KTextEditor::View *view) {
+        connect(doc, &KTextEditor::Document::textChanged, this, &MainWindow::onTextChanged);
+        connect(view, &KTextEditor::View::cursorPositionChanged, this, &MainWindow::onCursorPositionChanged);
+        connect(view, &KTextEditor::View::contextMenuAboutToShow, this, &MainWindow::showEditorContextMenu);
+    };
+
+    setupConnections(m_document, m_editorView);
+    setupConnections(m_researchDocument, m_researchView);
+
+    connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged, this, &MainWindow::syncScroll);
+    connect(m_researchView, &KTextEditor::View::verticalScrollPositionChanged, this, &MainWindow::syncScroll);
 
     // Debounce cursor position changes
     m_cursorDebounce = new QTimer(this);
@@ -139,37 +180,50 @@ void MainWindow::setupEditor()
     m_analyzerDebounce->setSingleShot(true);
     m_analyzerDebounce->setInterval(5000); // 5s debounce for LLM analysis
     connect(m_analyzerDebounce, &QTimer::timeout, this, [this]() {
-        if (m_document && m_document->url().isLocalFile()) {
-            AnalyzerService::instance().analyzeDocument(m_document->url().toLocalFile(), m_document->text());
+        auto *doc = activeDocument();
+        if (doc && doc->url().isLocalFile()) {
+            AnalyzerService::instance().analyzeDocument(doc->url().toLocalFile(), doc->text());
         }
     });
 
     connect(&AnalyzerService::instance(), &AnalyzerService::diagnosticsUpdated, this, &MainWindow::onDiagnosticsUpdated);
 
     // Connect signals
-    connect(m_document, &KTextEditor::Document::textChanged,
-            this, &MainWindow::onTextChanged);
-    connect(m_document, &KTextEditor::Document::documentUrlChanged,
-            this, &MainWindow::updateTitle);
-    connect(m_document, &KTextEditor::Document::modifiedChanged,
-            this, &MainWindow::updateTitle);
-    connect(m_editorView, &KTextEditor::View::cursorPositionChanged,
-            this, &MainWindow::onCursorPositionChanged);
-    connect(m_editorView, &KTextEditor::View::verticalScrollPositionChanged,
-            this, &MainWindow::syncScroll);
+    auto connectDocSignals = [this](KTextEditor::Document *doc) {
+        connect(doc, &KTextEditor::Document::documentUrlChanged, this, &MainWindow::updateTitle);
+        connect(doc, &KTextEditor::Document::modifiedChanged, this, &MainWindow::updateTitle);
+    };
+    connectDocSignals(m_document);
+    connectDocSignals(m_researchDocument);
 
     // Step 1: Seamless Version Control (Auto-Sync)
-    connect(m_document, &KTextEditor::Document::documentSavedOrUploaded, this, [this](KTextEditor::Document *doc) {
-        if (ProjectManager::instance().isProjectOpen() && ProjectManager::instance().autoSync()) {
-            GitService::instance().autoCommit(doc->url().toLocalFile());
-        }
-    });
+    auto setupAutoSync = [this](KTextEditor::Document *doc) {
+        connect(doc, &KTextEditor::Document::documentSavedOrUploaded, this, [this](KTextEditor::Document *d) {
+            if (ProjectManager::instance().isProjectOpen() && ProjectManager::instance().autoSync()) {
+                GitService::instance().autoCommit(d->url().toLocalFile());
+            }
+        });
+    };
+    setupAutoSync(m_document);
+    setupAutoSync(m_researchDocument);
 
     // Register variable autocomplete safely after the view is fully initialized
     QTimer::singleShot(500, this, [this]() {
-        m_editorView->setAutomaticInvocationEnabled(true);
-        auto *completionModel = new VariableCompletionModel(this);
-        m_editorView->registerCompletionModel(completionModel);
+        auto setupEditorView = [this](KTextEditor::View *view) {
+            if (!view) return;
+            view->setAutomaticInvocationEnabled(true);
+            auto *completionModel = new VariableCompletionModel(this);
+            view->registerCompletionModel(completionModel);
+
+            view->installEventFilter(this);
+            const auto children = view->findChildren<QWidget*>();
+            for (QWidget *child : children) {
+                child->installEventFilter(this);
+            }
+        };
+
+        setupEditorView(m_editorView);
+        setupEditorView(m_researchView);
 
         // Install event filter on KateCompletionWidget to fix popup positioning/z-order
         for (QObject *child : this->children()) {
@@ -178,16 +232,6 @@ void MainWindow::setupEditor()
                 w->installEventFilter(this);
             }
         }
-
-        // Install event filter on the editor view and all its child widgets so we
-        // can intercept drops from the project tree and insert markdown links.
-        m_editorView->installEventFilter(this);
-        const auto editorChildren = m_editorView->findChildren<QWidget*>();
-        for (QWidget *child : editorChildren) {
-            child->installEventFilter(this);
-        }
-
-        connect(m_editorView, &KTextEditor::View::contextMenuAboutToShow, this, &MainWindow::showEditorContextMenu);
     });
 }
 
@@ -278,7 +322,7 @@ void MainWindow::setupSidebar()
     });
     m_pdfViewer = new QWebEngineView(this);
 
-    m_centralViewLayout->addWidget(m_editorView);
+    m_centralViewLayout->addWidget(m_editorSplitter);
     m_centralViewLayout->addWidget(m_corkboardView);
     m_centralViewLayout->addWidget(m_imagePreview);
     m_centralViewLayout->addWidget(m_diffView);
@@ -303,8 +347,20 @@ void MainWindow::setupSidebar()
 
     m_problemsPanel = new ProblemsPanel(this);
 
+    SynopsisService::instance().setModel(m_projectTree->model());
+
     m_diagnosticsStatus = new QLabel(i18n("0 Errors, 0 Warnings, 0 Info"), this);
+    m_diagnosticsStatus->setContentsMargins(5, 0, 5, 0);
     statusBar()->addPermanentWidget(m_diagnosticsStatus);
+
+    m_wordCountStatus = new QLabel(i18n("Words: 0"), this);
+    m_wordCountStatus->setContentsMargins(5, 0, 5, 0);
+    statusBar()->addPermanentWidget(m_wordCountStatus);
+
+    m_projectStatsStatus = new QLabel(i18n("Project: 0 words"), this);
+    m_projectStatsStatus->setContentsMargins(5, 0, 5, 0);
+    statusBar()->addPermanentWidget(m_projectStatsStatus);
+    m_projectStatsStatus->hide(); // only shown if project open
 
     connect(m_problemsPanel, &ProblemsPanel::statsChanged, this, [this](int errors, int warnings, int infos) {
         m_diagnosticsStatus->setText(i18n("%1 Errors, %2 Warnings, %3 Info").arg(errors).arg(warnings).arg(infos));
@@ -388,19 +444,40 @@ void MainWindow::setupSidebar()
         navigateToLine(line);
     });
 
-    // Clear the corkboard when a project opens or closes so it never holds
-    // pointers into a tree that has been rebuilt/destroyed.
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
         if (m_corkboardView) m_corkboardView->setFolder(nullptr);
         KnowledgeBase::instance().initForProject(ProjectManager::instance().projectPath());
+        m_projectStatsStatus->show();
+        updateProjectStats();
+        SynopsisService::instance().scanProject();
     });
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
         if (m_corkboardView) {
             m_corkboardView->setFolder(nullptr);
             showCentralView(m_editorView);
         }
+        m_projectStatsStatus->hide();
         KnowledgeBase::instance().close();
     });
+    connect(m_document, &KTextEditor::Document::documentSavedOrUploaded, this, [this]() {
+        updateProjectStats();
+        if (ProjectManager::instance().isProjectOpen() && m_document->url().isLocalFile()) {
+            QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(m_document->url().toLocalFile());
+            SynopsisService::instance().requestUpdate(relPath, true);
+        }
+    });
+    connect(m_document, &KTextEditor::Document::documentUrlChanged, this, [this]() {
+        updateTitle();
+        if (!m_currentUrl.isEmpty() && m_currentUrl.isLocalFile() && ProjectManager::instance().isProjectOpen()) {
+            QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(m_currentUrl.toLocalFile());
+            // User navigated away from m_currentUrl — request background update
+            SynopsisService::instance().requestUpdate(relPath, true);
+        }
+        m_currentUrl = m_document->url();
+    });
+    connect(m_projectTree->model(), &ProjectTreeModel::modelReset, this, &MainWindow::updateProjectStats);
+    connect(m_projectTree->model(), &ProjectTreeModel::rowsInserted, this, &MainWindow::updateProjectStats);
+    connect(m_projectTree->model(), &ProjectTreeModel::rowsRemoved, this, &MainWindow::updateProjectStats);
 
     // Reload preview stylesheet when project settings change (e.g., stylesheet path)
     connect(&ProjectManager::instance(), &ProjectManager::projectSettingsChanged, this, [this]() {
@@ -487,6 +564,30 @@ void MainWindow::setupActions()
     actionCollection()->addAction(QStringLiteral("toggle_preview"), m_togglePreviewAction);
     actionCollection()->setDefaultShortcut(m_togglePreviewAction, Qt::CTRL | Qt::Key_P);
     connect(m_togglePreviewAction, &QAction::triggered, this, &MainWindow::togglePreview);
+
+    auto *projectPreviewAct = new QAction(this);
+    projectPreviewAct->setText(i18n("Project Preview Mode"));
+    projectPreviewAct->setIcon(QIcon::fromTheme(QStringLiteral("view-list-tree")));
+    projectPreviewAct->setCheckable(true);
+    actionCollection()->addAction(QStringLiteral("project_preview_mode"), projectPreviewAct);
+    connect(projectPreviewAct, &QAction::triggered, this, [this](bool enabled) {
+        if (m_previewPanel) {
+            m_previewPanel->setProjectMode(enabled);
+            if (enabled) {
+                updateProjectPreview();
+            } else if (m_document) {
+                m_previewPanel->setMarkdown(m_document->text());
+            }
+        }
+    });
+
+    auto *focusModeAct = new QAction(this);
+    focusModeAct->setText(i18n("Focus Mode"));
+    focusModeAct->setIcon(QIcon::fromTheme(QStringLiteral("view-fullscreen")));
+    focusModeAct->setCheckable(true);
+    actionCollection()->addAction(QStringLiteral("focus_mode"), focusModeAct);
+    actionCollection()->setDefaultShortcut(focusModeAct, Qt::CTRL | Qt::SHIFT | Qt::Key_F);
+    connect(focusModeAct, &QAction::triggered, this, &MainWindow::toggleFocusMode);
 }
 
 void MainWindow::newFile()
@@ -545,8 +646,38 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             return;
         }
 
-        m_document->openUrl(url);
-        showCentralView(m_editorView);
+        // Check if this is a research file
+        bool isResearch = false;
+        if (ProjectManager::instance().isProjectOpen()) {
+            QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
+            ProjectTreeItem *item = m_projectTree->model()->findItem(relPath);
+            if (item) {
+                // Check ancestors for Research category
+                ProjectTreeItem *p = item;
+                while (p) {
+                    if (p->category == ProjectTreeItem::Research || 
+                        p->category == ProjectTreeItem::Characters ||
+                        p->category == ProjectTreeItem::Places ||
+                        p->category == ProjectTreeItem::Cultures) {
+                        isResearch = true;
+                        break;
+                    }
+                    p = p->parent;
+                }
+            }
+        }
+
+        if (isResearch) {
+            m_researchDocument->openUrl(url);
+            m_researchView->show();
+            // Ensure first view stays visible
+            m_editorView->show();
+        } else {
+            m_document->openUrl(url);
+            m_researchView->hide();
+        }
+
+        showCentralView(m_editorSplitter);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
             m_previewPanel->show();
             m_previewPanel->setBaseUrl(url);
@@ -555,7 +686,8 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         if (fileName.endsWith(QLatin1String(".md")) ||
             fileName.endsWith(QLatin1String(".markdown")) ||
             fileName.endsWith(QLatin1String(".mkd"))) {
-            m_document->setHighlightingMode(QStringLiteral("Markdown"));
+            if (isResearch) m_researchDocument->setHighlightingMode(QStringLiteral("Markdown"));
+            else m_document->setHighlightingMode(QStringLiteral("Markdown"));
         }
         updateTitle();
         onTextChanged();
@@ -565,10 +697,11 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 
 void MainWindow::saveFile()
 {
-    if (m_document->url().isEmpty()) {
+    auto *doc = activeDocument();
+    if (doc->url().isEmpty()) {
         saveFileAs();
     } else {
-        m_document->save();
+        doc->save();
     }
 }
 
@@ -577,8 +710,9 @@ void MainWindow::saveFileAs()
     const QUrl url = QFileDialog::getSaveFileUrl(this, i18n("Save File As"), QUrl(),
         i18n("Markdown Files (*.md *.markdown);;All Files (*)"));
     if (!url.isEmpty()) {
-        m_document->saveAs(url);
-        if (m_previewPanel) {
+        auto *doc = activeDocument();
+        doc->saveAs(url);
+        if (m_previewPanel && !m_researchView->hasFocus()) {
             m_previewPanel->setBaseUrl(url);
         }
         updateTitle();
@@ -597,21 +731,84 @@ void MainWindow::newProject()
         if (!dir.isEmpty() && !name.isEmpty()) {
             if (ProjectManager::instance().createProject(dir, name)) {
                 m_fileExplorer->setRootPath(dir);
+                auto *model = m_projectTree->model();
                 
                 // Add top level folder with project name
-                QModelIndex rootFolder = m_projectTree->model()->addFolder(name);
+                QModelIndex rootIdx = model->addFolder(name);
 
-                // Add Stylesheets folder with a link to the default style.css
-                QModelIndex stylesheetsFolder = m_projectTree->model()->addFolder(QStringLiteral("Stylesheets"), rootFolder);
-                m_projectTree->model()->addFile(QStringLiteral("style.css"), QStringLiteral("stylesheets/style.css"), stylesheetsFolder);
-
-                // If a file is open, add it to the project
-                if (m_document && !m_document->url().isEmpty()) {
-                    QString openFilePath = m_document->url().toLocalFile();
-                    m_projectTree->model()->addFileWithSmartDiscovery(openFilePath, rootFolder);
-                }
+                // 1. Manuscript
+                QModelIndex manuscriptIdx = model->addFolder(i18n("Manuscript"), rootIdx);
+                model->setData(manuscriptIdx, ProjectTreeItem::Manuscript, ProjectTreeModel::CategoryRole);
                 
-                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+                QModelIndex chapterIdx = model->addFolder(i18n("Chapter"), manuscriptIdx);
+                model->setData(chapterIdx, ProjectTreeItem::Chapter, ProjectTreeModel::CategoryRole);
+                
+                QString scenePath = QStringLiteral("manuscript/scene1.md");
+                QDir(dir).mkpath(QStringLiteral("manuscript"));
+                QFile sceneFile(QDir(dir).absoluteFilePath(scenePath));
+                if (sceneFile.open(QIODevice::WriteOnly)) {
+                    sceneFile.write("# New Scene\n\nWrite your story here...");
+                    sceneFile.close();
+                }
+                QModelIndex sceneIdx = model->addFile(i18n("Scene 1"), scenePath, chapterIdx);
+                model->setData(sceneIdx, ProjectTreeItem::Scene, ProjectTreeModel::CategoryRole);
+
+                // 2. Research
+                QModelIndex researchIdx = model->addFolder(i18n("Research"), rootIdx);
+                model->setData(researchIdx, ProjectTreeItem::Research, ProjectTreeModel::CategoryRole);
+                
+                auto addResearchFolder = [&](const QString &name, ProjectTreeItem::Category cat) {
+                    QModelIndex idx = model->addFolder(name, researchIdx);
+                    model->setData(idx, cat, ProjectTreeModel::CategoryRole);
+                };
+                addResearchFolder(i18n("Characters"), ProjectTreeItem::Characters);
+                addResearchFolder(i18n("Places"), ProjectTreeItem::Places);
+                addResearchFolder(i18n("Cultures"), ProjectTreeItem::Cultures);
+
+                // Add README.md to Research
+                QString readmePath = QStringLiteral("research/README.md");
+                QDir(dir).mkpath(QStringLiteral("research"));
+                QFile readmeFile(QDir(dir).absoluteFilePath(readmePath));
+                if (readmeFile.open(QIODevice::WriteOnly)) {
+                    const char* readmeContent = R"markdown(# Welcome to your RPG Forge Project
+
+This README provides a quick overview of how to use RPG Forge to create your masterpiece.
+
+## 🚀 Key Concepts
+
+### 1. The Manuscript
+All your story and rule files should live under the **Manuscript** folder. RPG Forge automatically assembles these files into your final document. 
+*   **Chapters:** Folders categorized as "Chapter" are automatically numbered during export.
+*   **Scenes:** Individual files within chapters that make up your narrative flow.
+
+### 2. Research & Lore
+The **Research** folder is for your worldbuilding notes. Files here are *not* compiled into the final manuscript, but they are always available for reference while you write.
+
+### 3. Versions & Explorations
+Every save is a checkpoint. Use the **Exploration** menu in the Project Tree to create "branches" where you can try out different narrative directions without breaking your main story.
+
+## ✍️ Writing Tips
+
+*   **Focus Mode:** Press `Ctrl+Shift+F` to hide the UI and focus on your words.
+*   **Linking:** Drag a file from the project tree into your document to create a link.
+*   **Variables:** Define stats in your document header (YAML) and use them like `{{hp_base}}` in your text.
+
+## 🛠 Compilation
+
+Click the **Compile** button in the toolbar to generate a professional PDF of your manuscript.
+)markdown";
+                    readmeFile.write(readmeContent);
+                    readmeFile.close();
+                }
+                QModelIndex readmeIdx = model->addFile(i18n("Project Guide"), readmePath, researchIdx);
+                model->setData(readmeIdx, ProjectTreeItem::Notes, ProjectTreeModel::CategoryRole);
+
+                // 3. Stylesheets
+                QModelIndex stylesheetsIdx = model->addFolder(i18n("Stylesheets"), rootIdx);
+                model->setData(stylesheetsIdx, ProjectTreeItem::Stylesheet, ProjectTreeModel::CategoryRole);
+                model->addFile(QStringLiteral("style.css"), QStringLiteral("stylesheets/style.css"), stylesheetsIdx);
+
+                ProjectManager::instance().setTree(model->projectData());
                 ProjectManager::instance().saveProject();
                 
                 updateTitle();
@@ -740,7 +937,7 @@ void MainWindow::compileToPdf()
 void MainWindow::onTextChanged()
 {
     // Minimal work during typing to prevent hangs/crashes
-    if (m_document) {
+    if (activeDocument()) {
         if (m_textChangeDebounce) m_textChangeDebounce->start();
         if (m_analyzerDebounce) m_analyzerDebounce->start();
     }
@@ -748,9 +945,10 @@ void MainWindow::onTextChanged()
 
 void MainWindow::updateErrorHighlighting()
 {
-    if (!m_document) return;
+    auto *doc = activeDocument();
+    if (!doc) return;
 
-    QString text = m_document->text();
+    QString text = doc->text();
 
     // 1. Sync front-matter variables
     auto frontMatterVars = VariableManager::parseFrontMatter(text);
@@ -759,9 +957,20 @@ void MainWindow::updateErrorHighlighting()
     // 2. Update auxiliary views
     QString contentOnly = VariableManager::stripMetadata(text);
     if (m_outlinePanel) m_outlinePanel->documentChanged(contentOnly);
-    if (m_previewPanel) m_previewPanel->setMarkdown(contentOnly);
+    
+    auto *projectPreviewAct = actionCollection()->action(QStringLiteral("project_preview_mode"));
+    if (projectPreviewAct && projectPreviewAct->isChecked()) {
+        updateProjectPreview();
+    } else if (m_previewPanel) {
+        m_previewPanel->setMarkdown(contentOnly);
+    }
 
-    // 3. Highlight undefined variable references with red squiggly underline
+    // 3. Update word count
+    // Simple word count: split by whitespace and filter out empty strings
+    int wordCount = contentOnly.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).count();
+    m_wordCountStatus->setText(i18n("Words: %1").arg(wordCount));
+
+    // 4. Highlight undefined variable references with red squiggly underline
     qDeleteAll(m_errorRanges);
     m_errorRanges.clear();
 
@@ -784,8 +993,8 @@ void MainWindow::updateErrorHighlighting()
     errorAttr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
     errorAttr->setUnderlineColor(Qt::red);
 
-    for (int line = 0; line < m_document->lines(); ++line) {
-        const QString lineText = m_document->line(line);
+    for (int line = 0; line < doc->lines(); ++line) {
+        const QString lineText = doc->line(line);
         QRegularExpressionMatchIterator it = varRefRegex.globalMatch(lineText);
         while (it.hasNext()) {
             QRegularExpressionMatch match = it.next();
@@ -795,7 +1004,7 @@ void MainWindow::updateErrorHighlighting()
                 int startCol = match.capturedStart(0);
                 int endCol = match.capturedEnd(0);
                 KTextEditor::Range range(line, startCol, line, endCol);
-                KTextEditor::MovingRange *mr = m_document->newMovingRange(range);
+                KTextEditor::MovingRange *mr = doc->newMovingRange(range);
                 mr->setAttribute(errorAttr);
                 mr->setZDepth(-100.0);
                 m_errorRanges.append(mr);
@@ -807,12 +1016,23 @@ void MainWindow::updateErrorHighlighting()
 void MainWindow::onCursorPositionChanged()
 {
     m_cursorDebounce->start();
+
+    // Typewriter scrolling (keep cursor centered)
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    if (settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool()) {
+        auto *view = activeView();
+        if (view) {
+            // TODO: Centering cursor in KF6 KTextEditor::View
+            view->setCursorPosition(view->cursorPosition());
+        }
+    }
 }
 
 void MainWindow::updateCursorContext()
 {
-    if (!m_editorView) return;
-    int line = m_editorView->cursorPosition().line();
+    auto *view = activeView();
+    if (!view) return;
+    int line = view->cursorPosition().line();
 
     if (m_outlinePanel) {
         m_outlinePanel->highlightForLine(line);
@@ -824,9 +1044,10 @@ void MainWindow::updateCursorContext()
 
 void MainWindow::navigateToLine(int line)
 {
-    if (m_editorView) {
-        m_editorView->setCursorPosition(KTextEditor::Cursor(line, 0));
-        m_editorView->setFocus();
+    auto *view = activeView();
+    if (view) {
+        view->setCursorPosition(KTextEditor::Cursor(line, 0));
+        view->setFocus();
         if (m_previewPanel && m_previewPanel->isVisible()) {
             m_previewPanel->scrollToLine(line);
         }
@@ -845,10 +1066,11 @@ void MainWindow::togglePreview()
 
 void MainWindow::syncScroll()
 {
-    if (!m_editorView || !m_previewPanel || !m_previewPanel->isVisible()) return;
+    auto *view = activeView();
+    if (!view || !m_previewPanel || !m_previewPanel->isVisible()) return;
 
     // Use scrollToLine with smooth=false for real-time synchronization
-    int currentLine = m_editorView->firstDisplayedLine();
+    int currentLine = view->firstDisplayedLine();
     m_previewPanel->scrollToLine(currentLine, false);
 }
 
@@ -858,21 +1080,21 @@ void MainWindow::updateTitle()
     if (ProjectManager::instance().isProjectOpen()) {
         title = ProjectManager::instance().projectName() + QStringLiteral(" — ") + title;
     }
-    
-    if (!m_document->url().isEmpty()) {
-        title = m_document->url().fileName() + QStringLiteral(" — ") + title;
+
+    auto *doc = activeDocument();
+    if (doc && !doc->url().isEmpty()) {
+        title = doc->url().fileName() + QStringLiteral(" — ") + title;
     } else {
         title = i18n("Untitled") + QStringLiteral(" — ") + title;
     }
-    if (m_document->isModified()) {
+    if (doc && doc->isModified()) {
         title.prepend(QStringLiteral("* "));
     }
     setWindowTitle(title);
 }
-
 void MainWindow::showCentralView(QWidget *widget)
 {
-    m_editorView->setVisible(widget == m_editorView);
+    m_editorSplitter->setVisible(widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
     m_corkboardView->setVisible(widget == m_corkboardView);
     m_imagePreview->setVisible(widget == m_imagePreview);
     m_diffView->setVisible(widget == m_diffView);
@@ -901,24 +1123,27 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     // This causes the bounds check to use wrong values, letting the popup extend
     // below the visible window area. We fix this by deferring a reposition after show.
     if (event->type() == QEvent::Show
-        && QString::fromLatin1(watched->metaObject()->className()).contains(QLatin1String("Completion"))
-        && m_editorView) {
+        && QString::fromLatin1(watched->metaObject()->className()).contains(QLatin1String("Completion"))) {
+        
+        auto *view = activeView();
+        if (!view) return false;
+
         QWidget *popup = qobject_cast<QWidget*>(watched);
         if (popup && popup->parentWidget()) {
             // Defer repositioning to after the Show event is fully processed
-            QTimer::singleShot(0, this, [this, popup]() {
-                if (!popup->isVisible() || !m_editorView) return;
+            QTimer::singleShot(0, this, [this, popup, view]() {
+                if (!popup->isVisible() || !view) return;
 
-                KTextEditor::Cursor cursor = m_editorView->cursorPosition();
-                QPoint cursorLocal = m_editorView->cursorToCoordinate(cursor);
+                KTextEditor::Cursor cursor = view->cursorPosition();
+                QPoint cursorLocal = view->cursorToCoordinate(cursor);
 
                 if (cursorLocal == QPoint(-1, -1)) return;
 
                 // Map cursor position to popup's parent coordinate space
-                QPoint cursorInParent = m_editorView->mapTo(popup->parentWidget(), cursorLocal);
+                QPoint cursorInParent = view->mapTo(popup->parentWidget(), cursorLocal);
 
                 // Estimate line height from the editor view's font
-                int lineHeight = m_editorView->fontMetrics().height() + 2;
+                int lineHeight = view->fontMetrics().height() + 2;
 
                 int x = popup->x(); // Keep Kate's x positioning
                 int y = cursorInParent.y() + lineHeight; // Below cursor
@@ -944,7 +1169,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     const auto evType = event->type();
     if (evType == QEvent::DragEnter || evType == QEvent::DragMove || evType == QEvent::Drop) {
         QWidget *w = qobject_cast<QWidget*>(watched);
-        if (w && m_editorView && (w == m_editorView || m_editorView->isAncestorOf(w))) {
+        auto *view = activeView();
+        if (w && view && (w == view || view->isAncestorOf(w))) {
             if (evType == QEvent::DragEnter) {
                 auto *e = static_cast<QDragEnterEvent*>(event);
                 if (e->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))
@@ -963,11 +1189,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 auto *e = static_cast<QDropEvent*>(event);
                 if (e->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))
                         && e->mimeData()->hasUrls()) {
-                    // Map drop position into editor-view coordinates and place the cursor there
-                    QPoint localPt = w->mapTo(m_editorView, e->position().toPoint());
-                    KTextEditor::Cursor cursor = m_editorView->coordinatesToCursor(localPt);
+                    // Map drop position into active view coordinates and place the cursor there
+                    QPoint localPt = w->mapTo(view, e->position().toPoint());
+                    KTextEditor::Cursor cursor = view->coordinatesToCursor(localPt);
                     if (cursor.isValid()) {
-                        m_editorView->setCursorPosition(cursor);
+                        view->setCursorPosition(cursor);
                     }
 
                     // Decode item pointers to get project names; pair each with its URL
@@ -990,6 +1216,23 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                     insertProjectLinksAtCursor(items);
                     e->acceptProposedAction();
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Middle click scrolling fix
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto *e = static_cast<QMouseEvent*>(event);
+        auto *w = qobject_cast<QWidget*>(watched);
+        auto *view = activeView();
+        if (w && view && (w == view || view->isAncestorOf(w))) {
+            if (e->button() == Qt::MiddleButton) {
+                QPoint localPt = w->mapTo(view, e->position().toPoint());
+                KTextEditor::Cursor cursor = view->coordinatesToCursor(localPt);
+                if (cursor.isValid()) {
+                    view->setCursorPosition(cursor);
                     return true;
                 }
             }
@@ -1019,14 +1262,25 @@ void MainWindow::saveSession()
 
     if (m_document && !m_document->url().isEmpty()) {
         settings.setValue(QStringLiteral("lastFile"), m_document->url().toString());
+        auto cursor = m_editorView->cursorPosition();
+        settings.setValue(QStringLiteral("cursorLine"), cursor.line());
+        settings.setValue(QStringLiteral("cursorColumn"), cursor.column());
     } else {
         settings.remove(QStringLiteral("lastFile"));
     }
 
-    if (m_editorView) {
-        auto cursor = m_editorView->cursorPosition();
-        settings.setValue(QStringLiteral("cursorLine"), cursor.line());
-        settings.setValue(QStringLiteral("cursorColumn"), cursor.column());
+    if (m_researchDocument && !m_researchDocument->url().isEmpty()) {
+        settings.setValue(QStringLiteral("lastResearchFile"), m_researchDocument->url().toString());
+        auto cursor = m_researchView->cursorPosition();
+        settings.setValue(QStringLiteral("researchCursorLine"), cursor.line());
+        settings.setValue(QStringLiteral("researchCursorColumn"), cursor.column());
+        settings.setValue(QStringLiteral("researchVisible"), m_researchView->isVisible());
+    } else {
+        settings.remove(QStringLiteral("lastResearchFile"));
+    }
+
+    if (m_editorSplitter) {
+        settings.setValue(QStringLiteral("editorSplitter"), m_editorSplitter->saveState());
     }
 
     // Save which sidebar panel is active
@@ -1076,6 +1330,25 @@ void MainWindow::restoreSession()
         }
     }
 
+    if (settings.contains(QStringLiteral("lastResearchFile"))) {
+        QUrl url(settings.value(QStringLiteral("lastResearchFile")).toString());
+        if (url.isValid() && url.isLocalFile() && QFile::exists(url.toLocalFile())) {
+            m_researchDocument->openUrl(url);
+            if (settings.value(QStringLiteral("researchVisible"), false).toBool()) {
+                m_researchView->show();
+            }
+            int line = settings.value(QStringLiteral("researchCursorLine"), 0).toInt();
+            int col = settings.value(QStringLiteral("researchCursorColumn"), 0).toInt();
+            if (m_researchView) {
+                m_researchView->setCursorPosition(KTextEditor::Cursor(line, col));
+            }
+        }
+    }
+
+    if (m_editorSplitter && settings.contains(QStringLiteral("editorSplitter"))) {
+        m_editorSplitter->restoreState(settings.value(QStringLiteral("editorSplitter")).toByteArray());
+    }
+
     // Restore active sidebar panel
     if (m_sidebar && settings.contains(QStringLiteral("sidebarPanel"))) {
         int panelId = settings.value(QStringLiteral("sidebarPanel")).toInt();
@@ -1087,12 +1360,14 @@ void MainWindow::restoreSession()
 
 void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &items)
 {
-    if (!m_document || !m_editorView || items.isEmpty()) return;
+    auto *doc = activeDocument();
+    auto *view = activeView();
+    if (!doc || !view || items.isEmpty()) return;
 
     // Base directory: directory of the open document, or the project root
     QString baseDir;
-    if (!m_document->url().isEmpty() && m_document->url().isLocalFile()) {
-        baseDir = QFileInfo(m_document->url().toLocalFile()).absolutePath();
+    if (!doc->url().isEmpty() && doc->url().isLocalFile()) {
+        baseDir = QFileInfo(doc->url().toLocalFile()).absolutePath();
     } else if (ProjectManager::instance().isProjectOpen()) {
         baseDir = ProjectManager::instance().projectPath();
     }
@@ -1122,7 +1397,7 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     if (parts.isEmpty()) return;
 
     const QString insertText = parts.join(QLatin1Char('\n'));
-    m_document->insertText(m_editorView->cursorPosition(), insertText);
+    doc->insertText(view->cursorPosition(), insertText);
 }
 
 void MainWindow::globalSettings()
@@ -1135,8 +1410,9 @@ void MainWindow::globalSettings()
 
 void MainWindow::aiExpand()
 {
-    if (!m_editorView || !m_chatPanel) return;
-    QString selection = m_editorView->selectionText();
+    auto *view = activeView();
+    if (!view || !m_chatPanel) return;
+    QString selection = view->selectionText();
     if (selection.isEmpty()) return;
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
@@ -1153,8 +1429,9 @@ void MainWindow::aiExpand()
 
 void MainWindow::aiRewrite()
 {
-    if (!m_editorView || !m_chatPanel) return;
-    QString selection = m_editorView->selectionText();
+    auto *view = activeView();
+    if (!view || !m_chatPanel) return;
+    QString selection = view->selectionText();
     if (selection.isEmpty()) return;
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
@@ -1171,8 +1448,9 @@ void MainWindow::aiRewrite()
 
 void MainWindow::aiSummarize()
 {
-    if (!m_editorView || !m_chatPanel) return;
-    QString selection = m_editorView->selectionText();
+    auto *view = activeView();
+    if (!view || !m_chatPanel) return;
+    QString selection = view->selectionText();
     if (selection.isEmpty()) return;
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
@@ -1189,22 +1467,28 @@ void MainWindow::aiSummarize()
 
 void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
 {
-    if (!m_document || m_document->url().toLocalFile() != filePath) return;
+    KTextEditor::Document *doc = nullptr;
+    if (m_document && m_document->url().toLocalFile() == filePath) doc = m_document;
+    else if (m_researchDocument && m_researchDocument->url().toLocalFile() == filePath) doc = m_researchDocument;
 
+    if (!doc) return;
+
+    // TODO: This currently clears ALL diagnostic ranges, which might affect the other editor.
+    // Ideally we'd store ranges per-document.
     for (auto *r : m_diagnosticRanges) {
         delete r;
     }
     m_diagnosticRanges.clear();
 
     for (const Diagnostic &d : diagnostics) {
-        if (d.line < 0 || d.line >= m_document->lines()) continue;
+        if (d.line < 0 || d.line >= doc->lines()) continue;
 
-        QString lineText = m_document->line(d.line);
+        QString lineText = doc->line(d.line);
         int startCol = lineText.length() - lineText.trimmed().length(); // Skip leading whitespace
         int endCol = lineText.length();
 
         KTextEditor::Range range(d.line, startCol, d.line, endCol);
-        auto *mr = m_document->newMovingRange(range);
+        auto *mr = doc->newMovingRange(range);
         
         KTextEditor::Attribute::Ptr attr(new KTextEditor::Attribute());
         if (d.severity == QLatin1String("error")) {
@@ -1244,6 +1528,99 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
     if (!view->selection()) {
         aiMenu->setEnabled(false);
         aiMenu->setToolTip(i18n("Please select text to use AI actions."));
+    }
+}
+
+void MainWindow::updateProjectStats()
+{
+    if (!ProjectManager::instance().isProjectOpen()) {
+        m_projectStatsStatus->hide();
+        return;
+    }
+
+    int totalWords = ProjectManager::instance().calculateTotalWordCount();
+    m_projectStatsStatus->setText(i18n("Project: %1 words").arg(totalWords));
+    m_projectStatsStatus->show();
+}
+
+static void collectProjectMarkdown(ProjectTreeItem *folder, QString &markdown, int &chapterCounter) {
+    if (!folder) return;
+    
+    bool isChapter = (folder->category == ProjectTreeItem::Chapter);
+
+    if (isChapter) {
+        chapterCounter++;
+        if (!markdown.isEmpty()) markdown += QStringLiteral("\n\n<div class=\"page-break\"></div>\n\n");
+        markdown += QStringLiteral("# Chapter %1: %2\n\n").arg(QString::number(chapterCounter), folder->name);
+    }
+
+    for (auto *child : folder->children) {
+        if (child->type == ProjectTreeItem::File) {
+            QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(child->path);
+            QFile file(fullPath);
+            if (file.open(QIODevice::ReadOnly)) {
+                if (!markdown.isEmpty() && child->category != ProjectTreeItem::Scene && !isChapter) {
+                     markdown += QStringLiteral("\n\n<div class=\"page-break\"></div>\n\n");
+                }
+                markdown += VariableManager::stripMetadata(QString::fromUtf8(file.readAll())) + QStringLiteral("\n\n");
+            }
+        } else {
+            collectProjectMarkdown(child, markdown, chapterCounter);
+        }
+    }
+}
+
+void MainWindow::updateProjectPreview()
+{
+    if (!m_previewPanel || !ProjectManager::instance().isProjectOpen()) return;
+
+    QString markdown;
+    auto treeData = ProjectManager::instance().tree();
+    ProjectTreeModel model;
+    model.setProjectData(treeData);
+    
+    // Find Manuscript folder
+    ProjectTreeItem *manuscript = nullptr;
+    ProjectTreeItem *root = model.itemFromIndex(QModelIndex());
+    for (auto *child : root->children) {
+        if (child->category == ProjectTreeItem::Manuscript) {
+            manuscript = child;
+            break;
+        }
+    }
+
+    if (manuscript) {
+        int chapterCounter = 0;
+        collectProjectMarkdown(manuscript, markdown, chapterCounter);
+    } else {
+        // Fallback to old behavior if no Manuscript folder exists
+        int chapterCounter = 0;
+        collectProjectMarkdown(root, markdown, chapterCounter);
+    }
+    
+    m_previewPanel->setMarkdown(markdown);
+}
+
+void MainWindow::toggleFocusMode()
+{
+    auto *focusAct = actionCollection()->action(QStringLiteral("focus_mode"));
+    bool active = focusAct->isChecked();
+
+    m_sidebar->setVisible(!active);
+    m_previewPanel->setVisible(!active && m_togglePreviewAction->isChecked());
+    m_breadcrumbBar->setVisible(!active);
+    m_problemsPanel->setVisible(!active);
+    statusBar()->setVisible(!active);
+    
+    // Hide toolbars
+    for (auto *toolbar : findChildren<KToolBar*>()) {
+        toolbar->setVisible(!active);
+    }
+
+    if (active) {
+        showFullScreen();
+    } else {
+        showNormal();
     }
 }
 
