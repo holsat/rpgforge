@@ -42,6 +42,7 @@ private:
     void load();
     QWidget* createLLMTab();
     QWidget* createPromptsTab();
+    QWidget* createAnalyzerTab();
 
     QTabWidget *m_tabWidget;
 
@@ -52,11 +53,18 @@ private:
     QLineEdit *m_openaiEndpointEdit;
     QLineEdit *m_anthropicKeyEdit;
     QLineEdit *m_anthropicModelEdit;
+    QLineEdit *m_anthropicEndpointEdit;
     QLineEdit *m_ollamaModelEdit;
     QLineEdit *m_ollamaEndpointEdit;
+    QLineEdit *m_embeddingModelEdit;
 
     // Prompts
     QListWidget *m_promptsList;
+
+    // Analyzer
+    QComboBox *m_analyzerRunModeCombo;
+    QComboBox *m_analyzerProviderCombo;
+    QLineEdit *m_analyzerModelEdit;
 };
 
 #endif // SETTINGSDIALOG_H

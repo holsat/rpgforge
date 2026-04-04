@@ -14,3 +14,11 @@ icons/option*.svg
 icons/rpgforge_*.png
 research/
 dbg.txt
+
+# RPG Forge Data
+.rpgforge-vectors.db*
+.env
+.env.*
+*.db-shm
+*.db-wal
+

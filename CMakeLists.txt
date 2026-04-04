@@ -13,7 +13,7 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql)
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -79,6 +79,12 @@ add_executable(rpgforge
     src/metadatadialog.h
     src/llmservice.cpp
     src/llmservice.h
+    src/knowledgebase.cpp
+    src/knowledgebase.h
+    src/analyzerservice.cpp
+    src/analyzerservice.h
+    src/problemspanel.cpp
+    src/problemspanel.h
     src/settingsdialog.cpp
     src/settingsdialog.h
     src/chatpanel.cpp
@@ -107,6 +113,7 @@ target_link_libraries(rpgforge
     Qt6::WebEngineWidgets
     Qt6::Qml
     Qt6::Concurrent
+    Qt6::Sql
     KF6::CoreAddons
     KF6::I18n
     KF6::XmlGui

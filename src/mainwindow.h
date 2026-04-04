@@ -39,6 +39,7 @@ class PreviewPanel;
 class ProjectTreePanel;
 class VariablesPanel;
 class ChatPanel;
+class ProblemsPanel;
 class Sidebar;
 class QWebEngineView;
 class QPushButton;
@@ -47,9 +48,11 @@ class QUrl;
 class QSplitter;
 class QAction;
 class QVBoxLayout;
+class QLabel;
 #include <QPair>
 #include <QList>
 #include <QUrl>
+#include "analyzerservice.h"
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -94,6 +97,13 @@ private Q_SLOTS:
     void aiExpand();
     void aiRewrite();
     void aiSummarize();
+    void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
+
+public:
+    KTextEditor::Document* editorDocument() const { return m_document; }
+
+private Q_SLOTS:
+    void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
 
 private:
     void setupEditor();
@@ -124,12 +134,16 @@ private:
     PreviewPanel *m_previewPanel = nullptr;
     VariablesPanel *m_variablesPanel = nullptr;
     ChatPanel *m_chatPanel = nullptr;
+    ProblemsPanel *m_problemsPanel = nullptr;
+    QLabel *m_diagnosticsStatus = nullptr;
 
     QSplitter *m_mainSplitter = nullptr;
+    QSplitter *m_vSplitter = nullptr;
     QAction *m_togglePreviewAction = nullptr;
 
     QTimer *m_cursorDebounce = nullptr;
     QTimer *m_textChangeDebounce = nullptr;
+    QTimer *m_analyzerDebounce = nullptr;
 
     int m_fileExplorerId = -1;
     int m_projectTreeId = -1;
@@ -139,6 +153,7 @@ private:
     int m_chatId = -1;
 
     QList<KTextEditor::MovingRange*> m_errorRanges;
+    QList<KTextEditor::MovingRange*> m_diagnosticRanges;
 };
 
 #endif // MAINWINDOW_H

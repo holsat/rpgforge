@@ -23,6 +23,8 @@
 #include <QString>
 #include <QList>
 #include <QPair>
+#include <QVector>
+#include <functional>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -81,6 +83,26 @@ public:
      * @brief Retrieves an API key from KWallet.
      */
     QString apiKey(LLMProvider provider) const;
+
+    /**
+     * @brief Generates an embedding for the given text.
+     */
+    void generateEmbedding(LLMProvider provider, const QString &model, const QString &text, std::function<void(const QVector<float>&)> callback);
+
+    /**
+     * @brief Sends a request to the LLM without interrupting the active stream, useful for background tasks.
+     */
+    void sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback);
+
+    /**
+     * @brief Pings the Anthropic API to verify connectivity.
+     */
+    void pingAnthropic(std::function<void(bool, const QString&)> callback);
+
+    /**
+     * @brief Fetches available models from the provider.
+     */
+    void fetchModels(LLMProvider provider, std::function<void(const QStringList&)> callback);
 
 Q_SIGNALS:
     void requestStarted();

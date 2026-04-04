@@ -38,6 +38,9 @@
 #include "projectsettingsdialog.h"
 #include "settingsdialog.h"
 #include "chatpanel.h"
+#include "problemspanel.h"
+#include "analyzerservice.h"
+#include "knowledgebase.h"
 #include "metadatadialog.h"
 #include "newprojectdialog.h"
 #include "projecttreemodel.h"
@@ -72,6 +75,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWebEngineView>
+
+#include <QLabel>
+#include <QStatusBar>
 
 MainWindow::MainWindow(QWidget *parent)
     : KXmlGuiWindow(parent)
@@ -129,6 +135,17 @@ void MainWindow::setupEditor()
     m_textChangeDebounce->setInterval(500);
     connect(m_textChangeDebounce, &QTimer::timeout, this, &MainWindow::updateErrorHighlighting);
 
+    m_analyzerDebounce = new QTimer(this);
+    m_analyzerDebounce->setSingleShot(true);
+    m_analyzerDebounce->setInterval(5000); // 5s debounce for LLM analysis
+    connect(m_analyzerDebounce, &QTimer::timeout, this, [this]() {
+        if (m_document && m_document->url().isLocalFile()) {
+            AnalyzerService::instance().analyzeDocument(m_document->url().toLocalFile(), m_document->text());
+        }
+    });
+
+    connect(&AnalyzerService::instance(), &AnalyzerService::diagnosticsUpdated, this, &MainWindow::onDiagnosticsUpdated);
+
     // Connect signals
     connect(m_document, &KTextEditor::Document::textChanged,
             this, &MainWindow::onTextChanged);
@@ -169,6 +186,8 @@ void MainWindow::setupEditor()
         for (QWidget *child : editorChildren) {
             child->installEventFilter(this);
         }
+
+        connect(m_editorView, &KTextEditor::View::contextMenuAboutToShow, this, &MainWindow::showEditorContextMenu);
     });
 }
 
@@ -209,6 +228,13 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
         i18n("AI Writing Assistant"),
         m_chatPanel);
+
+    connect(m_chatPanel, &ChatPanel::insertTextAtCursor, this, [this](const QString &text) {
+        if (m_document && m_editorView) {
+            m_document->insertText(m_editorView->cursorPosition(), text);
+            m_editorView->setFocus();
+        }
+    });
 
     connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
 
@@ -275,10 +301,24 @@ void MainWindow::setupSidebar()
     m_mainSplitter->setStretchFactor(1, 1);
     m_mainSplitter->setStretchFactor(2, 1);
 
-    hbox->addWidget(m_mainSplitter, 1); 
+    m_problemsPanel = new ProblemsPanel(this);
+
+    m_diagnosticsStatus = new QLabel(i18n("0 Errors, 0 Warnings, 0 Info"), this);
+    statusBar()->addPermanentWidget(m_diagnosticsStatus);
+
+    connect(m_problemsPanel, &ProblemsPanel::statsChanged, this, [this](int errors, int warnings, int infos) {
+        m_diagnosticsStatus->setText(i18n("%1 Errors, %2 Warnings, %3 Info").arg(errors).arg(warnings).arg(infos));
+    });
+
+    m_vSplitter = new QSplitter(Qt::Vertical, centralWidget);
+    m_vSplitter->addWidget(m_mainSplitter);
+    m_vSplitter->addWidget(m_problemsPanel);
+    m_vSplitter->setStretchFactor(0, 1);
+    m_vSplitter->setStretchFactor(1, 0);
+
+    hbox->addWidget(m_vSplitter, 1);
 
     setCentralWidget(centralWidget);
-
     // Wire up connections
     connect(m_fileExplorer, &FileExplorer::fileActivated,
             this, &MainWindow::openFileFromUrl);
@@ -343,16 +383,23 @@ void MainWindow::setupSidebar()
         }
     });
 
+    connect(m_problemsPanel, &ProblemsPanel::issueActivated, this, [this](const QString &filePath, int line) {
+        openFileFromUrl(QUrl::fromLocalFile(filePath));
+        navigateToLine(line);
+    });
+
     // Clear the corkboard when a project opens or closes so it never holds
     // pointers into a tree that has been rebuilt/destroyed.
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
         if (m_corkboardView) m_corkboardView->setFolder(nullptr);
+        KnowledgeBase::instance().initForProject(ProjectManager::instance().projectPath());
     });
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
         if (m_corkboardView) {
             m_corkboardView->setFolder(nullptr);
             showCentralView(m_editorView);
         }
+        KnowledgeBase::instance().close();
     });
 
     // Reload preview stylesheet when project settings change (e.g., stylesheet path)
@@ -693,8 +740,9 @@ void MainWindow::compileToPdf()
 void MainWindow::onTextChanged()
 {
     // Minimal work during typing to prevent hangs/crashes
-    if (m_document && m_textChangeDebounce) {
-        m_textChangeDebounce->start();
+    if (m_document) {
+        if (m_textChangeDebounce) m_textChangeDebounce->start();
+        if (m_analyzerDebounce) m_analyzerDebounce->start();
     }
 }
 
@@ -1138,4 +1186,65 @@ void MainWindow::aiSummarize()
     m_sidebar->showPanel(m_chatId);
     m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
 }
+
+void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
+{
+    if (!m_document || m_document->url().toLocalFile() != filePath) return;
+
+    for (auto *r : m_diagnosticRanges) {
+        delete r;
+    }
+    m_diagnosticRanges.clear();
+
+    for (const Diagnostic &d : diagnostics) {
+        if (d.line < 0 || d.line >= m_document->lines()) continue;
+
+        QString lineText = m_document->line(d.line);
+        int startCol = lineText.length() - lineText.trimmed().length(); // Skip leading whitespace
+        int endCol = lineText.length();
+
+        KTextEditor::Range range(d.line, startCol, d.line, endCol);
+        auto *mr = m_document->newMovingRange(range);
+        
+        KTextEditor::Attribute::Ptr attr(new KTextEditor::Attribute());
+        if (d.severity == QLatin1String("error")) {
+            attr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+            attr->setUnderlineColor(Qt::red);
+        } else if (d.severity == QLatin1String("warning")) {
+            attr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+            attr->setUnderlineColor(Qt::yellow);
+        } else {
+            attr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+            attr->setUnderlineColor(Qt::blue);
+        }
+        
+        mr->setAttribute(attr);
+        mr->setAttributeOnlyForViews(true);
+        
+        m_diagnosticRanges.append(mr);
+    }
+}
+
+void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
+{
+    if (!view || !menu) return;
+
+    menu->addSeparator();
+    auto *aiMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("chat-conversation")), i18n("AI Assistant"));
+    
+    auto *expand = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Expand Selection"));
+    connect(expand, &QAction::triggered, this, &MainWindow::aiExpand);
+    
+    auto *rewrite = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Rewrite Selection"));
+    connect(rewrite, &QAction::triggered, this, &MainWindow::aiRewrite);
+    
+    auto *summarize = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Summarize Selection"));
+    connect(summarize, &QAction::triggered, this, &MainWindow::aiSummarize);
+
+    if (!view->selection()) {
+        aiMenu->setEnabled(false);
+        aiMenu->setToolTip(i18n("Please select text to use AI actions."));
+    }
+}
+
 
