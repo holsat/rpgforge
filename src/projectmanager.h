@@ -42,6 +42,7 @@ public:
 
     bool openProject(const QString &filePath);
     bool createProject(const QString &dirPath, const QString &projectName);
+    void setupDefaultProject(const QString &dirPath, const QString &projectName);
     void closeProject();
     bool saveProject();
 

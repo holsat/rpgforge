@@ -33,6 +33,7 @@ public:
     ~CorkboardView() override;
 
     void setFolder(ProjectTreeItem *folderItem);
+    ProjectTreeItem* currentFolder() const { return m_currentFolder; }
 
 Q_SIGNALS:
     void fileActivated(const QString &relativePath);

@@ -46,6 +46,9 @@
 #include "projecttreemodel.h"
 #include "sidebar.h"
 #include "synopsisservice.h"
+#include "onboardingwizard.h"
+#include "scrivenerimporter.h"
+#include "documentconverter.h"
 
 #include <KActionCollection>
 #include <KLocalizedString>
@@ -70,12 +73,15 @@
 #include <QMessageBox>
 #include <QRegularExpression>
 #include <QProgressDialog>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWidgetAction>
+#include <QLineEdit>
 #include <QWebEngineView>
 
 #include <QLabel>
@@ -93,8 +99,34 @@ MainWindow::MainWindow(QWidget *parent)
     // Merge KTextEditor::View's GUI (Edit, View, Selection, Tools menus)
     guiFactory()->addClient(m_editorView);
 
+    if (m_diffView && m_diffView->part()) {
+        guiFactory()->addClient(m_diffView->part());
+    }
+
+    // Hide duplicate save actions from the merged client to avoid toolbar clutter
+    if (auto *editorAction = m_editorView->action(QStringLiteral("file_save"))) editorAction->setVisible(false);
+    if (auto *editorAction = m_editorView->action(QStringLiteral("file_save_as"))) editorAction->setVisible(false);
+    if (m_researchView) {
+        if (auto *editorAction = m_researchView->action(QStringLiteral("file_save"))) editorAction->setVisible(false);
+        if (auto *editorAction = m_researchView->action(QStringLiteral("file_save_as"))) editorAction->setVisible(false);
+    }
+
     updateTitle();
     resize(1400, 900);
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    if (!settings.value(QStringLiteral("firstRunComplete"), false).toBool()) {
+        OnboardingWizard wizard(this);
+        if (wizard.exec() == QDialog::Accepted) {
+            // After successful onboarding, if a project was created, open the README
+            if (ProjectManager::instance().isProjectOpen()) {
+                QString readmePath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(QStringLiteral("research/README.md"));
+                if (QFile::exists(readmePath)) {
+                    openFileFromUrl(QUrl::fromLocalFile(readmePath));
+                }
+            }
+        }
+    }
 
     // Restore previous session after everything is set up
     restoreSession();
@@ -253,7 +285,7 @@ void MainWindow::setupSidebar()
     m_sidebar = new Sidebar(this);
     m_fileExplorerId = m_sidebar->addPanel(
         QIcon::fromTheme(QStringLiteral("folder-explorer"), QIcon::fromTheme(QStringLiteral("folder"))),
-        QStringLiteral("Explorer"),
+        i18n("Project Explorer"),
         explorerStack);
     m_outlineId = m_sidebar->addPanel(
         QIcon::fromTheme(QStringLiteral("view-list-tree")),
@@ -263,11 +295,6 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("code-variable"), QIcon::fromTheme(QStringLiteral("variable"))),
         QStringLiteral("Variables"),
         m_variablesPanel);
-    m_gitId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("vcs-branch"),
-                         QIcon::fromTheme(QStringLiteral("git"))),
-        QStringLiteral("Git / Versioning"),
-        m_gitPanel);
     m_chatId = m_sidebar->addPanel(
         QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
         i18n("AI Writing Assistant"),
@@ -349,6 +376,16 @@ void MainWindow::setupSidebar()
 
     SynopsisService::instance().setModel(m_projectTree->model());
 
+    connect(m_projectTree->model(), &ProjectTreeModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
+        if (roles.contains(ProjectTreeModel::SynopsisRole) || roles.contains(ProjectTreeModel::StatusRole)) {
+            // If the corkboard is showing a folder that contains one of these items, refresh it
+            // Simple approach: if corkboard is visible, just refresh it.
+            if (m_corkboardView->isVisible()) {
+                m_corkboardView->setFolder(m_corkboardView->currentFolder());
+            }
+        }
+    });
+
     m_diagnosticsStatus = new QLabel(i18n("0 Errors, 0 Warnings, 0 Info"), this);
     m_diagnosticsStatus->setContentsMargins(5, 0, 5, 0);
     statusBar()->addPermanentWidget(m_diagnosticsStatus);
@@ -362,8 +399,43 @@ void MainWindow::setupSidebar()
     statusBar()->addPermanentWidget(m_projectStatsStatus);
     m_projectStatsStatus->hide(); // only shown if project open
 
+    m_syncStatusLabel = new QLabel(this);
+    m_syncStatusLabel->setContentsMargins(5, 0, 5, 0);
+    statusBar()->addWidget(m_syncStatusLabel);
+    m_syncStatusLabel->hide();
+
+    m_syncProgressBar = new QProgressBar(this);
+    m_syncProgressBar->setMaximumWidth(150);
+    m_syncProgressBar->setMaximumHeight(15);
+    m_syncProgressBar->setTextVisible(false);
+    statusBar()->addWidget(m_syncProgressBar);
+    m_syncProgressBar->hide();
+
+    connect(m_projectTree, &ProjectTreePanel::syncStarted, this, [this]() {
+        m_syncStatusLabel->setText(i18n("Syncing..."));
+        m_syncStatusLabel->show();
+        m_syncProgressBar->setValue(0);
+        m_syncProgressBar->show();
+    });
+
+    connect(m_projectTree, &ProjectTreePanel::syncProgress, this, [this](int value, const QString &message) {
+        m_syncProgressBar->setValue(value);
+        m_syncStatusLabel->setText(message);
+    });
+
+    connect(m_projectTree, &ProjectTreePanel::syncFinished, this, [this](bool success, const QString &message) {
+        if (!success) {
+            m_syncStatusLabel->setText(i18n("Sync Failed: %1", message));
+            QTimer::singleShot(5000, m_syncStatusLabel, &QWidget::hide);
+        } else {
+            m_syncStatusLabel->setText(i18n("Sync Complete"));
+            QTimer::singleShot(3000, m_syncStatusLabel, &QWidget::hide);
+        }
+        m_syncProgressBar->hide();
+    });
+
     connect(m_problemsPanel, &ProblemsPanel::statsChanged, this, [this](int errors, int warnings, int infos) {
-        m_diagnosticsStatus->setText(i18n("%1 Errors, %2 Warnings, %3 Info").arg(errors).arg(warnings).arg(infos));
+        m_diagnosticsStatus->setText(i18n("%1 Errors, %2 Warnings, %3 Info", errors, warnings, infos));
     });
 
     m_vSplitter = new QSplitter(Qt::Vertical, centralWidget);
@@ -489,10 +561,10 @@ void MainWindow::setupSidebar()
 
 void MainWindow::setupActions()
 {
-    actionCollection()->addAction(KStandardAction::New, QStringLiteral("file_new"), this, SLOT(newFile()));
-    actionCollection()->addAction(KStandardAction::Open, QStringLiteral("file_open"), this, SLOT(openFile()));
-    auto *saveAct = KStandardAction::save(this, &MainWindow::saveFile, actionCollection());
-    actionCollection()->addAction(KStandardAction::SaveAs, QStringLiteral("file_save_as"), this, SLOT(saveFileAs()));
+    KStandardAction::openNew(this, &MainWindow::newFile, actionCollection());
+    KStandardAction::open(this, &MainWindow::openFile, actionCollection());
+    KStandardAction::save(this, &MainWindow::saveFile, actionCollection());
+    KStandardAction::saveAs(this, &MainWindow::saveFileAs, actionCollection());
     
     auto *newProjectAct = new QAction(this);
     newProjectAct->setText(i18n("New Project..."));
@@ -517,6 +589,18 @@ void MainWindow::setupActions()
     closeProjectAct->setIcon(QIcon::fromTheme(QStringLiteral("project-development-close")));
     actionCollection()->addAction(QStringLiteral("project_close"), closeProjectAct);
     connect(closeProjectAct, &QAction::triggered, this, &MainWindow::closeProject);
+
+    auto *importScrivenerAct = new QAction(this);
+    importScrivenerAct->setText(i18n("Import Scrivener Project..."));
+    importScrivenerAct->setIcon(QIcon::fromTheme(QStringLiteral("document-import")));
+    actionCollection()->addAction(QStringLiteral("project_import_scrivener"), importScrivenerAct);
+    connect(importScrivenerAct, &QAction::triggered, this, &MainWindow::importScrivener);
+
+    auto *importWordAct = new QAction(this);
+    importWordAct->setText(i18n("Import Word Documents..."));
+    importWordAct->setIcon(QIcon::fromTheme(QStringLiteral("document-import")));
+    actionCollection()->addAction(QStringLiteral("project_import_word"), importWordAct);
+    connect(importWordAct, &QAction::triggered, this, &MainWindow::importWord);
 
     auto *projectSettingsAct = new QAction(this);
     projectSettingsAct->setText(i18n("Project Settings..."));
@@ -554,8 +638,6 @@ void MainWindow::setupActions()
 
     KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
 
-    actionCollection()->setDefaultShortcut(saveAct, Qt::CTRL | Qt::Key_S);
-
     m_togglePreviewAction = new QAction(this);
     m_togglePreviewAction->setText(i18n("Show Preview"));
     m_togglePreviewAction->setIcon(QIcon::fromTheme(QStringLiteral("view-split-left-right")));
@@ -564,6 +646,19 @@ void MainWindow::setupActions()
     actionCollection()->addAction(QStringLiteral("toggle_preview"), m_togglePreviewAction);
     actionCollection()->setDefaultShortcut(m_togglePreviewAction, Qt::CTRL | Qt::Key_P);
     connect(m_togglePreviewAction, &QAction::triggered, this, &MainWindow::togglePreview);
+
+    auto *searchBoxAction = new QWidgetAction(this);
+    m_searchEdit = new QLineEdit(this);
+    m_searchEdit->setPlaceholderText(i18n("Search document or project..."));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setFixedWidth(250);
+    searchBoxAction->setDefaultWidget(m_searchEdit);
+    actionCollection()->addAction(QStringLiteral("toolbar_search"), searchBoxAction);
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, [this]() {
+        if (m_searchEdit) {
+            performSearch(m_searchEdit->text());
+        }
+    });
 
     auto *projectPreviewAct = new QAction(this);
     projectPreviewAct->setText(i18n("Project Preview Mode"));
@@ -731,86 +826,7 @@ void MainWindow::newProject()
         if (!dir.isEmpty() && !name.isEmpty()) {
             if (ProjectManager::instance().createProject(dir, name)) {
                 m_fileExplorer->setRootPath(dir);
-                auto *model = m_projectTree->model();
-                
-                // Add top level folder with project name
-                QModelIndex rootIdx = model->addFolder(name);
-
-                // 1. Manuscript
-                QModelIndex manuscriptIdx = model->addFolder(i18n("Manuscript"), rootIdx);
-                model->setData(manuscriptIdx, ProjectTreeItem::Manuscript, ProjectTreeModel::CategoryRole);
-                
-                QModelIndex chapterIdx = model->addFolder(i18n("Chapter"), manuscriptIdx);
-                model->setData(chapterIdx, ProjectTreeItem::Chapter, ProjectTreeModel::CategoryRole);
-                
-                QString scenePath = QStringLiteral("manuscript/scene1.md");
-                QDir(dir).mkpath(QStringLiteral("manuscript"));
-                QFile sceneFile(QDir(dir).absoluteFilePath(scenePath));
-                if (sceneFile.open(QIODevice::WriteOnly)) {
-                    sceneFile.write("# New Scene\n\nWrite your story here...");
-                    sceneFile.close();
-                }
-                QModelIndex sceneIdx = model->addFile(i18n("Scene 1"), scenePath, chapterIdx);
-                model->setData(sceneIdx, ProjectTreeItem::Scene, ProjectTreeModel::CategoryRole);
-
-                // 2. Research
-                QModelIndex researchIdx = model->addFolder(i18n("Research"), rootIdx);
-                model->setData(researchIdx, ProjectTreeItem::Research, ProjectTreeModel::CategoryRole);
-                
-                auto addResearchFolder = [&](const QString &name, ProjectTreeItem::Category cat) {
-                    QModelIndex idx = model->addFolder(name, researchIdx);
-                    model->setData(idx, cat, ProjectTreeModel::CategoryRole);
-                };
-                addResearchFolder(i18n("Characters"), ProjectTreeItem::Characters);
-                addResearchFolder(i18n("Places"), ProjectTreeItem::Places);
-                addResearchFolder(i18n("Cultures"), ProjectTreeItem::Cultures);
-
-                // Add README.md to Research
-                QString readmePath = QStringLiteral("research/README.md");
-                QDir(dir).mkpath(QStringLiteral("research"));
-                QFile readmeFile(QDir(dir).absoluteFilePath(readmePath));
-                if (readmeFile.open(QIODevice::WriteOnly)) {
-                    const char* readmeContent = R"markdown(# Welcome to your RPG Forge Project
-
-This README provides a quick overview of how to use RPG Forge to create your masterpiece.
-
-## 🚀 Key Concepts
-
-### 1. The Manuscript
-All your story and rule files should live under the **Manuscript** folder. RPG Forge automatically assembles these files into your final document. 
-*   **Chapters:** Folders categorized as "Chapter" are automatically numbered during export.
-*   **Scenes:** Individual files within chapters that make up your narrative flow.
-
-### 2. Research & Lore
-The **Research** folder is for your worldbuilding notes. Files here are *not* compiled into the final manuscript, but they are always available for reference while you write.
-
-### 3. Versions & Explorations
-Every save is a checkpoint. Use the **Exploration** menu in the Project Tree to create "branches" where you can try out different narrative directions without breaking your main story.
-
-## ✍️ Writing Tips
-
-*   **Focus Mode:** Press `Ctrl+Shift+F` to hide the UI and focus on your words.
-*   **Linking:** Drag a file from the project tree into your document to create a link.
-*   **Variables:** Define stats in your document header (YAML) and use them like `{{hp_base}}` in your text.
-
-## 🛠 Compilation
-
-Click the **Compile** button in the toolbar to generate a professional PDF of your manuscript.
-)markdown";
-                    readmeFile.write(readmeContent);
-                    readmeFile.close();
-                }
-                QModelIndex readmeIdx = model->addFile(i18n("Project Guide"), readmePath, researchIdx);
-                model->setData(readmeIdx, ProjectTreeItem::Notes, ProjectTreeModel::CategoryRole);
-
-                // 3. Stylesheets
-                QModelIndex stylesheetsIdx = model->addFolder(i18n("Stylesheets"), rootIdx);
-                model->setData(stylesheetsIdx, ProjectTreeItem::Stylesheet, ProjectTreeModel::CategoryRole);
-                model->addFile(QStringLiteral("style.css"), QStringLiteral("stylesheets/style.css"), stylesheetsIdx);
-
-                ProjectManager::instance().setTree(model->projectData());
-                ProjectManager::instance().saveProject();
-                
+                ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
             }
         }
@@ -968,7 +984,7 @@ void MainWindow::updateErrorHighlighting()
     // 3. Update word count
     // Simple word count: split by whitespace and filter out empty strings
     int wordCount = contentOnly.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).count();
-    m_wordCountStatus->setText(i18n("Words: %1").arg(wordCount));
+    m_wordCountStatus->setText(i18n("Words: %1", wordCount));
 
     // 4. Highlight undefined variable references with red squiggly underline
     qDeleteAll(m_errorRanges);
@@ -1112,6 +1128,45 @@ void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, con
     }
     showCentralView(m_diffView);
     if (m_previewPanel) m_previewPanel->hide();
+}
+
+void MainWindow::performSearch(const QString &text)
+{
+    if (text.isEmpty()) return;
+
+    auto *view = activeView();
+    auto *doc = activeDocument();
+
+    if (view && doc && !doc->url().isEmpty()) {
+        // Document Search: Use KTextEditor's search functionality
+        KTextEditor::SearchOptions options = KTextEditor::Default;
+        KTextEditor::Cursor start = view->cursorPosition();
+        
+        // Find next occurrence
+        QList<KTextEditor::Range> results = doc->searchText(KTextEditor::Range(start, doc->documentEnd()), text, options);
+        KTextEditor::Range range = results.isEmpty() ? KTextEditor::Range::invalid() : results.first();
+        
+        if (!range.isValid()) {
+            // Wrap around
+            results = doc->searchText(KTextEditor::Range(doc->documentRange().start(), start), text, options);
+            range = results.isEmpty() ? KTextEditor::Range::invalid() : results.first();
+        }
+
+        if (range.isValid()) {
+            view->setSelection(range);
+            view->setCursorPosition(range.start());
+        } else {
+            // Not found in current document, fall back to global search if project is open
+            if (ProjectManager::instance().isProjectOpen()) {
+                m_sidebar->showPanel(m_chatId);
+                m_chatPanel->askAI(i18n("Search project for: %1", text));
+            }
+        }
+    } else if (ProjectManager::instance().isProjectOpen()) {
+        // Global Search: Ask AI / KnowledgeBase via Chat Panel
+        m_sidebar->showPanel(m_chatId);
+        m_chatPanel->askAI(i18n("Search project for: %1", text));
+    }
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -1513,6 +1568,14 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
 {
     if (!view || !menu) return;
 
+    // Check if we've already added the AI menu to this specific QMenu object.
+    // KTextEditor sometimes reuses the menu or different plugins add to it.
+    for (auto *action : menu->actions()) {
+        if (action->text() == i18n("AI Assistant") || action->menu() && action->menu()->title() == i18n("AI Assistant")) {
+            return;
+        }
+    }
+
     menu->addSeparator();
     auto *aiMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("chat-conversation")), i18n("AI Assistant"));
     
@@ -1525,10 +1588,88 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
     auto *summarize = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Summarize Selection"));
     connect(summarize, &QAction::triggered, this, &MainWindow::aiSummarize);
 
-    if (!view->selection()) {
+    if (view->selectionText().isEmpty()) {
         aiMenu->setEnabled(false);
         aiMenu->setToolTip(i18n("Please select text to use AI actions."));
     }
+}
+
+void MainWindow::importScrivener()
+{
+    QString scrivPath = QFileDialog::getExistingDirectory(this, i18n("Select Scrivener Project (.scriv)"), QDir::homePath());
+    if (scrivPath.isEmpty()) return;
+
+    if (!ProjectManager::instance().isProjectOpen()) {
+        QMessageBox::warning(this, i18n("No Project Open"), i18n("Please open or create an RPG Forge project before importing."));
+        return;
+    }
+
+    ScrivenerImporter importer;
+    auto *progressDialog = new QProgressDialog(i18n("Importing Scrivener Project..."), i18n("Cancel"), 0, 100, this);
+    progressDialog->setWindowModality(Qt::WindowModal);
+    
+    connect(&importer, &ScrivenerImporter::progress, progressDialog, &QProgressDialog::setValue);
+    connect(&importer, &ScrivenerImporter::progress, progressDialog, [progressDialog](int, const QString &message) {
+        progressDialog->setLabelText(message);
+    });
+
+    importer.import(scrivPath, ProjectManager::instance().projectPath(), m_projectTree->model());
+    
+    ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+    ProjectManager::instance().saveProject();
+    
+    progressDialog->close();
+    delete progressDialog;
+    
+    QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
+}
+
+void MainWindow::importWord()
+{
+    QStringList files = QFileDialog::getOpenFileNames(this, i18n("Select Word/RTF Documents"), QDir::homePath(), 
+                                                    i18n("Documents (*.docx *.rtf *.pdf);;All Files (*)"));
+    if (files.isEmpty()) return;
+
+    if (!ProjectManager::instance().isProjectOpen()) {
+        QMessageBox::warning(this, i18n("No Project Open"), i18n("Please open or create an RPG Forge project before importing."));
+        return;
+    }
+
+    DocumentConverter converter;
+    QString projectDir = ProjectManager::instance().projectPath();
+    QString mediaDir = projectDir + QStringLiteral("/media");
+    
+    // Import into currently selected folder if possible
+    QModelIndex parentIdx = m_projectTree->currentIndex();
+    
+    for (const QString &file : files) {
+        QFileInfo info(file);
+        QString safeName = DocumentConverter::sanitizePrefix(info.baseName());
+        auto result = converter.convertToMarkdown(file, safeName, mediaDir);
+        
+        if (result.success) {
+            QString relPath = safeName + QStringLiteral(".md");
+            if (parentIdx.isValid()) {
+                ProjectTreeItem *parent = m_projectTree->model()->itemFromIndex(parentIdx);
+                relPath = parent->path + QDir::separator() + relPath;
+            }
+            
+            QString absPath = QDir(projectDir).absoluteFilePath(relPath);
+            QDir().mkpath(QFileInfo(absPath).absolutePath());
+            
+            QFile outFile(absPath);
+            if (outFile.open(QIODevice::WriteOnly)) {
+                outFile.write(result.markdown.toUtf8());
+                outFile.close();
+                m_projectTree->model()->addFile(info.baseName(), relPath, parentIdx);
+            }
+        }
+    }
+    
+    ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+    ProjectManager::instance().saveProject();
+    
+    QMessageBox::information(this, i18n("Import Complete"), i18n("%1 documents imported successfully.", files.count()));
 }
 
 void MainWindow::updateProjectStats()
@@ -1539,7 +1680,7 @@ void MainWindow::updateProjectStats()
     }
 
     int totalWords = ProjectManager::instance().calculateTotalWordCount();
-    m_projectStatsStatus->setText(i18n("Project: %1 words").arg(totalWords));
+    m_projectStatsStatus->setText(i18n("Project: %1 words", totalWords));
     m_projectStatsStatus->show();
 }
 
@@ -1579,7 +1720,7 @@ void MainWindow::updateProjectPreview()
     ProjectTreeModel model;
     model.setProjectData(treeData);
     
-    // Find Manuscript folder
+    // Find Manuscript folder - STRICTLY limit to this
     ProjectTreeItem *manuscript = nullptr;
     ProjectTreeItem *root = model.itemFromIndex(QModelIndex());
     for (auto *child : root->children) {
@@ -1593,9 +1734,8 @@ void MainWindow::updateProjectPreview()
         int chapterCounter = 0;
         collectProjectMarkdown(manuscript, markdown, chapterCounter);
     } else {
-        // Fallback to old behavior if no Manuscript folder exists
-        int chapterCounter = 0;
-        collectProjectMarkdown(root, markdown, chapterCounter);
+        // If no Manuscript folder exists, show a helpful message instead of the whole project
+        markdown = i18n("> **Note:** To see a project preview, please designate a folder as your **Manuscript** in the Project Explorer.");
     }
     
     m_previewPanel->setMarkdown(markdown);

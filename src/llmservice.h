@@ -104,6 +104,12 @@ public:
      */
     void fetchModels(LLMProvider provider, std::function<void(const QStringList&)> callback);
 
+    /**
+     * @brief Pulls (installs) a model from Ollama.
+     * Only applicable for Ollama provider.
+     */
+    void pullModel(const QString &modelName, std::function<void(double progress, const QString &status)> progressCallback, std::function<void(bool success, const QString &error)> completionCallback);
+
 Q_SIGNALS:
     void requestStarted();
     void responseChunk(const QString &text);

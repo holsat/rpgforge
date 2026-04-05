@@ -69,9 +69,10 @@ void SynopsisService::scanProject()
 {
     if (!m_model || !ProjectManager::instance().isProjectOpen()) return;
 
+    QList<ProjectTreeItem*> items;
     std::function<void(ProjectTreeItem*)> scan = [&](ProjectTreeItem *item) {
-        if (item->synopsis.isEmpty() && !item->path.isEmpty()) {
-            requestUpdate(item->path);
+        if (item != m_model->itemFromIndex(QModelIndex())) {
+            items.append(item);
         }
         for (auto *child : item->children) {
             scan(child);
@@ -79,6 +80,20 @@ void SynopsisService::scanProject()
     };
 
     scan(m_model->itemFromIndex(QModelIndex()));
+
+    // Prioritize files to build leaf-level data first
+    for (auto *item : items) {
+        if (item->type == ProjectTreeItem::File) {
+            if (item->synopsis.isEmpty() && !item->path.isEmpty()) requestUpdate(item->path);
+        }
+    }
+    
+    // Then request folders (they will wait for children in updateFolderSynopsis)
+    for (auto *item : items) {
+        if (item->type == ProjectTreeItem::Folder) {
+            if (item->synopsis.isEmpty()) requestUpdate(item->path);
+        }
+    }
 }
 
 void SynopsisService::processNext()
@@ -116,17 +131,17 @@ void SynopsisService::processNext()
 void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &content)
 {
     LLMRequest req;
-    req.provider = LLMProvider::OpenAI; // Use OpenAI by default for background tasks
-    req.model = QStringLiteral("gpt-4o-mini"); // Cheap model for background tasks
+    req.provider = LLMProvider::OpenAI;
+    req.model = QStringLiteral("gpt-4o-mini");
     req.stream = false;
     
     LLMMessage sys;
     sys.role = QStringLiteral("system");
-    sys.content = QStringLiteral("You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.");
+    sys.content = QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.");
     
     LLMMessage user;
     user.role = QStringLiteral("user");
-    user.content = i18n("Write a one-sentence synopsis of the following RPG content:\n\n%1").arg(content);
+    user.content = i18n("Document Content:\n\n%1\n\nTask: Write a one-sentence synopsis.", content);
     
     req.messages << sys << user;
 
@@ -134,13 +149,16 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
     LLMService::instance().sendNonStreamingRequest(req, [this, relPath](const QString &response) {
         ProjectTreeItem *target = m_model->findItem(relPath);
         if (target) {
-            target->synopsis = response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' '));
-            // Trigger model update
-            QModelIndex idx = m_model->index(0, 0, QModelIndex()); // Dummy for now, ideally find index
-            // Actually ProjectTreePanel listens to dataChanged, but we need the correct index.
-            // For now, let's just save the project.
-            ProjectManager::instance().setTree(m_model->projectData());
-            ProjectManager::instance().saveProject();
+            QModelIndex idx = m_model->indexForItem(target);
+            if (idx.isValid()) {
+                m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
+                ProjectManager::instance().saveProject();
+                
+                // Trigger parent update immediately
+                if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
+                    requestUpdate(target->parent->path, true); // Force folder re-eval as child changed
+                }
+            }
         }
         m_activeRequests.remove(relPath);
         processNext();
@@ -156,7 +174,8 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
         }
     }
 
-    if (childSynopses.isEmpty()) {
+    // We can update folder if it has child synopses OR if it's completely empty
+    if (childSynopses.isEmpty() && !item->children.isEmpty()) {
         m_activeRequests.remove(item->path);
         processNext();
         return;
@@ -169,11 +188,11 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     
     LLMMessage sys;
     sys.role = QStringLiteral("system");
-    sys.content = QStringLiteral("You are a helpful assistant that writes a one-sentence synopsis for a folder containing several RPG documents, based on their individual synopses.");
+    sys.content = QStringLiteral("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').");
     
     LLMMessage user;
     user.role = QStringLiteral("user");
-    user.content = i18n("Write a one-sentence summary of this folder contents:\n\n%1").arg(childSynopses);
+    user.content = i18n("Folder: %1\nContents:\n%2\n\nTask: Write a one-sentence summary.", item->name, childSynopses);
     
     req.messages << sys << user;
 
@@ -181,9 +200,16 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     LLMService::instance().sendNonStreamingRequest(req, [this, relPath](const QString &response) {
         ProjectTreeItem *target = m_model->findItem(relPath);
         if (target) {
-            target->synopsis = response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' '));
-            ProjectManager::instance().setTree(m_model->projectData());
-            ProjectManager::instance().saveProject();
+            QModelIndex idx = m_model->indexForItem(target);
+            if (idx.isValid()) {
+                m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
+                ProjectManager::instance().saveProject();
+                
+                // Bubble up to grandparent
+                if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
+                    requestUpdate(target->parent->path, true);
+                }
+            }
         }
         m_activeRequests.remove(relPath);
         processNext();

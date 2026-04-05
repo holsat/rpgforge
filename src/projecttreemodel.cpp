@@ -229,7 +229,15 @@ bool ProjectTreeModel::setData(const QModelIndex &index, const QVariant &value, 
         return true;
     } else if (role == CategoryRole) {
         item->category = static_cast<ProjectTreeItem::Category>(value.toInt());
-        Q_EMIT dataChanged(index, index, {Qt::DecorationRole});
+        Q_EMIT dataChanged(index, index, {Qt::DecorationRole, CategoryRole});
+        return true;
+    } else if (role == SynopsisRole) {
+        item->synopsis = value.toString();
+        Q_EMIT dataChanged(index, index, {SynopsisRole});
+        return true;
+    } else if (role == StatusRole) {
+        item->status = value.toString();
+        Q_EMIT dataChanged(index, index, {StatusRole});
         return true;
     }
     return false;
@@ -246,7 +254,7 @@ ProjectTreeItem* ProjectTreeModel::itemFromIndex(const QModelIndex &index) const
 ProjectTreeItem* ProjectTreeModel::findItem(const QString &relativePath, ProjectTreeItem *root) const
 {
     if (!root) root = m_rootItem;
-    
+
     // Check root and children
     if (root->path == relativePath) return root;
 
@@ -257,7 +265,17 @@ ProjectTreeItem* ProjectTreeModel::findItem(const QString &relativePath, Project
     return nullptr;
 }
 
-QModelIndex ProjectTreeModel::addFolder(const QString &name, const QModelIndex &parent)
+QModelIndex ProjectTreeModel::indexForItem(ProjectTreeItem *item) const
+{
+    if (!item || item == m_rootItem) return QModelIndex();
+    ProjectTreeItem *parentItem = item->parent;
+    if (!parentItem) return QModelIndex();
+    int row = parentItem->children.indexOf(item);
+    if (row == -1) return QModelIndex();
+    return createIndex(row, 0, item);
+}
+
+QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path, const QModelIndex &parent)
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     int row = parentItem->children.count();
@@ -266,6 +284,7 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QModelIndex &
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::Folder;
     item->name = name;
+    item->path = path;
     item->parent = parentItem;
     parentItem->children.append(item);
     endInsertRows();
@@ -331,7 +350,7 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
         }
         
         if (!mediaFolder) {
-            targetParent = addFolder(QStringLiteral("Media"), parent);
+            targetParent = addFolder(QStringLiteral("Media"), QStringLiteral("media"), parent);
         } else {
             targetParent = index(parentItem->children.indexOf(mediaFolder), 0, parent);
         }
@@ -390,10 +409,10 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
     if (newParent->type == ProjectTreeItem::File) return false;
 
     ProjectTreeItem *oldParent = item->parent;
+    if (!oldParent) return false; // Root cannot be moved
+
     int oldRow = oldParent->children.indexOf(item);
-    
     if (oldRow == -1) return false;
-    if (oldParent == newParent && oldRow == newRow) return true;
 
     // Check circularity
     ProjectTreeItem *p = newParent;
@@ -404,17 +423,23 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
 
     if (newRow == -1) newRow = newParent->children.count();
 
-    QModelIndex oldParentIndex = (oldParent == m_rootItem) ? QModelIndex() : createIndex(oldParent->parent->children.indexOf(oldParent), 0, oldParent);
-    QModelIndex newParentIndex = (newParent == m_rootItem) ? QModelIndex() : createIndex(newParent->parent->children.indexOf(newParent), 0, newParent);
+    if (oldParent == newParent) {
+        if (newRow == oldRow || newRow == oldRow + 1) return true;
+    }
 
-    beginMoveRows(oldParentIndex, oldRow, oldRow, newParentIndex, newRow);
-    oldParent->children.removeAt(oldRow);
-    if (oldParent == newParent && newRow > oldRow) newRow--;
-    newParent->children.insert(newRow, item);
-    item->parent = newParent;
-    endMoveRows();
+    QModelIndex oldParentIndex = indexForItem(oldParent);
+    QModelIndex newParentIndex = indexForItem(newParent);
 
-    return true;
+    if (beginMoveRows(oldParentIndex, oldRow, oldRow, newParentIndex, newRow)) {
+        oldParent->children.removeAt(oldRow);
+        if (oldParent == newParent && newRow > oldRow) newRow--;
+        newParent->children.insert(newRow, item);
+        item->parent = newParent;
+        endMoveRows();
+        return true;
+    }
+
+    return false;
 }
 
 Qt::DropActions ProjectTreeModel::supportedDropActions() const { return Qt::MoveAction | Qt::CopyAction | Qt::LinkAction; }
@@ -451,45 +476,42 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
     Q_UNUSED(column);
     if (action == Qt::IgnoreAction) return true;
 
-    QModelIndex targetParent = parent;
-    // If dropped on whitespace, default to the top-level project folder
-    if (!targetParent.isValid() && m_rootItem->children.count() > 0) {
-        targetParent = index(0, 0, QModelIndex());
+    ProjectTreeItem *newParentItem = itemFromIndex(parent);
+    
+    // If dropped ON a file, try to put it in the file's parent folder
+    if (newParentItem->type == ProjectTreeItem::File) {
+        newParentItem = newParentItem->parent;
     }
+
+    if (!newParentItem) newParentItem = m_rootItem;
 
     if (data->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))) {
         QByteArray encodedData = data->data(QStringLiteral("application/x-rpgforge-treeitem"));
         const int count = encodedData.size() / static_cast<int>(sizeof(ProjectTreeItem*));
         if (count == 0) return false;
 
-        ProjectTreeItem *newParentItem = itemFromIndex(targetParent);
-        if (newParentItem->type == ProjectTreeItem::File) return false;
+        int insertRow = row;
+        if (insertRow == -1) insertRow = newParentItem->children.count();
 
-        int insertRow = (row == -1) ? newParentItem->children.count() : row;
-
+        bool anyMoved = false;
         for (int i = 0; i < count; i++) {
             ProjectTreeItem *dragItem = *reinterpret_cast<ProjectTreeItem**>(
                 encodedData.data() + i * static_cast<int>(sizeof(ProjectTreeItem*)));
 
             if (!dragItem) continue;
 
-            // Circularity guard — don't move an item into itself or a descendant
-            bool circular = false;
-            for (ProjectTreeItem *p = newParentItem; p; p = p->parent) {
-                if (p == dragItem) { circular = true; break; }
+            if (moveItem(dragItem, newParentItem, insertRow)) {
+                anyMoved = true;
+                // Since moveItem handles internal state, and we want to keep them together:
+                insertRow = newParentItem->children.indexOf(dragItem) + 1;
             }
-            if (circular) continue;
-
-            moveItem(dragItem, newParentItem, insertRow);
-
-            // Advance insertion point so the group lands in order
-            insertRow = qMin(insertRow + 1, newParentItem->children.count());
         }
-        return true;
+        return anyMoved;
     } else if (data->hasUrls()) {
+        QModelIndex targetIndex = indexForItem(newParentItem);
         for (const QUrl &url : data->urls()) {
             if (url.isLocalFile()) {
-                addFileWithSmartDiscovery(url.toLocalFile(), targetParent);
+                addFileWithSmartDiscovery(url.toLocalFile(), targetIndex);
             }
         }
         return true;

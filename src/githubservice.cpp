@@ -112,7 +112,7 @@ void GitHubService::createRemoteRepo(const QString &repoName, bool isPrivate)
                 if (detail.contains(QLatin1String("already exists"), Qt::CaseInsensitive)) {
                     Q_EMIT errorOccurred(i18n("A repository with this name already exists on your GitHub account."));
                 } else {
-                    Q_EMIT errorOccurred(i18n("GitHub Error: %1").arg(detail));
+                    Q_EMIT errorOccurred(i18n("GitHub Error: %1", detail));
                 }
             }
         }

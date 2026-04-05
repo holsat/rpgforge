@@ -73,8 +73,10 @@ void KnowledgeBase::close()
         QSqlDatabase::removeDatabase(QStringLiteral("rpgforge_vectors"));
     }
     if (m_watcher) {
-        m_watcher->removePaths(m_watcher->files());
-        m_watcher->removePaths(m_watcher->directories());
+        QStringList files = m_watcher->files();
+        if (!files.isEmpty()) m_watcher->removePaths(files);
+        QStringList dirs = m_watcher->directories();
+        if (!dirs.isEmpty()) m_watcher->removePaths(dirs);
     }
     m_pendingEmbeddings = 0;
 }

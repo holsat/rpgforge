@@ -214,14 +214,13 @@ void ProjectTreePanel::syncProject()
     // 1. Initialize Git if not already done
     if (!GitService::instance().isRepo(projectPath)) {
         if (!GitService::instance().initRepo(projectPath)) {
-            QMessageBox::critical(this, i18n("Sync Error"), i18n("Failed to initialize Git repository."));
+            Q_EMIT syncFinished(false, i18n("Failed to initialize Git repository."));
             return;
         }
     }
 
-    QProgressDialog progress(i18n("Syncing Project..."), i18n("Cancel"), 0, 100, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.show();
+    Q_EMIT syncStarted();
+    Q_EMIT syncProgress(5, i18n("Preparing to sync..."));
 
     // 2. Collect all files from the project tree
     auto treeData = m_model->projectData();
@@ -244,8 +243,7 @@ void ProjectTreePanel::syncProject()
     };
     collectItems(m_model->itemFromIndex(QModelIndex()));
 
-    progress.setValue(10);
-    if (progress.wasCanceled()) return;
+    Q_EMIT syncProgress(10, i18n("Scanning files..."));
 
     // 3. Asset Import (Scan Markdown files for external links)
     MarkdownParser parser;
@@ -299,8 +297,7 @@ void ProjectTreePanel::syncProject()
         file.close();
     }
 
-    progress.setValue(50);
-    if (progress.wasCanceled()) return;
+    Q_EMIT syncProgress(50, i18n("Aligning hierarchy..."));
 
     // 4. Hierarchy Alignment (Move files on disk to match logical tree)
     // We do this by calculating the "target" path for every file in the tree
@@ -308,13 +305,18 @@ void ProjectTreePanel::syncProject()
     
     std::function<QString(ProjectTreeItem*)> getLogicalPath = [&](ProjectTreeItem *item) -> QString {
         if (!item || !item->parent || item->parent == m_model->itemFromIndex(QModelIndex())) {
-            return item->name;
+            return QStringLiteral(".");
         }
-        return getLogicalPath(item->parent) + QDir::separator() + item->name;
+        QString parentPath = getLogicalPath(item->parent);
+        if (parentPath == QStringLiteral(".")) return item->name;
+        return parentPath + QDir::separator() + item->name;
     };
 
     for (auto *item : allItems) {
-        if (item->type != ProjectTreeItem::File) continue;
+        if (item->type == ProjectTreeItem::Folder) {
+            item->path = getLogicalPath(item);
+            continue;
+        }
 
         QString logicalName = getLogicalPath(item->parent) + QDir::separator() + QFileInfo(item->path).fileName();
         QString targetRelPath = logicalName;
@@ -329,7 +331,7 @@ void ProjectTreePanel::syncProject()
         }
     }
 
-    progress.setValue(90);
+    Q_EMIT syncProgress(80, i18n("Saving changes..."));
 
     // 5. Final Save
     saveTree();
@@ -340,11 +342,13 @@ void ProjectTreePanel::syncProject()
     // This prevents duplicate "Initial sync" commits if Sync is hit twice.
     if (!GitService::instance().hasUncommittedChanges(projectPath)) {
         // No changes, skip commit and go straight to push
+        Q_EMIT syncProgress(90, i18n("Pushing to GitHub..."));
         auto pushResult = GitService::instance().push(projectPath);
         pushResult.then(this, [this, projectPath](bool success) {
             if (success) {
-                QMessageBox::information(this, i18n("Sync Success"), i18n("Project synchronized and pushed to GitHub."));
+                Q_EMIT syncFinished(true, i18n("Project synchronized and pushed to GitHub."));
             } else {
+                Q_EMIT syncFinished(true, i18n("Project synchronized locally."));
                 if (QMessageBox::question(this, i18n("Connect to GitHub"), 
                     i18n("Project is synchronized locally. Would you like to also back it up to GitHub?")) == QMessageBox::Yes) {
                     GitHubOnboardingDialog dialog(this);
@@ -356,31 +360,30 @@ void ProjectTreePanel::syncProject()
     }
     
     // Perform an initial commit of everything
+    Q_EMIT syncProgress(85, i18n("Committing changes..."));
     auto commitFuture = GitService::instance().commitAll(projectPath, i18n("Initial sync and project organization"));
     
     commitFuture.then(this, [this, projectPath](bool success) {
         if (!success) {
-            // Log error but continue? Or notify?
+            Q_EMIT syncProgress(90, i18n("Commit failed, attempting push anyway..."));
         }
 
         // 6. GitHub Remote & Push
+        Q_EMIT syncProgress(95, i18n("Pushing to GitHub..."));
         auto pushResult = GitService::instance().push(projectPath);
         pushResult.then(this, [this, projectPath](bool success) {
             if (success) {
-                QMessageBox::information(this, i18n("Sync Success"), i18n("Project synchronized and pushed to GitHub."));
+                Q_EMIT syncFinished(true, i18n("Project synchronized and pushed to GitHub."));
             } else {
                 // No remote or push failed. Ask to connect.
+                Q_EMIT syncFinished(true, i18n("Project synchronized locally."));
                 if (QMessageBox::question(this, i18n("Connect to GitHub"), 
                     i18n("Project is synchronized locally. Would you like to also back it up to GitHub?")) == QMessageBox::Yes) {
                     
                     GitHubOnboardingDialog dialog(this);
                     if (dialog.exec() == QDialog::Accepted) {
                         // onRepoCreated will handle the push
-                    } else {
-                        QMessageBox::information(this, i18n("Sync Complete"), i18n("Project structure and assets have been synchronized locally."));
                     }
-                } else {
-                    QMessageBox::information(this, i18n("Sync Complete"), i18n("Project structure and assets have been synchronized locally."));
                 }
             }
         });
@@ -393,9 +396,13 @@ void ProjectTreePanel::onRepoCreated(const QString &cloneUrl)
     QString projectPath = ProjectManager::instance().projectPath();
 
     if (GitService::instance().setRemote(projectPath, cloneUrl)) {
+        Q_EMIT syncStarted();
+        Q_EMIT syncProgress(95, i18n("Pushing to GitHub..."));
         GitService::instance().push(projectPath).then(this, [this](bool success) {
             if (success) {
-                QMessageBox::information(this, i18n("Sync Success"), i18n("Project pushed to GitHub."));
+                Q_EMIT syncFinished(true, i18n("Project pushed to GitHub."));
+            } else {
+                Q_EMIT syncFinished(false, i18n("Failed to push to GitHub."));
             }
         });
     }
@@ -446,7 +453,7 @@ void ProjectTreePanel::switchExploration(const QString &name)
         }
 
         // Automatic commit
-        GitService::instance().commitAll(projectPath, i18n("Automatic save before switching to %1").arg(name));
+        GitService::instance().commitAll(projectPath, i18n("Automatic save before switching to %1", name));
     }
 
     if (GitService::instance().checkoutBranch(projectPath, name)) {
@@ -602,7 +609,7 @@ void ProjectTreePanel::addFolder()
     bool ok;
     QString name = QInputDialog::getText(this, i18n("Add Folder"), i18n("Folder Name:"), QLineEdit::Normal, i18n("New Folder"), &ok);
     if (ok && !name.isEmpty()) {
-        m_model->addFolder(name, parent);
+        m_model->addFolder(name, QString(), parent);
     }
 }
 
@@ -729,6 +736,11 @@ void ProjectTreePanel::editMetadata()
         // Force refresh of the display
         Q_EMIT m_model->dataChanged(index, index);
     }
+}
+
+QModelIndex ProjectTreePanel::currentIndex() const
+{
+    return m_treeView->currentIndex();
 }
 
 ProjectTreeItem* ProjectTreePanel::activeFolder() const

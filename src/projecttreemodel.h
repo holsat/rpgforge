@@ -49,7 +49,9 @@ class ProjectTreeModel : public QAbstractItemModel
 public:
     enum Roles {
         TransientRole = Qt::UserRole + 100,
-        CategoryRole = Qt::UserRole + 101
+        CategoryRole = Qt::UserRole + 101,
+        SynopsisRole = Qt::UserRole + 102,
+        StatusRole = Qt::UserRole + 103
     };
     explicit ProjectTreeModel(QObject *parent = nullptr);
     ~ProjectTreeModel() override;
@@ -67,12 +69,14 @@ public:
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
 
     // Manipulation
-    QModelIndex addFolder(const QString &name, const QModelIndex &parent = QModelIndex());
+    QModelIndex addFolder(const QString &name, const QString &path = QString(), const QModelIndex &parent = QModelIndex());
     QModelIndex addFile(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
     QModelIndex addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent);
     void addFileWithSmartDiscovery(const QString &absolutePath, const QModelIndex &parent = QModelIndex());
     bool removeItem(const QModelIndex &index);
     bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
+
+    QModelIndex indexForItem(ProjectTreeItem *item) const;
 
     // Drag and Drop
     Qt::DropActions supportedDropActions() const override;

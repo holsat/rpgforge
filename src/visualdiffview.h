@@ -21,11 +21,9 @@
 
 #include <QWidget>
 #include <QString>
-#include <QList>
-#include <QRect>
-#include "gitservice.h"
+#include <KParts/ReadWritePart>
 
-namespace KTextEditor { class View; class Document; class MovingRange; }
+class KompareInterface;
 
 class VisualDiffView : public QWidget
 {
@@ -37,47 +35,32 @@ public:
 
     void setDiff(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
     void setFiles(const QString &file1, const QString &file2);
-
-    struct HunkInfo {
-        int index;
-        QRect leftRect;
-        QRect rightRect;
-        DiffHunk data;
-    };
-
-    void applyHunk(int hunkIndex);
-    QList<HunkInfo> m_visibleHunks;
+    
+    KParts::ReadWritePart* part() const { return m_part; }
 
 Q_SIGNALS:
     void saveRequested(const QString &filePath);
     void reloadRequested(const QString &filePath);
 
 private Q_SLOTS:
-    void syncScroll();
-    void updateConnectors();
-    void swapDiff();
     void saveChanges();
+    void swapDiff();
 
 private:
     void setupUi();
-    void highlightDiff();
-    void clearHighlights();
+    void loadKomparePart();
 
     QString m_filePath;
     QString m_oldHash;
     QString m_newHash;
-    QString m_file1; // For arbitrary file comparison
+    QString m_file1;
     QString m_file2;
-    QList<DiffHunk> m_hunks;
+    QString m_tempOld;
+    QString m_tempNew;
     bool m_swapped = false;
 
-    KTextEditor::Document *m_oldDoc;
-    KTextEditor::Document *m_newDoc;
-    KTextEditor::View *m_oldView;
-    KTextEditor::View *m_newView;
-    QWidget *m_connector;
-
-    QList<KTextEditor::MovingRange*> m_highlights;
+    KParts::ReadWritePart *m_part = nullptr;
+    KompareInterface *m_kompareInterface = nullptr;
 };
 
 #endif // VISUALDIFFVIEW_H

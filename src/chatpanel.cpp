@@ -36,14 +36,22 @@
 #include <QKeyEvent>
 #include <QWebChannel>
 
+ChatBridge::ChatBridge(ChatPanel *panel) : QObject(panel), m_panel(panel) {}
+
+void ChatBridge::handleInsert(const QString &text)
+{
+    m_panel->handleInsert(text);
+}
+
 ChatPanel::ChatPanel(QWidget *parent)
     : QWidget(parent)
 {
     setupUi();
     initChatView();
 
+    m_bridge = new ChatBridge(this);
     auto *channel = new QWebChannel(this);
-    channel->registerObject(QStringLiteral("chatPanel"), this);
+    channel->registerObject(QStringLiteral("chatBridge"), m_bridge);
     m_webView->page()->setWebChannel(channel);
 
     connect(&LLMService::instance(), &LLMService::requestStarted, this, [this]() {
@@ -166,6 +174,19 @@ void ChatPanel::initChatView()
                     border-bottom-left-radius: 2px;
                     border: 1px solid palette(mid);
                 }
+                .insert-btn {
+                    margin-top: 8px;
+                    padding: 4px 8px;
+                    background-color: palette(highlight);
+                    color: palette(highlighted-text);
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    cursor: pointer;
+                }
+                .insert-btn:hover {
+                    opacity: 0.8;
+                }
                 pre {
                     background-color: rgba(0,0,0,0.1);
                     padding: 8px;
@@ -183,20 +204,20 @@ void ChatPanel::initChatView()
             <script>
                 var backend;
                 new QWebChannel(qt.webChannelTransport, function(channel) {
-                    backend = channel.objects.chatPanel;
+                    backend = channel.objects.chatBridge;
                 });
 
                 function appendMessage(role, html, rawText) {
                     const div = document.createElement('div');
                     div.className = 'message ' + role;
+                    div.setAttribute('data-raw', rawText || '');
                     
                     let content = html;
                     if (role === 'assistant' && rawText) {
-                        content += '<div style=\"margin-top: 8px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 5px;\">' +
-                                   '<button onclick=\"insertText(this.getAttribute(\'data-raw\'))\" class=\"insert-btn\" style=\"font-size: 11px; cursor: pointer;\">' +
+                        content += '<div style=\"border-top: 1px solid rgba(0,0,0,0.1); margin-top: 5px;\">' +
+                                   '<button onclick=\"insertText(this.parentNode.parentNode.getAttribute(\'data-raw\'))\" class=\"insert-btn\">' +
                                    'Insert at Cursor' +
                                    '</button></div>';
-                        div.setAttribute('data-raw', rawText);
                     }
                     
                     div.innerHTML = content;
@@ -208,13 +229,13 @@ void ChatPanel::initChatView()
                     const messages = document.getElementsByClassName('message assistant');
                     if (messages.length > 0) {
                         const msg = messages[messages.length - 1];
+                        msg.setAttribute('data-raw', rawText || '');
                         let content = html;
                         if (rawText) {
-                            content += '<div style=\"margin-top: 8px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 5px;\">' +
-                                       '<button onclick=\"insertText(this.parentNode.parentNode.getAttribute(\'data-raw\'))\" style=\"font-size: 11px; cursor: pointer;\">' +
+                            content += '<div style=\"border-top: 1px solid rgba(0,0,0,0.1); margin-top: 5px;\">' +
+                                       '<button onclick=\"insertText(this.parentNode.parentNode.getAttribute(\'data-raw\'))\" class=\"insert-btn\">' +
                                        'Insert at Cursor' +
                                        '</button></div>';
-                            msg.setAttribute('data-raw', rawText);
                         }
                         msg.innerHTML = content;
                         window.scrollTo(0, document.body.scrollHeight);

@@ -13,7 +13,7 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -28,6 +28,8 @@ find_package(KF6 REQUIRED COMPONENTS
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBGIT2 REQUIRED IMPORTED_TARGET libgit2)
 pkg_check_modules(CMARK_GFM REQUIRED IMPORTED_TARGET libcmark-gfm)
+
+find_library(KOMPAREINTERFACE_LIB kompareinterface REQUIRED)
 
 add_executable(rpgforge
     src/main.cpp
@@ -79,6 +81,10 @@ add_executable(rpgforge
     src/projecttreepanel.h
     src/metadatadialog.cpp
     src/metadatadialog.h
+    src/documentconverter.cpp
+    src/documentconverter.h
+    src/scrivenerimporter.cpp
+    src/scrivenerimporter.h
     src/llmservice.cpp
     src/llmservice.h
     src/knowledgebase.cpp
@@ -95,6 +101,8 @@ add_executable(rpgforge
     src/compiledialog.h
     src/newprojectdialog.cpp
     src/newprojectdialog.h
+    src/onboardingwizard.cpp
+    src/onboardingwizard.h
     src/explorersidebar.cpp
     src/explorersidebar.h
     src/imagepreview.cpp
@@ -116,6 +124,7 @@ target_link_libraries(rpgforge
     Qt6::Qml
     Qt6::Concurrent
     Qt6::Sql
+    Qt6::Xml
     KF6::CoreAddons
     KF6::I18n
     KF6::XmlGui
@@ -126,6 +135,7 @@ target_link_libraries(rpgforge
     KF6::Wallet
     PkgConfig::LIBGIT2
     PkgConfig::CMARK_GFM
+    ${KOMPAREINTERFACE_LIB}
 )
 
 install(TARGETS rpgforge ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})

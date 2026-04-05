@@ -46,7 +46,8 @@ CorkboardCard::CorkboardCard(ProjectTreeItem *item, QWidget *parent)
             auto meta = VariableManager::extractMetadata(content);
             if (!meta.title.isEmpty()) m_title = meta.title;
             if (!meta.status.isEmpty()) m_status = meta.status;
-            if (!meta.synopsis.isEmpty()) m_synopsis = meta.synopsis;
+            // Only use metadata synopsis if the AI synopsis is empty
+            if (m_synopsis.isEmpty() && !meta.synopsis.isEmpty()) m_synopsis = meta.synopsis;
         }
     }
 

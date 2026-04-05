@@ -40,12 +40,16 @@ public:
 
     QPushButton* createButton() const { return m_createBtn; }
     ProjectTreeModel* model() const { return m_model; }
+    QModelIndex currentIndex() const;
     ProjectTreeItem* activeFolder() const;
 
 Q_SIGNALS:
     void fileActivated(const QString &relativePath);
     void folderActivated(ProjectTreeItem *folderItem);
     void diffRequested(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
+    void syncStarted();
+    void syncProgress(int value, const QString &message);
+    void syncFinished(bool success, const QString &message);
 
 private Q_SLOTS:
     void onProjectOpened();

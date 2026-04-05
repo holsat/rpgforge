@@ -44,6 +44,12 @@ GitService& GitService::instance()
 
 QFuture<bool> GitService::autoCommit(const QString &filePath, const QString &message)
 {
+    // ONLY auto-sync files in the manuscript directory
+    // This prevents research, stylesheets, or other internal files from polluting the git history.
+    if (!filePath.contains(QStringLiteral("/manuscript/"), Qt::CaseInsensitive)) {
+        return QtConcurrent::run([]() { return true; });
+    }
+
     QString msg = message.isEmpty()
         ? QStringLiteral("Auto-save: %1").arg(QFileInfo(filePath).fileName())
         : message;
@@ -130,23 +136,23 @@ static int diff_line_cb(const git_diff_delta *delta, const git_diff_hunk *hunk, 
     dl.newLine = line->new_lineno - 1;
     dl.type = (line->origin == GIT_DIFF_LINE_ADDITION) ? DiffLine::Added : DiffLine::Deleted;
 
+    // Logic to decide if we need a new hunk or can append to the last one.
+    // We group adjacent changes into a single hunk for better visualization.
     bool createNew = hunks->isEmpty();
     if (!createNew) {
         const auto &last = hunks->last();
-        if (!last.lines.isEmpty()) {
-            const auto &lastLine = last.lines.last();
-            if (dl.type == DiffLine::Added) {
-                if (lastLine.newLine != dl.newLine - 1 || lastLine.type != DiffLine::Added) createNew = true;
-            } else {
-                if (lastLine.oldLine != dl.oldLine - 1 || lastLine.type != DiffLine::Deleted) createNew = true;
-            }
+        // If the gap is small (1 line), we merge them for a cleaner UI
+        if (dl.type == DiffLine::Added) {
+            if (dl.newLine > last.newStart + last.newLines + 1) createNew = true;
+        } else {
+            if (dl.oldLine > last.oldStart + last.oldLines + 1) createNew = true;
         }
     }
 
     if (createNew) {
         DiffHunk dh;
-        dh.oldStart = (line->old_lineno > 0) ? line->old_lineno : 0;
-        dh.newStart = (line->new_lineno > 0) ? line->new_lineno : 0;
+        dh.oldStart = (line->old_lineno > 0) ? line->old_lineno : (hunk ? hunk->old_start : 1);
+        dh.newStart = (line->new_lineno > 0) ? line->new_lineno : (hunk ? hunk->new_start : 1);
         dh.type = (dl.type == DiffLine::Added) ? DiffHunk::Added : DiffHunk::Deleted;
         dh.oldLines = 0;
         dh.newLines = 0;
@@ -154,27 +160,21 @@ static int diff_line_cb(const git_diff_delta *delta, const git_diff_hunk *hunk, 
     }
 
     auto &currentHunk = hunks->last();
-    
-    if (currentHunk.type == DiffHunk::Added && dl.type == DiffLine::Deleted) currentHunk.type = DiffHunk::Modified;
-    if (currentHunk.type == DiffHunk::Deleted && dl.type == DiffLine::Added) currentHunk.type = DiffHunk::Modified;
-
     currentHunk.lines.append(dl);
     
+    // Recalculate totals and types for the active hunk
     int oldLines = 0, newLines = 0;
-    int minOld = -1, minNew = -1;
     for (const auto &l : currentHunk.lines) {
-        if (l.type == DiffLine::Deleted) {
-            oldLines++;
-            if (minOld == -1 || l.oldLine < minOld) minOld = l.oldLine;
-        } else {
-            newLines++;
-            if (minNew == -1 || l.newLine < minNew) minNew = l.newLine;
-        }
+        if (l.type == DiffLine::Deleted) oldLines++;
+        else newLines++;
     }
-    if (minOld != -1) currentHunk.oldStart = minOld + 1;
+    
     currentHunk.oldLines = oldLines;
-    if (minNew != -1) currentHunk.newStart = minNew + 1;
     currentHunk.newLines = newLines;
+
+    if (oldLines > 0 && newLines > 0) currentHunk.type = DiffHunk::Modified;
+    else if (oldLines > 0) currentHunk.type = DiffHunk::Deleted;
+    else currentHunk.type = DiffHunk::Added;
 
     return 0;
 }

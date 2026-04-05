@@ -27,6 +27,16 @@ class QTextEdit;
 class QComboBox;
 class QPushButton;
 class QProgressBar;
+class ChatPanel;
+
+class ChatBridge : public QObject {
+    Q_OBJECT
+public:
+    explicit ChatBridge(ChatPanel *panel);
+    Q_INVOKABLE void handleInsert(const QString &text);
+private:
+    ChatPanel *m_panel;
+};
 
 class ChatPanel : public QWidget
 {
@@ -46,8 +56,13 @@ public:
      */
     void askAI(const QString &userPrompt);
 
+    void insertRequested(const QString &text);
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+
+public Q_SLOTS:
+    void handleInsert(const QString &text);
 
 private Q_SLOTS:
     void sendMessage();
@@ -57,7 +72,6 @@ private Q_SLOTS:
     void clearChat();
     void updateModelList();
     void onProviderChanged();
-    void handleInsert(const QString &text);
 
 Q_SIGNALS:
     void insertTextAtCursor(const QString &text);
@@ -83,6 +97,7 @@ private:
 
     QString m_currentAiResponse;
     QList<LLMMessage> m_history;
+    ChatBridge *m_bridge = nullptr;
 };
 
 #endif // CHATPANEL_H

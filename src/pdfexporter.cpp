@@ -62,7 +62,7 @@ void PdfExporter::exportProject(const QString &outputPath, const CompileOptions 
     ProjectTreeModel model;
     model.setProjectData(treeData);
     
-    // Find Manuscript folder
+    // Find Manuscript folder - STRICTLY limit to this
     ProjectTreeItem *manuscript = nullptr;
     ProjectTreeItem *root = model.itemFromIndex(QModelIndex());
     for (auto *child : root->children) {
@@ -76,11 +76,12 @@ void PdfExporter::exportProject(const QString &outputPath, const CompileOptions 
     if (manuscript) {
         processFolder(manuscript, markdown, options, validationErrors, chapterCounter);
     } else {
-        processFolder(root, markdown, options, validationErrors, chapterCounter);
+        Q_EMIT finished(false, i18n("No 'Manuscript' folder found. To export, right-click a folder in the Project Explorer and set its category to 'Manuscript'."));
+        return;
     }
 
     if (!validationErrors.isEmpty()) {
-        QString errorMsg = i18n("Found %1 broken image links. Please fix them before exporting:").arg(validationErrors.size());
+        QString errorMsg = i18n("Found %1 broken image links. Please fix them before exporting:", (int)validationErrors.size());
         errorMsg += QStringLiteral("\n\n") + validationErrors.join(QLatin1Char('\n'));
         Q_EMIT finished(false, errorMsg);
         return;
@@ -216,7 +217,7 @@ void PdfExporter::processFolder(ProjectTreeItem *folder, QString &markdown, cons
                         // Resolve relative to the markdown file itself
                         QString absLink = QDir(QFileInfo(fullPath).absolutePath()).absoluteFilePath(link);
                         if (!QFile::exists(absLink)) {
-                            errors.append(i18n("%1 (Line %2): Broken link -> %3").arg(child->name).arg(i + 1).arg(link));
+                            errors.append(i18n("%1 (Line %2): Broken link -> %3", child->name, i + 1, link));
                         }
                     }
                 }

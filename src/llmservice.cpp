@@ -183,7 +183,7 @@ void LLMService::sendRequest(const LLMRequest &request)
             netRequest.setRawHeader("Accept", "text/event-stream");
         }
         
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString() : request.model;
+        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20241022")).toString() : request.model;
         
         // Anthropic: system message must be a single top-level string
         QStringList systemParts;
@@ -448,7 +448,7 @@ void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::functio
         netRequest.setRawHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
         
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString() : request.model;
+        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20241022")).toString() : request.model;
         
         // Anthropic: system message must be a single top-level string
         QStringList systemParts;
@@ -615,5 +615,52 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
         reply->deleteLater();
     });
 }
+
+void LLMService::pullModel(const QString &modelName, 
+                          std::function<void(double progress, const QString &status)> progressCallback, 
+                          std::function<void(bool success, const QString &error)> completionCallback)
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
+    QUrl url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/pull"));
+    
+    QNetworkRequest netRequest(url);
+    netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    QJsonObject body;
+    body[QStringLiteral("name")] = modelName;
+    body[QStringLiteral("stream")] = true;
+
+    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    
+    connect(reply, &QNetworkReply::readyRead, this, [reply, progressCallback]() {
+        while (reply->canReadLine()) {
+            QByteArray line = reply->readLine();
+            QJsonDocument doc = QJsonDocument::fromJson(line);
+            if (!doc.isNull() && doc.isObject()) {
+                QJsonObject root = doc.object();
+                QString status = root.value(QStringLiteral("status")).toString();
+                double total = root.value(QStringLiteral("total")).toDouble();
+                double completed = root.value(QStringLiteral("completed")).toDouble();
+                
+                if (total > 0) {
+                    progressCallback(completed / total, status);
+                } else {
+                    progressCallback(0, status);
+                }
+            }
+        }
+    });
+
+    connect(reply, &QNetworkReply::finished, this, [reply, completionCallback]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            completionCallback(true, QString());
+        } else {
+            completionCallback(false, reply->errorString());
+        }
+        reply->deleteLater();
+    });
+}
+
 
 

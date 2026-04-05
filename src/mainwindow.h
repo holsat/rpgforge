@@ -49,6 +49,8 @@ class QSplitter;
 class QAction;
 class QVBoxLayout;
 class QLabel;
+class QProgressBar;
+class QLineEdit;
 #include <QPair>
 #include <QList>
 #include <QUrl>
@@ -74,6 +76,8 @@ private Q_SLOTS:
     void newProject();
     void openProject();
     void closeProject();
+    void importScrivener();
+    void importWord();
     void cloneProject();
     void projectSettings();
     void globalSettings();
@@ -88,6 +92,7 @@ private Q_SLOTS:
     void togglePreview();
     void syncScroll();
     void updateErrorHighlighting();
+    void performSearch(const QString &text);
     /**
      * @brief Shows a diff between two files or two Git versions.
      * @param path1 Either an absolute file path OR the first path for git diff.
@@ -147,6 +152,9 @@ private:
     QLabel *m_diagnosticsStatus = nullptr;
     QLabel *m_wordCountStatus = nullptr;
     QLabel *m_projectStatsStatus = nullptr;
+    QLabel *m_syncStatusLabel = nullptr;
+    QProgressBar *m_syncProgressBar = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
 
     QSplitter *m_mainSplitter = nullptr;
     QSplitter *m_vSplitter = nullptr;

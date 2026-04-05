@@ -17,7 +17,9 @@
 */
 
 #include "projectmanager.h"
+#include "projecttreemodel.h"
 
+#include <KLocalizedString>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -159,6 +161,105 @@ bool ProjectManager::createProject(const QString &dirPath, const QString &projec
         Q_EMIT projectOpened();
     }
     return saved;
+}
+
+void ProjectManager::setupDefaultProject(const QString &dir, const QString &name)
+{
+    ProjectTreeModel model;
+    
+    // Add top level folder with project name
+    QModelIndex rootIdx = model.addFolder(name, QStringLiteral("."));
+
+    // 1. Manuscript
+    QModelIndex manuscriptIdx = model.addFolder(i18n("Manuscript"), QStringLiteral("manuscript"), rootIdx);
+    model.setData(manuscriptIdx, ProjectTreeItem::Manuscript, ProjectTreeModel::CategoryRole);
+    
+    QModelIndex chapterIdx = model.addFolder(i18n("Chapter"), QStringLiteral("manuscript/Chapter"), manuscriptIdx);
+    model.setData(chapterIdx, ProjectTreeItem::Chapter, ProjectTreeModel::CategoryRole);
+    
+    QString scenePath = QStringLiteral("manuscript/scene1.md");
+    QDir(dir).mkpath(QStringLiteral("manuscript"));
+    QFile sceneFile(QDir(dir).absoluteFilePath(scenePath));
+    if (sceneFile.open(QIODevice::WriteOnly)) {
+        sceneFile.write("# New Scene\n\nWrite your story here...");
+        sceneFile.close();
+    }
+    QModelIndex sceneIdx = model.addFile(i18n("Scene 1"), scenePath, chapterIdx);
+    model.setData(sceneIdx, ProjectTreeItem::Scene, ProjectTreeModel::CategoryRole);
+
+    // 2. Research
+    QModelIndex researchIdx = model.addFolder(i18n("Research"), QStringLiteral("research"), rootIdx);
+    model.setData(researchIdx, ProjectTreeItem::Research, ProjectTreeModel::CategoryRole);
+    
+    auto addResearchFolder = [&](const QString &name, const QString &relPath, ProjectTreeItem::Category cat) {
+        QModelIndex idx = model.addFolder(name, relPath, researchIdx);
+        model.setData(idx, cat, ProjectTreeModel::CategoryRole);
+    };
+    addResearchFolder(i18n("Characters"), QStringLiteral("research/Characters"), ProjectTreeItem::Characters);
+    addResearchFolder(i18n("Places"), QStringLiteral("research/Places"), ProjectTreeItem::Places);
+    addResearchFolder(i18n("Cultures"), QStringLiteral("research/Cultures"), ProjectTreeItem::Cultures);
+
+    // Add README.md to Research
+    QString readmePath = QStringLiteral("research/README.md");
+    QDir(dir).mkpath(QStringLiteral("research"));
+    QFile readmeFile(QDir(dir).absoluteFilePath(readmePath));
+    if (readmeFile.open(QIODevice::WriteOnly)) {
+        const char* readmeContent = R"markdown(# Welcome to your RPG Forge Project
+
+This README provides a quick overview of how to use RPG Forge to create your masterpiece.
+
+## 🚀 Key Concepts
+
+### 1. The Manuscript
+All your story and rule files should live under the **Manuscript** folder. RPG Forge automatically assembles these files into your final document. 
+*   **Chapters:** Folders categorized as "Chapter" are automatically numbered during export.
+*   **Scenes:** Individual files within chapters that make up your narrative flow.
+
+### 2. Research & Lore
+The **Research** folder is for your worldbuilding notes. Files here are *not* compiled into the final manuscript, but they are always available for reference while you write.
+
+### 3. Versions & Explorations
+Every save is a checkpoint. Use the **Exploration** menu in the Project Tree to create "branches" where you can try out different narrative directions without breaking your main story.
+
+## ✍️ Writing Tips
+
+*   **Focus Mode:** Press `Ctrl+Shift+F` to hide the UI and focus on your words.
+*   **Linking:** Drag a file from the project tree into your document to create a link.
+*   **Variables:** Define stats in your document header (YAML) and use them like `{{hp_base}}` in your text.
+
+## 🛠 Compilation
+
+Click the **Compile** button in the toolbar to generate a professional PDF of your manuscript.
+)markdown";
+        readmeFile.write(readmeContent);
+        readmeFile.close();
+    }
+    QModelIndex readmeIdx = model.addFile(i18n("Project Guide"), readmePath, researchIdx);
+    model.setData(readmeIdx, ProjectTreeItem::Notes, ProjectTreeModel::CategoryRole);
+
+    // 3. Stylesheets
+    QModelIndex stylesheetsIdx = model.addFolder(i18n("Stylesheets"), QStringLiteral("stylesheets"), rootIdx);
+    model.setData(stylesheetsIdx, ProjectTreeItem::Stylesheet, ProjectTreeModel::CategoryRole);
+    model.addFile(QStringLiteral("style.css"), QStringLiteral("stylesheets/style.css"), stylesheetsIdx);
+
+    // Add .gitignore
+    QFile gitignore(QDir(dir).absoluteFilePath(QStringLiteral(".gitignore")));
+    if (gitignore.open(QIODevice::WriteOnly)) {
+        gitignore.write(
+            "# RPG Forge Git Ignore\n"
+            "# We only track the manuscript and project metadata by default\n"
+            "/*\n"
+            "!.gitignore\n"
+            "!rpgforge.project\n"
+            "!manuscript/\n"
+            "!stylesheets/\n"
+            ".rpgforge-vectors.db\n"
+        );
+        gitignore.close();
+    }
+
+    setTree(model.projectData());
+    saveProject();
 }
 
 void ProjectManager::closeProject()

@@ -8,7 +8,14 @@
       <Separator/>
       <Action name="project_new"/>
       <Action name="project_open"/>
+      <Action name="project_clone"/>
       <Action name="project_close"/>
+      <Separator/>
+      <Menu name="import" icon="document-import">
+        <text>&amp;Import</text>
+        <Action name="project_import_scrivener"/>
+        <Action name="project_import_word"/>
+      </Menu>
       <Separator/>
       <Action name="file_save"/>
       <Action name="file_save_as"/>
@@ -19,8 +26,6 @@
       <Separator/>
       <Action name="file_quit"/>
     </Menu>
-    <!-- Edit, View, Selection, and Tools menus are provided by
-         KTextEditor::View's merged GUI client -->
     <Menu name="view">
       <Action name="toggle_preview"/>
       <Action name="project_preview_mode"/>
@@ -38,7 +43,6 @@
       <Separator/>
       <Action name="global_settings"/>
     </Menu>
-    <!-- Remove the empty Search menu that KTextEditor creates -->
     <Menu name="search" deleted="true"/>
   </MenuBar>
   <ToolBar name="mainToolBar">
@@ -54,5 +58,7 @@
     <Action name="project_preview_mode"/>
     <Separator/>
     <Action name="focus_mode"/>
+    <Spacer/>
+    <Action name="toolbar_search"/>
   </ToolBar>
 </gui>
