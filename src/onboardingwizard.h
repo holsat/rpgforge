@@ -35,7 +35,7 @@ class OnboardingWizard : public QWizard
     Q_OBJECT
 
 public:
-    enum { Page_Welcome, Page_Project, Page_Scrivener, Page_AI, Page_Github, Page_Finish };
+    enum { Page_Welcome, Page_Project, Page_Scrivener, Page_GitImport, Page_AI, Page_Github, Page_Finish };
     explicit OnboardingWizard(QWidget *parent = nullptr);
     ~OnboardingWizard() override;
 
@@ -56,6 +56,7 @@ private:
     QWizardPage* createWelcomePage();
     QWizardPage* createProjectPage();
     QWizardPage* createScrivenerPage();
+    QWizardPage* createGitImportPage();
     QWizardPage* createAiPage();
     QWizardPage* createGithubPage();
     QWizardPage* createFinishPage();
@@ -67,7 +68,9 @@ private:
     // Choice
     QRadioButton *m_createNewRadio;
     QRadioButton *m_importScrivenerRadio;
+    QRadioButton *m_importGitRadio;
     QLineEdit *m_scrivenerPathEdit;
+    QLineEdit *m_gitUrlEdit;
 
     // Fields
     QLineEdit *m_projectNameEdit;

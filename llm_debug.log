@@ -1,0 +1,2404 @@
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/models
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Bestiary: Denizens of Oros\n\n### 👾 Cobalt Golem\n*Large Construct, Unaligned*\n\n* **Armor Class:** 18 (Natural Armor)\n* **Hit Points:** 85 ($10d10 + 30$)\n* **Speed:** 20 ft.\n\n| MGT | AGI | ESS | WIT |\n| :---: | :---: | :---: | :---: |\n| 18 (+4) | 8 (-1) | 1 (-5) | 3 (-4) |\n\n**Abilities:**\n* **Magic Resistance:** The golem has advantage on saving throws against spells.\n* **Immutable Form:** Immune to any spell or effect that would alter its form.\n\n---\n\n### 👻 Echo-Wraith\n*Medium Undead, Chaotic Neutral*\n\n* **Armor Class:** 13\n* **Hit Points:** 40\n* **Special:** Incorporeal Movement (can move through objects).\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Character Sheet: [NAME]\n\n## Biography\n* **Class:** `Enter Class`\n* **Level:** 1\n* **Background:** `Enter Background`\n\n## Stats\n* **HP:** 10 / 10\n* **XP:** 0 / 1000\n* **Defense (AC):** 10\n\n## Inventory\n- [ ] Rusty Dagger (1d4 DMG)\n- [ ] Leather Tunic (+1 AC)\n- [ ] 5x Torches\n\n---\n\n## Player Notes\n> \"Every journey begins with a single critical failure.\" - *Old Adventurer's Proverb*\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n/* RPG Forge Project Stylesheet */\n/* Use this file to control the look of your Preview and PDF Export. */\n\n/* Example: Professional Book Font */\nbody {\n    font-family: 'Crimson Text', 'Georgia', serif;\n    line-height: 1.6;\n}\n\n/* Example: PDF Pagination Settings */\n@page {\n    size: A4;\n    margin: 20mm;\n    /* Page numbers are handled automatically by RPG Forge, */\n    /* but you can add custom headers/footers here using CSS Paged Media. */\n}\n\n/* Example: Chapter Headers starting on new pages */\nh1 {\n    break-before: page;\n    color: red;\n    text-align: center;\n    margin-top: 50px;\n}\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"manuscript/scene1.md\">\n# New Scene\n\nWrite your story here...\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# New Scene\n\nWrite your story here...(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n(I18N_ARGUMENT_MISSING)",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/models
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"../../Documents/testproject/Aether & Iron/system_manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/system_manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"manuscript/scene1.md\">\n# New Scene\n\nWrite your story here...\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"manuscript/scene1.md\">\n# New Scene\n\nWrite your story here...\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/Character_Template/char_template.md\">\n# Character Sheet: [NAME]\n\n## Biography\n* **Class:** `Enter Class`\n* **Level:** 1\n* **Background:** `Enter Background`\n\n## Stats\n* **HP:** 10 / 10\n* **XP:** 0 / 1000\n* **Defense (AC):** 10\n\n## Inventory\n- [ ] Rusty Dagger (1d4 DMG)\n- [ ] Leather Tunic (+1 AC)\n- [ ] 5x Torches\n\n---\n\n## Player Notes\n> \"Every journey begins with a single critical failure.\" - *Old Adventurer's Proverb*\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Character Sheet: [NAME]\n\n## Biography\n* **Class:** `Enter Class`\n* **Level:** 1\n* **Background:** `Enter Background`\n\n## Stats\n* **HP:** 10 / 10\n* **XP:** 0 / 1000\n* **Defense (AC):** 10\n\n## Inventory\n- [ ] Rusty Dagger (1d4 DMG)\n- [ ] Leather Tunic (+1 AC)\n- [ ] 5x Torches\n\n---\n\n## Player Notes\n> \"Every journey begins with a single critical failure.\" - *Old Adventurer's Proverb*\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Bestiary: Denizens of Oros\n\n### 👾 Cobalt Golem\n*Large Construct, Unaligned*\n\n* **Armor Class:** 18 (Natural Armor)\n* **Hit Points:** 85 ($10d10 + 30$)\n* **Speed:** 20 ft.\n\n| MGT | AGI | ESS | WIT |\n| :---: | :---: | :---: | :---: |\n| 18 (+4) | 8 (-1) | 1 (-5) | 3 (-4) |\n\n**Abilities:**\n* **Magic Resistance:** The golem has advantage on saving throws against spells.\n* **Immutable Form:** Immune to any spell or effect that would alter its form.\n\n---\n\n### 👻 Echo-Wraith\n*Medium Undead, Chaotic Neutral*\n\n* **Armor Class:** 13\n* **Hit Points:** 40\n* **Special:** Incorporeal Movement (can move through objects).\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Character Sheet: [NAME]\n\n## Biography\n* **Class:** `Enter Class`\n* **Level:** 1\n* **Background:** `Enter Background`\n\n## Stats\n* **HP:** 10 / 10\n* **XP:** 0 / 1000\n* **Defense (AC):** 10\n\n## Inventory\n- [ ] Rusty Dagger (1d4 DMG)\n- [ ] Leather Tunic (+1 AC)\n- [ ] 5x Torches\n\n---\n\n## Player Notes\n> \"Every journey begins with a single critical failure.\" - *Old Adventurer's Proverb*\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/Core_Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/Core_Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Bestiary: Denizens of Oros\n\n### 👾 Cobalt Golem\n*Large Construct, Unaligned*\n\n* **Armor Class:** 18 (Natural Armor)\n* **Hit Points:** 85 ($10d10 + 30$)\n* **Speed:** 20 ft.\n\n| MGT | AGI | ESS | WIT |\n| :---: | :---: | :---: | :---: |\n| 18 (+4) | 8 (-1) | 1 (-5) | 3 (-4) |\n\n**Abilities:**\n* **Magic Resistance:** The golem has advantage on saving throws against spells.\n* **Immutable Form:** Immune to any spell or effect that would alter its form.\n\n---\n\n### 👻 Echo-Wraith\n*Medium Undead, Chaotic Neutral*\n\n* **Armor Class:** 13\n* **Hit Points:** 40\n* **Special:** Incorporeal Movement (can move through objects).\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/Core_Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether & Iron/Character_Template/char_template.md\">\n# Character Sheet: [NAME]\n\n## Biography\n* **Class:** `Enter Class`\n* **Level:** 1\n* **Background:** `Enter Background`\n\n## Stats\n* **HP:** 10 / 10\n* **XP:** 0 / 1000\n* **Defense (AC):** 10\n\n## Inventory\n- [ ] Rusty Dagger (1d4 DMG)\n- [ ] Leather Tunic (+1 AC)\n- [ ] 5x Torches\n\n---\n\n## Player Notes\n> \"Every journey begins with a single critical failure.\" - *Old Adventurer's Proverb*\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  accept: text/event-stream
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "what additional rules can I add to build this game out? Give me some suggestions for how magic can work.",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-haiku-20240307",
+    "stream": true,
+    "system": "The user is currently working on an RPG project. Here is the content of the active document for context:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$",
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  accept: text/event-stream
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "what additional rules can I add to build this game out? Give me some suggestions for how magic can work.",
+            "role": "user"
+        },
+        {
+            "content": "Here are some suggestions for expanding the rules and adding a magic system:\n\n1. **Character Races and Classes**:\n   - Introduce different playable races (e.g., humans, elves, dwarves, orcs) with unique racial traits and abilities.\n   - Implement a class system that allows players to specialize their characters (e.g., warrior, mage, rogue, cleric).\n   - Each class could have access to different types of abilities and spells.\n\n2. **Skill System**:\n   - Expand the skill system beyond the primary attributes.\n   - Allow players to invest points into specific skills (e.g., Perception, Persuasion, Arcana, Survival) that provide additional benefits.\n   - Skill checks could be used for non-combat situations, problem-solving, and interactions.\n\n3. **Magic System**:\n   - Introduce different schools or types of magic (e.g., elemental, necromantic, divine, arcane).\n   - Implement a spell system with different spell levels and casting mechanics.\n   - Spells could have various effects, such as dealing damage, buffing allies, debuffing enemies, or manipulating the environment.\n   - Mages could have a limited number of spell slots per day, requiring resource management.\n   - Spellcasting could be tied to the Essence attribute and require successful ability checks.\n\n4. **Equipment and Inventory**:\n   - Develop a comprehensive equipment system with various weapon types, armor, and other gear.\n   - Introduce item rarity, stats, and special properties (e.g., magical effects, unique abilities).\n   - Implement an encumbrance system to limit the amount of gear a character can carry.\n\n5. **Adventuring and Exploration**:\n   - Incorporate exploration mechanics, such as traversing different terrain, navigating dungeons, and encountering environmental hazards.\n   - Add rules for foraging, camping, and resting to recover resources and abilities.\n   - Introduce random encounters and events to keep the adventuring experience dynamic.\n\n6. **Progression and Leveling**:\n   - Establish a character progression system, where players earn experience points (XP) and level up.\n   - Each level could grant the character new abilities, skill points, or attribute increases.\n   - Introduce class-specific abilities or specializations that unlock at certain levels.\n\n7. **Dialogue and Interaction**:\n   - Implement a dialogue system that allows players to engage in conversations with NPCs.\n   - Incorporate persuasion, intimidation, and deception mechanics that utilize skills and attributes.\n   - Decisions made during dialogues could have consequences and impact the story.\n\n8. **Faction and Reputation System**:\n   - Introduce various factions (e.g., guilds, political groups, religious orders) that the players can interact with.\n   - Develop a reputation system that tracks the player's standing with different factions based on their actions and choices.\n   - Faction relationships could unlock new quests, resources, or even alter the available options in the game.\n\nRemember, these are just general suggestions to help expand your RPG system. You can pick and choose the elements that fit your game's vision and build upon the existing core rules to create a more comprehensive and engaging experience for your players.",
+            "role": "assistant"
+        },
+        {
+            "content": "Please expand on the following worldbuilding text, adding more detail and lore.\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-haiku-20240307",
+    "stream": true,
+    "system": "The user is currently working on an RPG project. Here is the content of the active document for context:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$",
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: http://localhost:11434/api/tags
+HEADERS:
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a helpful assistant that writes a one-sentence synopsis of a roleplaying game document. Be concise and capture the essence.",
+            "role": "system"
+        },
+        {
+            "content": "Write a one-sentence synopsis of the following RPG content:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/models
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Welcome to your RPG Forge Project\n\nThis README provides a quick overview of how to use RPG Forge to create your masterpiece.\n\n## 🚀 Key Concepts\n\n### 1. The Manuscript\nAll your story and rule files should live under the **Manuscript** folder. RPG Forge automatically assembles these files into your final document. \n*   **Chapters:** Folders categorized as \"Chapter\" are automatically numbered during export.\n*   **Scenes:** Individual files within chapters that make up your narrative flow.\n\n### 2. Research & Lore\nThe **Research** folder is for your worldbuilding notes. Files here are *not* compiled into the final manuscript, but they are always available for reference while you write.\n\n### 3. Versions & Explorations\nEvery save is a checkpoint. Use the **Exploration** menu in the Project Tree to create \"branches\" where you can try out different narrative directions without breaking your main story.\n\n## ✍️ Writing Tips\n\n*   **Focus Mode:** Press `Ctrl+Shift+F` to hide the UI and focus on your words.\n*   **Linking:** Drag a file from the project tree into your document to create a link.\n*   **Variables:** Define stats in your document header (YAML) and use them like `{{hp_base}}` in your text.\n\n## 🛠 Compilation\n\nClick the **Compile** button in the toolbar to generate a professional PDF of your manuscript.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n/* RPG Forge Project Stylesheet */\n/* Use this file to control the look of your Preview and PDF Export. */\n\n/* Example: Professional Book Font */\nbody {\n    font-family: 'Crimson Text', 'Georgia', serif;\n    line-height: 1.6;\n}\n\n/* Example: PDF Pagination Settings */\n@page {\n    size: A4;\n    margin: 20mm;\n    /* Page numbers are handled automatically by RPG Forge, */\n    /* but you can add custom headers/footers here using CSS Paged Media. */\n}\n\n/* Example: Chapter Headers starting on new pages */\nh1 {\n    break-before: page;\n    color: #2c3e50;\n    text-align: center;\n    margin-top: 50px;\n}\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  accept: text/event-stream
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "Search project for: combat",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-haiku-20240307",
+    "stream": true,
+    "system": "The user is currently working on an RPG project. Here is the content of the active document for context:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$",
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nBased on the provided content, here are the relevant sections related to combat mechanics in the \"Core Rules: Aether & Iron\" document:\n\n## 2. Combat Mechanics\nThis section outlines the core combat mechanics, including:\n\n- **Turn-based combat**: The game uses a turn-based combat system.\n- **Action economy**: There are three types of actions available to players during combat:\n  1. **Standard Action** (Attack, Spell)\n  2. **Minor Action** (Drink Potion, Draw Weapon)\n  3. **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThis subsection describes the formula used to calculate damage for physical strikes:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe damage is determined by rolling a base dice value and adding the relevant attribute modifier (e.g., Might modifier for melee attacks).\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  accept: text/event-stream
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "Search project for: combat",
+            "role": "user"
+        },
+        {
+            "content": "Based on the provided content, here are the relevant sections related to combat mechanics in the \"Core Rules: Aether & Iron\" document:\n\n## 2. Combat Mechanics\nThis section outlines the core combat mechanics, including:\n\n- **Turn-based combat**: The game uses a turn-based combat system.\n- **Action economy**: There are three types of actions available to players during combat:\n  1. **Standard Action** (Attack, Spell)\n  2. **Minor Action** (Drink Potion, Draw Weapon)\n  3. **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThis subsection describes the formula used to calculate damage for physical strikes:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe damage is determined by rolling a base dice value and adding the relevant attribute modifier (e.g., Might modifier for melee attacks).",
+            "role": "assistant"
+        },
+        {
+            "content": "Please expand on the following worldbuilding text, adding more detail and lore.\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-haiku-20240307",
+    "stream": true,
+    "system": "The user is currently working on an RPG project. Here is the content of the active document for context:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$",
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$Here is an expanded explanation of the damage calculation mechanics in the \"Aether & Iron\" RPG system:\n\n### Damage Calculation\n\nAt the core of the combat system is the damage calculation formula, which determines the amount of harm inflicted by physical attacks and strikes. This formula reflects the balance between the raw power of the attacker and the finesse with which they wield their weapon.\n\nThe standard damage formula is as follows:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe **Base Dice** represents the inherent damage potential of the weapon or unarmed strike being used. This could be a d4 for a dagger, a d8 for a longsword, or a d6 for a fist strike, for example. The size of this dice die reflects the inherent lethality and destructive capacity of the attack.\n\nThe **Attribute Modifier** is derived from the attacker's relevant ability score. For melee attacks, this is typically the character's Might score, which measures their physical strength and martial prowess. For ranged attacks, the Agility modifier would be used, as it reflects the shooter's dexterity and precision.\n\nThis combination of raw damage dice and refined attribute modifier creates a balanced equation that accounts for both the power of the blow and the skill of the combatant. A mighty warrior wielding a greatsword will deal tremendous damage, but a nimble rogue striking with a swift dagger can also inflict serious harm through careful, targeted strikes.\n\nThe damage formula is a core mechanic that underpins the combat system, allowing players to intuitively understand how their choices in character building and equipment selection will translate to battlefield effectiveness. It is a simple yet versatile formula that can be adapted to handle a wide range of weapon types and combat styles within the \"Aether & Iron\" world.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nHere is an expanded explanation of the damage calculation mechanics in the \"Aether & Iron\" RPG system:\n\n### Damage Calculation\n\nAt the core of the combat system is the damage calculation formula, which determines the amount of harm inflicted by physical attacks and strikes. This formula reflects the balance between the raw power of the attacker and the finesse with which they wield their weapon.\n\nThe standard damage formula is as follows:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe **Base Dice** represents the inherent damage potential of the weapon or unarmed strike being used. This could be a d4 for a dagger, a d8 for a longsword, or a d6 for a fist strike, for example. The size of this dice die reflects the inherent lethality and destructive capacity of the attack.\n\nThe **Attribute Modifier** is derived from the attacker's relevant ability score. For melee attacks, this is typically the character's Might score, which measures their physical strength and martial prowess. For ranged attacks, the Agility modifier would be used, as it reflects the shooter's dexterity and precision.\n\nThis combination of raw damage dice and refined attribute modifier creates a balanced equation that accounts for both the power of the blow and the skill of the combatant. A mighty warrior wielding a greatsword will deal tremendous damage, but a nimble rogue striking with a swift dagger can also inflict serious harm through careful, targeted strikes.\n\nThe damage formula is a core mechanic that underpins the combat system, allowing players to intuitively understand how their choices in character building and equipment selection will translate to battlefield effectiveness. It is a simple yet versatile formula that can be adapted to handle a wide range of weapon types and combat styles within the \"Aether & Iron\" world.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/Core Rules/core_rules.md\">\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nHere is an expanded explanation of the damage calculation mechanics in the \"Aether & Iron\" RPG system:\n\n### Damage Calculation Details\n\nAt the core of the combat system is the damage calculation formula, which determines the amount of harm inflicted by physical attacks and strikes. This formula reflects the balance between the raw power of the attacker and the finesse with which they wield their weapon.\n\nThe standard damage formula is as follows:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe **Base Dice** represents the inherent damage potential of the weapon or unarmed strike being used. This could be a d4 for a dagger, a d8 for a longsword, or a d6 for a fist strike, for example. The size of this dice die reflects the inherent lethality and destructive capacity of the attack.\n\nThe **Attribute Modifier** is derived from the attacker's relevant ability score. For melee attacks, this is typically the character's Might score, which measures their physical strength and martial prowess. For ranged attacks, the Agility modifier would be used, as it reflects the shooter's dexterity and precision.\n\nThis combination of raw damage dice and refined attribute modifier creates a balanced equation that accounts for both the power of the blow and the skill of the combatant. A mighty warrior wielding a greatsword will deal tremendous damage, but a nimble rogue striking with a swift dagger can also inflict serious harm through careful, targeted strikes.\n\nThe damage formula is a core mechanic that underpins the combat system, allowing players to intuitively understand how their choices in character building and equipment selection will translate to battlefield effectiveness. It is a simple yet versatile formula that can be adapted to handle a wide range of weapon types and combat styles within the \"Aether & Iron\" world.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nHere is an expanded explanation of the damage calculation mechanics in the \"Aether & Iron\" RPG system:\n\n### Damage Calculation Details\n\nAt the core of the combat system is the damage calculation formula, which determines the amount of harm inflicted by physical attacks and strikes. This formula reflects the balance between the raw power of the attacker and the finesse with which they wield their weapon.\n\nThe standard damage formula is as follows:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe **Base Dice** represents the inherent damage potential of the weapon or unarmed strike being used. This could be a d4 for a dagger, a d8 for a longsword, or a d6 for a fist strike, for example. The size of this dice die reflects the inherent lethality and destructive capacity of the attack.\n\nThe **Attribute Modifier** is derived from the attacker's relevant ability score. For melee attacks, this is typically the character's Might score, which measures their physical strength and martial prowess. For ranged attacks, the Agility modifier would be used, as it reflects the shooter's dexterity and precision.\n\nThis combination of raw damage dice and refined attribute modifier creates a balanced equation that accounts for both the power of the blow and the skill of the combatant. A mighty warrior wielding a greatsword will deal tremendous damage, but a nimble rogue striking with a swift dagger can also inflict serious harm through careful, targeted strikes.\n\nThe damage formula is a core mechanic that underpins the combat system, allowing players to intuitively understand how their choices in character building and equipment selection will translate to battlefield effectiveness. It is a simple yet versatile formula that can be adapted to handle a wide range of weapon types and combat styles within the \"Aether & Iron\" world.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Core Rules: Aether & Iron\n\n## 1. Attributes\nPlayers distribute points into four primary stats. Each stat influences specific \"Save DCs.\"\n\n| Attribute | Modifier Formula | Use Case |\n| :--- | :--- | :--- |\n| **Might** | $(Score - 10) / 2$ | Melee, Athletics, Physical Saves |\n| **Agility** | $(Score - 10) / 2$ | Stealth, Ranged, Reflex Saves |\n| **Essence** | $(Score - 10) / 2$ | Magic Power, Mental Resistance |\n| **Wit** | $(Score - 10) / 2$ | Investigation, Initiative |\n\n## 2. Combat Mechanics\nCombat is turn-based. Action economy includes:\n1.  **Standard Action** (Attack, Spell)\n2.  **Minor Action** (Drink Potion, Draw Weapon)\n3.  **Reaction** (Counter-spell, Parry)\n\n### Damage Calculation\nThe standard damage formula for physical strikes is:\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nHere is an expanded explanation of the damage calculation mechanics in the \"Aether & Iron\" RPG system:\n\n### Damage Calculation Details\n\nAt the core of the combat system is the damage calculation formula, which determines the amount of harm inflicted by physical attacks and strikes. This formula reflects the balance between the raw power of the attacker and the finesse with which they wield their weapon.\n\nThe standard damage formula is as follows:\n\n$$Damage = (Base\\,Dice) + \\text{Attribute Mod}$$\n\nThe **Base Dice** represents the inherent damage potential of the weapon or unarmed strike being used. This could be a d4 for a dagger, a d8 for a longsword, or a d6 for a fist strike, for example. The size of this dice die reflects the inherent lethality and destructive capacity of the attack.\n\nThe **Attribute Modifier** is derived from the attacker's relevant ability score. For melee attacks, this is typically the character's Might score, which measures their physical strength and martial prowess. For ranged attacks, the Agility modifier would be used, as it reflects the shooter's dexterity and precision.\n\nThis combination of raw damage dice and refined attribute modifier creates a balanced equation that accounts for both the power of the blow and the skill of the combatant. A mighty warrior wielding a greatsword will deal tremendous damage, but a nimble rogue striking with a swift dagger can also inflict serious harm through careful, targeted strikes.\n\nThe damage formula is a core mechanic that underpins the combat system, allowing players to intuitively understand how their choices in character building and equipment selection will translate to battlefield effectiveness. It is a simple yet versatile formula that can be adapted to handle a wide range of weapon types and combat styles within the \"Aether & Iron\" world.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/models
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/models
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Manuscript\nContents:\n- char_template: A foundational character sheet for a Level 1 RPG character, detailing their class, background, stats, inventory, and a humorous proverb about the trials of adventuring.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: System Manifest\nContents:\n- system_manifest: In a world where magic intertwines with machinery, \"Aether & Iron\" invites adventurers to navigate the delicate balance between arcane forces and industrial might, all while forging their destinies in a D20-based high fantasy realm.\n- 79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest: In a world where the clash of aetheric magic and iron-forged might shapes destiny, adventurers must navigate the intricacies of a D20-based system, balancing their ambitions against the weight of their encumbrance and the allure of silver shards.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Media\nContents:\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Core Rules\nContents:\n- core_rules: In a world where muscle meets magic, the \"Aether & Iron\" RPG core rules unveil a dynamic combat system, blending raw strength and cunning agility to determine the fates of heroes as they navigate the perilous dance of battle.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Bestiary\nContents:\n- bestiary: The \"Bestiary: Denizens of Oros\" introduces formidable creatures such as the resilient Cobalt Golem, a powerful construct immune to magical alterations, and the eerie Echo-Wraith, a chaotic undead that can seamlessly traverse through objects.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Research\nContents:\n- Project Guide: Dive into the heart of your creativity with RPG Forge, where every chapter unfolds a tale waiting to be crafted, and each scene beckons you to explore the limitless horizons of your imagination.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Characters\nContents:\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Places\nContents:\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Cultures\nContents:\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Stylesheets\nContents:\n- style.css: In a realm where every written word shapes destiny, the meticulously crafted stylesheet breathes life into the pages of adventure, promising a visually enchanting journey through uncharted worlds.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Aether and Iron\nContents:\n- Manuscript: A foundational character sheet template for Level 1 RPG characters, featuring essential details and a lighthearted proverb to inspire adventurers.\n- Research: A comprehensive guide to inspire and facilitate creative storytelling and world-building in RPG development.\n- Stylesheets: A comprehensive stylesheet that enhances the visual storytelling of the RPG, creating an immersive and enchanting experience for players.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Manuscript\nContents:\n- System Manifest: An overview of the \"Aether & Iron\" RPG system, detailing its unique blend of magic and machinery within a D20-based framework, emphasizing the balance of power, destiny, and resource management for adventurers.\n- Media: A compilation of visual and audio assets for the RPG, including artwork, soundtracks, and promotional materials.\n- Core Rules: An essential guide to the dynamic combat mechanics in the \"Aether & Iron\" RPG, where strength and agility intertwine to shape the outcomes of heroic encounters.\n- char_template: A foundational character sheet for a Level 1 RPG character, detailing their class, background, stats, inventory, and a humorous proverb about the trials of adventuring.\n- Bestiary: A comprehensive guide detailing the formidable creatures of Oros, including the resilient Cobalt Golem and the eerie Echo-Wraith.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Research\nContents:\n- Characters: A comprehensive compilation of character profiles, including their backgrounds, abilities, and motivations.\n- Places: A compilation of diverse locations and settings that enrich the game's world-building and storytelling.\n- Cultures: A comprehensive exploration of the diverse cultures within the game world, detailing their customs, beliefs, and societal structures.\n- Project Guide: Dive into the heart of your creativity with RPG Forge, where every chapter unfolds a tale waiting to be crafted, and each scene beckons you to explore the limitless horizons of your imagination.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Aether and Iron\nContents:\n- Manuscript: A comprehensive collection of essential resources for the \"Aether & Iron\" RPG, including system overviews, core rules, character templates, a bestiary, and accompanying media assets.\n- Research: A comprehensive collection of foundational research materials encompassing character profiles, diverse locations, and cultural insights to enhance world-building and storytelling in the RPG.\n- Stylesheets: A comprehensive stylesheet that enhances the visual storytelling of the RPG, creating an immersive and enchanting experience for players.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: System Manifest\nContents:\n- system_manifest: In a world where ancient magic and steam-powered technology collide, the fate of kingdoms hangs in the balance as adventurers wield the power of Aether and Iron, navigating treacherous quests and formidable foes to unlock the secrets of a forgotten age.\n- 79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest: In a world where the clash of aetheric magic and iron-forged might shapes destiny, adventurers must navigate the intricacies of a D20-based system, balancing their ambitions against the weight of their encumbrance and the allure of silver shards.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Manuscript\nContents:\n- System Manifest: A comprehensive overview of the game's lore and mechanics, detailing a D20-based system set in a world where ancient magic and steam-powered technology intertwine.\n- Media: A compilation of visual and audio assets for the RPG, including artwork, soundtracks, and promotional materials.\n- Core Rules: An essential guide to the dynamic combat mechanics in the \"Aether & Iron\" RPG, where strength and agility intertwine to shape the outcomes of heroic encounters.\n- char_template: A foundational character sheet for a Level 1 RPG character, detailing their class, background, stats, inventory, and a humorous proverb about the trials of adventuring.\n- Bestiary: A comprehensive guide detailing the formidable creatures of Oros, including the resilient Cobalt Golem and the eerie Echo-Wraith.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Aether and Iron\nContents:\n- Manuscript: A comprehensive collection of game lore, mechanics, visual assets, character templates, and creature descriptions for the \"Aether & Iron\" RPG, blending ancient magic with steam-powered technology.\n- Research: A comprehensive collection of foundational research materials encompassing character profiles, diverse locations, and cultural insights to enhance world-building and storytelling in the RPG.\n- Stylesheets: A comprehensive stylesheet that enhances the visual storytelling of the RPG, creating an immersive and enchanting experience for players.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!! OH NO IM NOT!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: System Manifest\nContents:\n- system_manifest: In a world where ancient magic and steam-powered technology collide, the fate of kingdoms hangs in the balance as adventurers wield the power of Aether and Iron, navigating treacherous quests and formidable foes to unlock the secrets of a forgotten age.\n- 79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest: In a realm where magic and machinery collide, players must navigate a perilous journey through a world of shimmering Silver Shards and formidable beasts, all while mastering the intricate rules of a D20-based high fantasy system that tests their might to its limits.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!! OH NO IM NOT!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!! OH NO IM NOT!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Manuscript\nContents:\n- System Manifest: A comprehensive outline of the game's setting and mechanics, detailing a high fantasy world where ancient magic and steam technology intersect, governed by a D20-based system that challenges players through adventurous quests and formidable opponents.\n- Media: A compilation of visual and audio assets for the RPG, including artwork, soundtracks, and promotional materials.\n- Core Rules: An essential guide to the dynamic combat mechanics in the \"Aether & Iron\" RPG, where strength and agility intertwine to shape the outcomes of heroic encounters.\n- char_template: A foundational character sheet for a Level 1 RPG character, detailing their class, background, stats, inventory, and a humorous proverb about the trials of adventuring.\n- Bestiary: A comprehensive guide detailing the formidable creatures of Oros, including the resilient Cobalt Golem and the eerie Echo-Wraith.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: System Manifest\nContents:\n- system_manifest: In a world where ancient magic and steam-powered technology collide, the fate of kingdoms hangs in the balance as adventurers wield the power of Aether and Iron, navigating treacherous quests and formidable foes to unlock the secrets of a forgotten age.\n- 79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest: In a realm where magic and machinery intertwine, adventurers navigate the treacherous landscape of Aether & Iron, battling ancient beasts and forging their destinies with the weight of silver shards in their pockets.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Aether and Iron\nContents:\n- Manuscript: A comprehensive manuscript containing the game's setting and mechanics, visual and audio assets, core combat rules, character templates, and a bestiary of formidable creatures for the \"Aether & Iron\" RPG.\n- Research: A comprehensive collection of foundational research materials encompassing character profiles, diverse locations, and cultural insights to enhance world-building and storytelling in the RPG.\n- Stylesheets: A comprehensive stylesheet that enhances the visual storytelling of the RPG, creating an immersive and enchanting experience for players.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Manuscript\nContents:\n- System Manifest: A comprehensive guide detailing the intricate world of Aether & Iron, where adventurers harness the dual forces of magic and steam technology to confront ancient threats and shape their destinies.\n- Media: A compilation of visual and audio assets for the RPG, including artwork, soundtracks, and promotional materials.\n- Core Rules: An essential guide to the dynamic combat mechanics in the \"Aether & Iron\" RPG, where strength and agility intertwine to shape the outcomes of heroic encounters.\n- char_template: A foundational character sheet for a Level 1 RPG character, detailing their class, background, stats, inventory, and a humorous proverb about the trials of adventuring.\n- Bestiary: A comprehensive guide detailing the formidable creatures of Oros, including the resilient Cobalt Golem and the eerie Echo-Wraith.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Aether and Iron\nContents:\n- Manuscript: A comprehensive collection of foundational materials for the \"Aether & Iron\" RPG, encompassing world-building, media assets, core combat rules, character templates, and a detailed bestiary of creatures.\n- Research: A comprehensive collection of foundational research materials encompassing character profiles, diverse locations, and cultural insights to enhance world-building and storytelling in the RPG.\n- Stylesheets: A comprehensive stylesheet that enhances the visual storytelling of the RPG, creating an immersive and enchanting experience for players.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.",
+            "role": "system"
+        },
+        {
+            "content": "Document Content:\n\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!! OH NO IM NOT!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n\nTask: Write a one-sentence synopsis.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: System Manifest\nContents:\n- system_manifest: In a world where ancient magic and steam-powered technology collide, the fate of kingdoms hangs in the balance as adventurers wield the power of Aether and Iron, navigating treacherous quests and formidable foes to unlock the secrets of a forgotten age.\n- 79b1cde661137c6f0b1484b1ade48999c3a0e594_system_manifest: In a realm where the weight of ambition is measured in silver shards, adventurers must navigate the intricate tapestry of power and peril, forging their destinies amid the clash of aether and iron.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Manuscript\nContents:\n- System Manifest: A comprehensive overview of the game's narrative and thematic elements, highlighting the interplay between ancient magic and steam-powered technology in a world filled with quests and ambition.\n- Media: A compilation of visual and audio assets for the RPG, including artwork, soundtracks, and promotional materials.\n- Core Rules: An essential guide to the dynamic combat mechanics in the \"Aether & Iron\" RPG, where strength and agility intertwine to shape the outcomes of heroic encounters.\n- char_template: A foundational character sheet for a Level 1 RPG character, detailing their class, background, stats, inventory, and a humorous proverb about the trials of adventuring.\n- Bestiary: A comprehensive guide detailing the formidable creatures of Oros, including the resilient Cobalt Golem and the eerie Echo-Wraith.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.openai.com/v1/chat/completions
+HEADERS:
+  authorization: [REDACTED]
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').",
+            "role": "system"
+        },
+        {
+            "content": "Folder: Aether and Iron\nContents:\n- Manuscript: A comprehensive collection of narrative elements, media assets, core gameplay mechanics, character templates, and bestiary entries for the \"Aether & Iron\" RPG, emphasizing the fusion of ancient magic and steam-powered technology.\n- Research: A comprehensive collection of foundational research materials encompassing character profiles, diverse locations, and cultural insights to enhance world-building and storytelling in the RPG.\n- Stylesheets: A comprehensive stylesheet that enhances the visual storytelling of the RPG, creating an immersive and enchanting experience for players.\n\n\nTask: Write a one-sentence summary.",
+            "role": "user"
+        }
+    ],
+    "model": "gpt-4o-mini",
+    "stream": false,
+    "temperature": 0.7
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/models
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  content-type: application/json
+  user-agent: Mozilla/5.0 RPGForge/1.0
+BODY: {
+}
+
+
+--- NEW REQUEST ---
+URL: https://api.anthropic.com/v1/messages
+HEADERS:
+  x-api-key: [REDACTED]
+  anthropic-version: 2023-06-01
+  user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+  content-type: application/json
+BODY: {
+    "max_tokens": 1024,
+    "messages": [
+        {
+            "content": "<current_document path=\"Aether and Iron/Manuscript/System Manifest/system_manifest.md\">\n# Project: Aether & Iron\n**Metadata & Versioning**\n\n## Project Structure\n- Core Rules\n- Bestiary\n- Character Sheet\n\nGOING IN A DIFFERENT DIRECTION!!!!\n\n## Global Constants\n* **System:** D20-based High Fantasy\n* **Max Level:** 20\n* **Encumbrance Limit:** $Might \\times 5$ (kg)\n* **Default Currency:** Silver Shards (SS)\n\n> **Note for App Testing:** This file serves as the root node. Ensure your app can parse relative links to the files below.\n\n</current_document>\n",
+            "role": "user"
+        }
+    ],
+    "model": "claude-3-5-sonnet-latest",
+    "stream": false,
+    "system": "You are an expert RPG game design analyzer.\nAnalyze the provided document for rule conflicts, ambiguities, and completeness gaps.\nYou must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\nFormat: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]",
+    "temperature": 0.2
+}
+

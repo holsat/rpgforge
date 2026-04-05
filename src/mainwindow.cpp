@@ -534,8 +534,12 @@ void MainWindow::setupSidebar()
     connect(m_document, &KTextEditor::Document::documentSavedOrUploaded, this, [this]() {
         updateProjectStats();
         if (ProjectManager::instance().isProjectOpen() && m_document->url().isLocalFile()) {
-            QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(m_document->url().toLocalFile());
+            QString filePath = m_document->url().toLocalFile();
+            QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath);
+            
             SynopsisService::instance().requestUpdate(relPath, true);
+            GitService::instance().autoCommit(filePath);
+            KnowledgeBase::instance().indexFile(filePath);
         }
     });
     connect(m_document, &KTextEditor::Document::documentUrlChanged, this, [this]() {

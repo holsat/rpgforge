@@ -42,6 +42,7 @@
 #include <QProgressDialog>
 #include <QEventLoop>
 #include <QMessageBox>
+#include <QFutureWatcher>
 
 class WizardPage : public QWizardPage {
 public:
@@ -61,6 +62,7 @@ OnboardingWizard::OnboardingWizard(QWidget *parent)
     setPage(Page_Welcome, createWelcomePage());
     setPage(Page_Project, createProjectPage());
     setPage(Page_Scrivener, createScrivenerPage());
+    setPage(Page_GitImport, createGitImportPage());
     setPage(Page_AI, createAiPage());
     setPage(Page_Github, createGithubPage());
     setPage(Page_Finish, createFinishPage());
@@ -75,10 +77,13 @@ int OnboardingWizard::nextId() const
     switch (currentId()) {
         case Page_Welcome:
             if (m_importScrivenerRadio->isChecked()) return Page_Scrivener;
+            if (m_importGitRadio->isChecked()) return Page_GitImport;
             return Page_Project;
         case Page_Project:
             return Page_AI;
         case Page_Scrivener:
+            return Page_AI;
+        case Page_GitImport:
             return Page_AI;
         case Page_AI:
             return Page_Github;
@@ -106,11 +111,13 @@ QWizardPage* OnboardingWizard::createWelcomePage()
 
     m_createNewRadio = new QRadioButton(i18n("Create a new project from a template"), page);
     m_importScrivenerRadio = new QRadioButton(i18n("Import an existing Scrivener project (.scriv)"), page);
+    m_importGitRadio = new QRadioButton(i18n("Import from a Git repository"), page);
     m_createNewRadio->setChecked(true);
 
     layout->addSpacing(20);
     layout->addWidget(m_createNewRadio);
     layout->addWidget(m_importScrivenerRadio);
+    layout->addWidget(m_importGitRadio);
     layout->addStretch();
 
     return page;
@@ -241,6 +248,40 @@ QWizardPage* OnboardingWizard::createScrivenerPage()
     layout->addStretch();
 
     page->registerField(QStringLiteral("scrivenerPath*"), m_scrivenerPathEdit);
+    page->registerField(QStringLiteral("projectDir*"), targetEdit);
+
+    return page;
+}
+
+QWizardPage* OnboardingWizard::createGitImportPage()
+{
+    auto *page = new WizardPage(this);
+    page->setTitle(i18n("Import from Git"));
+    page->setSubTitle(i18n("Enter the URL of the repository you want to clone."));
+
+    auto *layout = new QVBoxLayout(page);
+    auto *form = new QFormLayout();
+
+    m_gitUrlEdit = new QLineEdit(page);
+    m_gitUrlEdit->setPlaceholderText(QStringLiteral("https://github.com/user/repo.git"));
+    form->addRow(i18n("Repository URL:"), m_gitUrlEdit);
+
+    auto *targetLayout = new QHBoxLayout();
+    QLineEdit *targetEdit = new QLineEdit(page);
+    targetEdit->setText(QDir::homePath() + QStringLiteral("/Documents/RPGProjects"));
+    auto *targetBrowseBtn = new QPushButton(i18n("Browse..."), page);
+    connect(targetBrowseBtn, &QPushButton::clicked, this, [this, targetEdit]() {
+        QString dir = QFileDialog::getExistingDirectory(this, i18n("Select Target Directory"), targetEdit->text());
+        if (!dir.isEmpty()) targetEdit->setText(dir);
+    });
+    targetLayout->addWidget(targetEdit);
+    targetLayout->addWidget(targetBrowseBtn);
+    form->addRow(i18n("Import Into:"), targetLayout);
+
+    layout->addLayout(form);
+    layout->addStretch();
+
+    page->registerField(QStringLiteral("gitUrl*"), m_gitUrlEdit);
     page->registerField(QStringLiteral("projectDir*"), targetEdit);
 
     return page;
@@ -479,6 +520,37 @@ void OnboardingWizard::accept()
             importer.import(scrivPath, fullDir, &model);
             ProjectManager::instance().setTree(model.projectData());
             ProjectManager::instance().saveProject();
+        }
+    } else if (m_importGitRadio->isChecked()) {
+        QString gitUrl = m_gitUrlEdit->text();
+        name = QFileInfo(gitUrl).baseName();
+        if (name.endsWith(QStringLiteral(".git"))) name.chop(4);
+        fullDir = QDir(baseDir).absoluteFilePath(name);
+        
+        QDir().mkpath(fullDir);
+        
+        auto *progress = new QProgressDialog(i18n("Cloning repository..."), i18n("Cancel"), 0, 0, this);
+        progress->setWindowModality(Qt::WindowModal);
+        progress->show();
+        
+        QEventLoop loop;
+        bool success = false;
+        
+        QFuture<bool> future = GitService::instance().cloneRepo(gitUrl, fullDir);
+        auto watcher = new QFutureWatcher<bool>(this);
+        connect(watcher, &QFutureWatcher<bool>::finished, &loop, &QEventLoop::quit);
+        connect(watcher, &QFutureWatcher<bool>::finished, [&success, watcher]() {
+            success = watcher->result();
+        });
+        watcher->setFuture(future);
+        
+        loop.exec();
+        progress->close();
+        
+        if (success) {
+            ProjectManager::instance().openProject(fullDir);
+        } else {
+            QMessageBox::warning(this, i18n("Git Error"), i18n("Failed to clone repository."));
         }
     } else {
         fullDir = QDir(baseDir).absoluteFilePath(name);
