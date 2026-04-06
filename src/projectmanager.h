@@ -95,6 +95,7 @@ Q_SIGNALS:
     void projectOpened();
     void projectClosed();
     void projectSettingsChanged();
+    void treeChanged();
 
 private:
     explicit ProjectManager(QObject *parent = nullptr);
@@ -102,6 +103,7 @@ private:
     void loadDefaults();
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
+    int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;
 
     QString m_projectFilePath;
     QJsonObject m_data;

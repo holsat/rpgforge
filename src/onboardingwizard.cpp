@@ -17,6 +17,7 @@
 */
 
 #include "onboardingwizard.h"
+#include "mainwindow.h"
 #include "llmservice.h"
 #include "gitservice.h"
 #include "githubservice.h"
@@ -587,6 +588,16 @@ void OnboardingWizard::accept()
     }
 
     settings.setValue(QStringLiteral("firstRunComplete"), true);
+    
+    // Automatically open the README after the wizard finishes
+    QString readmePath = QDir(fullDir).absoluteFilePath(QStringLiteral("research/README.md"));
+    if (QFile::exists(readmePath)) {
+        auto *mainWin = qobject_cast<MainWindow*>(parent());
+        if (mainWin) {
+            mainWin->openFileFromUrl(QUrl::fromLocalFile(readmePath));
+        }
+    }
+
     QWizard::accept();
 }
 

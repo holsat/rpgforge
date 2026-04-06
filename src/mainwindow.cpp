@@ -832,6 +832,12 @@ void MainWindow::newProject()
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
+                
+                // Automatically open the README
+                QString readmePath = QDir(dir).absoluteFilePath(QStringLiteral("research/README.md"));
+                if (QFile::exists(readmePath)) {
+                    openFileFromUrl(QUrl::fromLocalFile(readmePath));
+                }
             }
         }
     }
@@ -1643,34 +1649,54 @@ void MainWindow::importWord()
     QString projectDir = ProjectManager::instance().projectPath();
     QString mediaDir = projectDir + QStringLiteral("/media");
     
-    // Import into currently selected folder if possible
-    QModelIndex parentIdx = m_projectTree->currentIndex();
+    ProjectTreeModel *model = m_projectTree->model();
+    
+    // 1. Find Manuscript folder
+    QModelIndex manuscriptIdx;
+    ProjectTreeItem *rootItem = model->itemFromIndex(QModelIndex());
+    for (int i = 0; i < rootItem->children.count(); ++i) {
+        if (rootItem->children[i]->category == ProjectTreeItem::Manuscript) {
+            manuscriptIdx = model->index(i, 0, QModelIndex());
+            break;
+        }
+    }
+    
+    // Fallback to current selection or root if Manuscript not found
+    if (!manuscriptIdx.isValid()) {
+        manuscriptIdx = m_projectTree->currentIndex();
+    }
     
     for (const QString &file : files) {
         QFileInfo info(file);
-        QString safeName = DocumentConverter::sanitizePrefix(info.baseName());
+        QString baseName = info.baseName();
+        QString safeName = DocumentConverter::sanitizePrefix(baseName);
+        
+        // Create a subfolder for this specific document
+        QString folderRelPath = QStringLiteral("manuscript/") + safeName;
+        if (!manuscriptIdx.isValid()) folderRelPath = safeName; // fallback
+        
+        QModelIndex targetFolderIdx = model->addFolder(baseName, folderRelPath, manuscriptIdx);
+        
         auto result = converter.convertToMarkdown(file, safeName, mediaDir);
         
         if (result.success) {
-            QString relPath = safeName + QStringLiteral(".md");
-            if (parentIdx.isValid()) {
-                ProjectTreeItem *parent = m_projectTree->model()->itemFromIndex(parentIdx);
-                relPath = parent->path + QDir::separator() + relPath;
-            }
-            
+            QString relPath = folderRelPath + QDir::separator() + safeName + QStringLiteral(".md");
             QString absPath = QDir(projectDir).absoluteFilePath(relPath);
+            
             QDir().mkpath(QFileInfo(absPath).absolutePath());
             
             QFile outFile(absPath);
             if (outFile.open(QIODevice::WriteOnly)) {
                 outFile.write(result.markdown.toUtf8());
                 outFile.close();
-                m_projectTree->model()->addFile(info.baseName(), relPath, parentIdx);
+                model->addFile(baseName, relPath, targetFolderIdx);
             }
+        } else {
+            QMessageBox::warning(this, i18n("Import Error"), i18n("Failed to convert %1: %2", baseName, result.error));
         }
     }
     
-    ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+    ProjectManager::instance().setTree(model->projectData());
     ProjectManager::instance().saveProject();
     
     QMessageBox::information(this, i18n("Import Complete"), i18n("%1 documents imported successfully.", files.count()));

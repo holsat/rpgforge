@@ -134,8 +134,8 @@ QString DocumentConverter::sanitizePrefix(const QString &input)
     result.replace(QLatin1Char(' '), QLatin1Char('_'));
 
     // 2. Remove all shell-special characters: * " ' [ ] { } ( ) # ! @ $ % < > & | ; ? \\
-    // Only allow Alphanumeric, underscores, hyphens, and dots (though we prefer no dots in prefix)
-    static QRegularExpression re(QStringLiteral("[^a-zA-Z0-9_\\-]"));
+    // Allow Alphanumeric, underscores, hyphens, and DOTS.
+    static QRegularExpression re(QStringLiteral("[^a-zA-Z0-9_\\-\\.]"));
     result.remove(re);
 
     return result;

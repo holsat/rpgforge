@@ -18,6 +18,7 @@
 
 #include "projectmanager.h"
 #include "projecttreemodel.h"
+#include "variablemanager.h"
 
 #include <KLocalizedString>
 #include <QFile>
@@ -25,14 +26,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QJsonValue>
 #include <QDir>
 #include <QDebug>
+#include <QRegularExpression>
 
 ProjectManager& ProjectManager::instance()
 {
-    static ProjectManager inst;
-    return inst;
+    static ProjectManager s_instance;
+    return s_instance;
 }
 
 ProjectManager::ProjectManager(QObject *parent)
@@ -44,29 +45,65 @@ ProjectManager::ProjectManager(QObject *parent)
 void ProjectManager::loadDefaults()
 {
     m_data = QJsonObject();
-    m_data[QStringLiteral("name")] = QStringLiteral("Untitled Project");
-    m_data[QStringLiteral("author")] = QString();
-    
-    QJsonObject pdf;
-    pdf[QStringLiteral("pageSize")] = QStringLiteral("A4");
-    pdf[QStringLiteral("marginLeft")] = 20.0;
-    pdf[QStringLiteral("marginRight")] = 20.0;
-    pdf[QStringLiteral("marginTop")] = 20.0;
-    pdf[QStringLiteral("marginBottom")] = 20.0;
-    pdf[QStringLiteral("showPageNumbers")] = true;
-    m_data[QStringLiteral("pdf")] = pdf;
-
-    m_data[QStringLiteral("stylesheet")] = QStringLiteral("stylesheets/style.css");
-    m_data[QStringLiteral("autoSync")] = true; // Enabled by default as per requirement
-    m_data[QStringLiteral("tree")] = QJsonObject();
-    m_data[QStringLiteral("version")] = 1;
+    m_data[QStringLiteral("name")] = i18n("Untitled Project");
+    m_data[QStringLiteral("author")] = i18n("Unknown Author");
+    m_data[QStringLiteral("pageSize")] = QStringLiteral("A4");
+    m_data[QStringLiteral("marginLeft")] = 20.0;
+    m_data[QStringLiteral("marginRight")] = 20.0;
+    m_data[QStringLiteral("marginTop")] = 20.0;
+    m_data[QStringLiteral("marginBottom")] = 20.0;
+    m_data[QStringLiteral("showPageNumbers")] = true;
+    m_data[QStringLiteral("autoSync")] = true;
 }
 
-bool ProjectManager::autoSync() const
+QString ProjectManager::projectName() const
 {
-    return m_data.value(QStringLiteral("autoSync")).toBool(true);
+    return m_data.value(QStringLiteral("name")).toString();
 }
 
+void ProjectManager::setProjectName(const QString &name)
+{
+    if (projectName() != name) {
+        m_data[QStringLiteral("name")] = name;
+        Q_EMIT projectSettingsChanged();
+    }
+}
+
+QString ProjectManager::author() const
+{
+    return m_data.value(QStringLiteral("author")).toString();
+}
+
+void ProjectManager::setAuthor(const QString &author)
+{
+    if (this->author() != author) {
+        m_data[QStringLiteral("author")] = author;
+        Q_EMIT projectSettingsChanged();
+    }
+}
+
+QString ProjectManager::pageSize() const { return m_data.value(QStringLiteral("pageSize")).toString(); }
+void ProjectManager::setPageSize(const QString &size) { m_data[QStringLiteral("pageSize")] = size; Q_EMIT projectSettingsChanged(); }
+
+double ProjectManager::marginLeft() const { return m_data.value(QStringLiteral("marginLeft")).toDouble(); }
+void ProjectManager::setMarginLeft(double margin) { m_data[QStringLiteral("marginLeft")] = margin; Q_EMIT projectSettingsChanged(); }
+
+double ProjectManager::marginRight() const { return m_data.value(QStringLiteral("marginRight")).toDouble(); }
+void ProjectManager::setMarginRight(double margin) { m_data[QStringLiteral("marginRight")] = margin; Q_EMIT projectSettingsChanged(); }
+
+double ProjectManager::marginTop() const { return m_data.value(QStringLiteral("marginTop")).toDouble(); }
+void ProjectManager::setMarginTop(double margin) { m_data[QStringLiteral("marginTop")] = margin; Q_EMIT projectSettingsChanged(); }
+
+double ProjectManager::marginBottom() const { return m_data.value(QStringLiteral("marginBottom")).toDouble(); }
+void ProjectManager::setMarginBottom(double margin) { m_data[QStringLiteral("marginBottom")] = margin; Q_EMIT projectSettingsChanged(); }
+
+bool ProjectManager::showPageNumbers() const { return m_data.value(QStringLiteral("showPageNumbers")).toBool(); }
+void ProjectManager::setShowPageNumbers(bool show) { m_data[QStringLiteral("showPageNumbers")] = show; Q_EMIT projectSettingsChanged(); }
+
+QString ProjectManager::stylesheetPath() const { return m_data.value(QStringLiteral("stylesheetPath")).toString(); }
+void ProjectManager::setStylesheetPath(const QString &path) { m_data[QStringLiteral("stylesheetPath")] = path; Q_EMIT projectSettingsChanged(); }
+
+bool ProjectManager::autoSync() const { return m_data.value(QStringLiteral("autoSync")).toBool(); }
 void ProjectManager::setAutoSync(bool enabled)
 {
     if (autoSync() != enabled) {
@@ -83,8 +120,7 @@ QJsonObject ProjectManager::tree() const
 void ProjectManager::setTree(const QJsonObject &tree)
 {
     m_data[QStringLiteral("tree")] = tree;
-    // Don't emit projectSettingsChanged for every tree change to avoid spam
-    // The panel will manage its own state and call saveProject()
+    Q_EMIT treeChanged();
 }
 
 QString ProjectManager::projectPath() const
@@ -101,11 +137,9 @@ bool ProjectManager::openProject(const QString &filePath)
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (doc.isNull() || !doc.isObject()) {
-        return false;
-    }
+    if (!doc.isObject()) return false;
 
-    m_projectFilePath = QFileInfo(filePath).absoluteFilePath();
+    m_projectFilePath = filePath;
     m_data = doc.object();
     
     Q_EMIT projectOpened();
@@ -131,26 +165,7 @@ bool ProjectManager::createProject(const QString &dirPath, const QString &projec
         if (styleFile.open(QIODevice::WriteOnly)) {
             styleFile.write(
                 "/* RPG Forge Project Stylesheet */\n"
-                "/* Use this file to control the look of your Preview and PDF Export. */\n\n"
-                "/* Example: Professional Book Font */\n"
-                "body {\n"
-                "    font-family: 'Crimson Text', 'Georgia', serif;\n"
-                "    line-height: 1.6;\n"
-                "}\n\n"
-                "/* Example: PDF Pagination Settings */\n"
-                "@page {\n"
-                "    size: A4;\n"
-                "    margin: 20mm;\n"
-                "    /* Page numbers are handled automatically by RPG Forge, */\n"
-                "    /* but you can add custom headers/footers here using CSS Paged Media. */\n"
-                "}\n\n"
-                "/* Example: Chapter Headers starting on new pages */\n"
-                "h1 {\n"
-                "    break-before: page;\n"
-                "    color: #2c3e50;\n"
-                "    text-align: center;\n"
-                "    margin-top: 50px;\n"
-                "}\n"
+                "body { font-family: serif; line-height: 1.6; }\n"
             );
             styleFile.close();
         }
@@ -166,11 +181,13 @@ bool ProjectManager::createProject(const QString &dirPath, const QString &projec
 void ProjectManager::setupDefaultProject(const QString &dir, const QString &name)
 {
     ProjectTreeModel model;
+    QDir projectDir(dir);
     
     // Add top level folder with project name
-    QModelIndex rootIdx = model.addFolder(name, QStringLiteral("."));
+    QModelIndex rootIdx = model.addFolder(name, QString());
 
     // 1. Manuscript
+    projectDir.mkpath(QStringLiteral("manuscript"));
     QModelIndex manuscriptIdx = model.addFolder(i18n("Manuscript"), QStringLiteral("manuscript"), rootIdx);
     model.setData(manuscriptIdx, ProjectTreeItem::Manuscript, ProjectTreeModel::CategoryRole);
     
@@ -178,8 +195,7 @@ void ProjectManager::setupDefaultProject(const QString &dir, const QString &name
     model.setData(chapterIdx, ProjectTreeItem::Chapter, ProjectTreeModel::CategoryRole);
     
     QString scenePath = QStringLiteral("manuscript/scene1.md");
-    QDir(dir).mkpath(QStringLiteral("manuscript"));
-    QFile sceneFile(QDir(dir).absoluteFilePath(scenePath));
+    QFile sceneFile(projectDir.absoluteFilePath(scenePath));
     if (sceneFile.open(QIODevice::WriteOnly)) {
         sceneFile.write("# New Scene\n\nWrite your story here...");
         sceneFile.close();
@@ -188,21 +204,21 @@ void ProjectManager::setupDefaultProject(const QString &dir, const QString &name
     model.setData(sceneIdx, ProjectTreeItem::Scene, ProjectTreeModel::CategoryRole);
 
     // 2. Research
+    projectDir.mkpath(QStringLiteral("research"));
     QModelIndex researchIdx = model.addFolder(i18n("Research"), QStringLiteral("research"), rootIdx);
     model.setData(researchIdx, ProjectTreeItem::Research, ProjectTreeModel::CategoryRole);
     
-    auto addResearchFolder = [&](const QString &name, const QString &relPath, ProjectTreeItem::Category cat) {
-        QModelIndex idx = model.addFolder(name, relPath, researchIdx);
+    auto addResearchSubFolder = [&](const QString &subName, const QString &rel, ProjectTreeItem::Category cat) {
+        QModelIndex idx = model.addFolder(subName, rel, researchIdx);
         model.setData(idx, cat, ProjectTreeModel::CategoryRole);
     };
-    addResearchFolder(i18n("Characters"), QStringLiteral("research/Characters"), ProjectTreeItem::Characters);
-    addResearchFolder(i18n("Places"), QStringLiteral("research/Places"), ProjectTreeItem::Places);
-    addResearchFolder(i18n("Cultures"), QStringLiteral("research/Cultures"), ProjectTreeItem::Cultures);
+    addResearchSubFolder(i18n("Characters"), QStringLiteral("research/Characters"), ProjectTreeItem::Characters);
+    addResearchSubFolder(i18n("Places"), QStringLiteral("research/Places"), ProjectTreeItem::Places);
+    addResearchSubFolder(i18n("Cultures"), QStringLiteral("research/Cultures"), ProjectTreeItem::Cultures);
 
     // Add README.md to Research
     QString readmePath = QStringLiteral("research/README.md");
-    QDir(dir).mkpath(QStringLiteral("research"));
-    QFile readmeFile(QDir(dir).absoluteFilePath(readmePath));
+    QFile readmeFile(projectDir.absoluteFilePath(readmePath));
     if (readmeFile.open(QIODevice::WriteOnly)) {
         const char* readmeContent = R"markdown(# Welcome to your RPG Forge Project
 
@@ -237,22 +253,37 @@ Click the **Compile** button in the toolbar to generate a professional PDF of yo
     QModelIndex readmeIdx = model.addFile(i18n("Project Guide"), readmePath, researchIdx);
     model.setData(readmeIdx, ProjectTreeItem::Notes, ProjectTreeModel::CategoryRole);
 
-    // 3. Stylesheets
+    // 3. Media
+    projectDir.mkpath(QStringLiteral("media"));
+    model.addFolder(i18n("Media"), QStringLiteral("media"), rootIdx);
+
+    // 4. Stylesheets
+    projectDir.mkpath(QStringLiteral("stylesheets"));
     QModelIndex stylesheetsIdx = model.addFolder(i18n("Stylesheets"), QStringLiteral("stylesheets"), rootIdx);
     model.setData(stylesheetsIdx, ProjectTreeItem::Stylesheet, ProjectTreeModel::CategoryRole);
-    model.addFile(QStringLiteral("style.css"), QStringLiteral("stylesheets/style.css"), stylesheetsIdx);
+    
+    QString stylePath = QStringLiteral("stylesheets/style.css");
+    QFile styleFile(projectDir.absoluteFilePath(stylePath));
+    if (styleFile.open(QIODevice::WriteOnly)) {
+        styleFile.write(
+            "/* RPG Forge Project Stylesheet */\n"
+            "body { font-family: serif; line-height: 1.6; }\n"
+        );
+        styleFile.close();
+    }
+    model.addFile(QStringLiteral("style.css"), stylePath, stylesheetsIdx);
 
     // Add .gitignore
-    QFile gitignore(QDir(dir).absoluteFilePath(QStringLiteral(".gitignore")));
+    QFile gitignore(projectDir.absoluteFilePath(QStringLiteral(".gitignore")));
     if (gitignore.open(QIODevice::WriteOnly)) {
         gitignore.write(
             "# RPG Forge Git Ignore\n"
-            "# We only track the manuscript and project metadata by default\n"
             "/*\n"
             "!.gitignore\n"
             "!rpgforge.project\n"
             "!manuscript/\n"
             "!stylesheets/\n"
+            "!media/\n"
             ".rpgforge-vectors.db\n"
         );
         gitignore.close();
@@ -283,184 +314,41 @@ bool ProjectManager::saveProject()
     return true;
 }
 
-QString ProjectManager::projectName() const
-{
-    return m_data.value(QStringLiteral("name")).toString();
-}
-
-void ProjectManager::setProjectName(const QString &name)
-{
-    if (projectName() != name) {
-        m_data[QStringLiteral("name")] = name;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-QString ProjectManager::author() const
-{
-    return m_data.value(QStringLiteral("author")).toString();
-}
-
-void ProjectManager::setAuthor(const QString &author)
-{
-    if (this->author() != author) {
-        m_data[QStringLiteral("author")] = author;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-QString ProjectManager::pageSize() const
-{
-    return m_data.value(QStringLiteral("pdf")).toObject().value(QStringLiteral("pageSize")).toString();
-}
-
-void ProjectManager::setPageSize(const QString &size)
-{
-    if (pageSize() != size) {
-        QJsonObject pdf = m_data.value(QStringLiteral("pdf")).toObject();
-        pdf[QStringLiteral("pageSize")] = size;
-        m_data[QStringLiteral("pdf")] = pdf;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-double ProjectManager::marginLeft() const
-{
-    return m_data.value(QStringLiteral("pdf")).toObject().value(QStringLiteral("marginLeft")).toDouble();
-}
-
-void ProjectManager::setMarginLeft(double margin)
-{
-    if (marginLeft() != margin) {
-        QJsonObject pdf = m_data.value(QStringLiteral("pdf")).toObject();
-        pdf[QStringLiteral("marginLeft")] = margin;
-        m_data[QStringLiteral("pdf")] = pdf;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-double ProjectManager::marginRight() const
-{
-    return m_data.value(QStringLiteral("pdf")).toObject().value(QStringLiteral("marginRight")).toDouble();
-}
-
-void ProjectManager::setMarginRight(double margin)
-{
-    if (marginRight() != margin) {
-        QJsonObject pdf = m_data.value(QStringLiteral("pdf")).toObject();
-        pdf[QStringLiteral("marginRight")] = margin;
-        m_data[QStringLiteral("pdf")] = pdf;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-double ProjectManager::marginTop() const
-{
-    return m_data.value(QStringLiteral("pdf")).toObject().value(QStringLiteral("marginTop")).toDouble();
-}
-
-void ProjectManager::setMarginTop(double margin)
-{
-    if (marginTop() != margin) {
-        QJsonObject pdf = m_data.value(QStringLiteral("pdf")).toObject();
-        pdf[QStringLiteral("marginTop")] = margin;
-        m_data[QStringLiteral("pdf")] = pdf;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-double ProjectManager::marginBottom() const
-{
-    return m_data.value(QStringLiteral("pdf")).toObject().value(QStringLiteral("marginBottom")).toDouble();
-}
-
-void ProjectManager::setMarginBottom(double margin)
-{
-    if (marginBottom() != margin) {
-        QJsonObject pdf = m_data.value(QStringLiteral("pdf")).toObject();
-        pdf[QStringLiteral("marginBottom")] = margin;
-        m_data[QStringLiteral("pdf")] = pdf;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-bool ProjectManager::showPageNumbers() const
-{
-    return m_data.value(QStringLiteral("pdf")).toObject().value(QStringLiteral("showPageNumbers")).toBool();
-}
-
-void ProjectManager::setShowPageNumbers(bool show)
-{
-    if (showPageNumbers() != show) {
-        QJsonObject pdf = m_data.value(QStringLiteral("pdf")).toObject();
-        pdf[QStringLiteral("showPageNumbers")] = show;
-        m_data[QStringLiteral("pdf")] = pdf;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
-QString ProjectManager::stylesheetPath() const
-{
-    return m_data.value(QStringLiteral("stylesheet")).toString();
-}
-
-void ProjectManager::setStylesheetPath(const QString &path)
-{
-    if (stylesheetPath() != path) {
-        m_data[QStringLiteral("stylesheet")] = path;
-        Q_EMIT projectSettingsChanged();
-    }
-}
-
 QString ProjectManager::stylesheetFolderPath() const
 {
-    if (!isProjectOpen()) return {};
+    if (!isProjectOpen()) return QString();
     return QDir(projectPath()).absoluteFilePath(QStringLiteral("stylesheets"));
 }
 
 QStringList ProjectManager::stylesheetPaths() const
 {
-    if (!isProjectOpen()) return {};
-
-    QDir folder(stylesheetFolderPath());
-    if (folder.exists()) {
-        QStringList result;
-        for (const QString &entry : folder.entryList({QStringLiteral("*.css")}, QDir::Files, QDir::Name)) {
-            result << folder.absoluteFilePath(entry);
+    QStringList paths;
+    QDir dir(stylesheetFolderPath());
+    if (dir.exists()) {
+        const auto files = dir.entryList({QStringLiteral("*.css")}, QDir::Files);
+        for (const auto &file : files) {
+            paths.append(dir.absoluteFilePath(file));
         }
-        return result;
     }
-
-    // Fallback: legacy single stylesheet path
-    QString single = stylesheetPath();
-    if (!single.isEmpty()) {
-        QString full = QDir(projectPath()).absoluteFilePath(single);
-        if (QFile::exists(full)) return { full };
-    }
-    return {};
+    return paths;
 }
 
-#include <QRegularExpression>
-#include "variablemanager.h"
-
-static int countWordsInFile(const QString &fullPath) {
-    QFile file(fullPath);
-    if (!file.open(QIODevice::ReadOnly)) return 0;
-    QString text = QString::fromUtf8(file.readAll());
-    QString content = VariableManager::stripMetadata(text);
-    return content.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).count();
-}
-
-static int countWordsInTree(const QJsonObject &item, const QString &projectPath) {
+int ProjectManager::countWordsInTree(const QJsonObject &tree, const QString &projectPath) const
+{
     int count = 0;
-    if (item.value(QStringLiteral("type")).toString() == QStringLiteral("file")) {
-        QString relPath = item.value(QStringLiteral("path")).toString();
-        count += countWordsInFile(QDir(projectPath).absoluteFilePath(relPath));
+    if (tree.value(QStringLiteral("type")).toInt() == 1) { // File
+        QString relPath = tree.value(QStringLiteral("path")).toString();
+        QString fullPath = QDir(projectPath).absoluteFilePath(relPath);
+        QFile f(fullPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            QString content = QString::fromUtf8(f.readAll());
+            count = VariableManager::stripMetadata(content).split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).size();
+        }
     }
     
-    QJsonArray children = item.value(QStringLiteral("children")).toArray();
+    QJsonArray children = tree.value(QStringLiteral("children")).toArray();
     for (const auto &child : children) {
-        count += countWordsInTree(child.toObject(), projectPath);
+      count += countWordsInTree(child.toObject(), projectPath);
     }
     return count;
 }
@@ -470,4 +358,3 @@ int ProjectManager::calculateTotalWordCount() const
     if (!isProjectOpen()) return 0;
     return countWordsInTree(tree(), projectPath());
 }
-

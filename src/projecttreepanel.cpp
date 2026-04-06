@@ -60,6 +60,7 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     setupUi();
     
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, &ProjectTreePanel::onProjectOpened);
+    connect(&ProjectManager::instance(), &ProjectManager::treeChanged, this, &ProjectTreePanel::onProjectOpened);
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, &ProjectTreePanel::onProjectClosed);
     
     connect(&GitHubService::instance(), &GitHubService::repoCreated, this, &ProjectTreePanel::onRepoCreated);
@@ -149,7 +150,7 @@ void ProjectTreePanel::setupUi()
     m_treeView->setAcceptDrops(true);
     m_treeView->setDropIndicatorShown(true);
     m_treeView->setDragDropMode(QAbstractItemView::DragDrop);
-    m_treeView->setDefaultDropAction(Qt::LinkAction);
+    m_treeView->setDefaultDropAction(Qt::MoveAction);
     m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
     m_treeView->hide(); // hidden until project open

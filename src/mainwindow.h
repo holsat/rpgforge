@@ -64,13 +64,21 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+    void openFileFromUrl(const QUrl &url);
+    /**
+     * @brief Shows a diff between two files or two Git versions.
+     * @param path1 Either an absolute file path OR the first path for git diff.
+     * @param oldOrNewPath2 If hash1 is a git hash, this is the other hash (or empty). 
+     *                      If path1 is a file path, this is the second file path.
+     */
+    void showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2 = QString());
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private Q_SLOTS:
     void newFile();
     void openFile();
-    void openFileFromUrl(const QUrl &url);
     void saveFile();
     void saveFileAs();
     void newProject();
@@ -93,13 +101,6 @@ private Q_SLOTS:
     void syncScroll();
     void updateErrorHighlighting();
     void performSearch(const QString &text);
-    /**
-     * @brief Shows a diff between two files or two Git versions.
-     * @param path1 Either an absolute file path OR the first path for git diff.
-     * @param oldOrNewPath2 If hash1 is a git hash, this is the other hash (or empty). 
-     *                      If path1 is a file path, this is the second file path.
-     */
-    void showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2 = QString());
 
     // AI Actions
     void aiExpand();

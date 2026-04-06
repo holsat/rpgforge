@@ -24,6 +24,7 @@
 #include <QDir>
 #include <QUrl>
 #include <QRegularExpression>
+#include <KLocalizedString>
 
 ProjectTreeModel::ProjectTreeModel(QObject *parent)
     : QAbstractItemModel(parent)
@@ -333,16 +334,26 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
     QString projectDir = ProjectManager::instance().projectPath();
     QString relativePath = QDir(projectDir).relativeFilePath(absolutePath);
     
-    static QStringList textSuffixes = {QStringLiteral("md"), QStringLiteral("markdown"), QStringLiteral("txt")};
-    bool isText = textSuffixes.contains(fi.suffix().toLower());
+    QString suffix = fi.suffix().toLower();
     
+    static QStringList mediaSuffixes = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"), 
+        QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+        QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("ogg"),
+        QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("mov")
+    };
+    
+    bool isMedia = mediaSuffixes.contains(suffix);
     QModelIndex targetParent = parent;
+    ProjectTreeItem *parentItem = itemFromIndex(parent);
     
-    if (!isText) {
-        // Look for a "Media" folder
-        ProjectTreeItem *parentItem = itemFromIndex(parent);
+    // Only auto-route to "Media" if:
+    // 1. It's a recognized media file
+    // 2. AND it's being dropped onto the project root (not a specific folder)
+    if (isMedia && (parentItem == m_rootItem || !targetParent.isValid())) {
         ProjectTreeItem *mediaFolder = nullptr;
-        for (auto *child : parentItem->children) {
+        // Search specifically in root's direct children for a folder named "media"
+        for (auto *child : m_rootItem->children) {
             if (child->type == ProjectTreeItem::Folder && child->name.toLower() == QStringLiteral("media")) {
                 mediaFolder = child;
                 break;
@@ -350,9 +361,10 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
         }
         
         if (!mediaFolder) {
-            targetParent = addFolder(QStringLiteral("Media"), QStringLiteral("media"), parent);
+            // Create it in the root
+            targetParent = addFolder(i18n("Media"), QStringLiteral("media"), QModelIndex());
         } else {
-            targetParent = index(parentItem->children.indexOf(mediaFolder), 0, parent);
+            targetParent = indexForItem(mediaFolder);
         }
     }
     
@@ -365,7 +377,8 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
     addFile(fi.completeBaseName(), relativePath, targetParent);
     
     // If it's a markdown file, scan for links
-    if (isText) {
+    static QStringList textSuffixes = {QStringLiteral("md"), QStringLiteral("markdown"), QStringLiteral("txt")};
+    if (textSuffixes.contains(suffix)) {
         QFile file(absolutePath);
         if (file.open(QIODevice::ReadOnly)) {
             QString content = QString::fromUtf8(file.readAll());
