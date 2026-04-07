@@ -269,6 +269,7 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         m_activeProvider = request.provider;
         m_retryCount = 0;
         m_fullResponse.clear();
+        m_streamBuffer.clear();
     }
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
@@ -407,14 +408,16 @@ void LLMService::handleReadyRead()
 {
     if (!m_activeReply) return;
 
-    QByteArray data = m_activeReply->readAll();
-    
+    // Append incoming bytes to the stream buffer. TCP may deliver partial SSE
+    // lines, so we only process complete newline-terminated data below.
+    m_streamBuffer.append(m_activeReply->readAll());
+
     switch (m_activeProvider) {
         case LLMProvider::OpenAI:
         case LLMProvider::Grok:
-        case LLMProvider::Gemini: processOpenAIChunk(data); break;
-        case LLMProvider::Anthropic: processAnthropicChunk(data); break;
-        case LLMProvider::Ollama: processOllamaChunk(data); break;
+        case LLMProvider::Gemini: processOpenAIChunk(m_streamBuffer); break;
+        case LLMProvider::Anthropic: processAnthropicChunk(m_streamBuffer); break;
+        case LLMProvider::Ollama: processOllamaChunk(m_streamBuffer); break;
     }
 }
 
@@ -451,64 +454,76 @@ void LLMService::handleError(const QString &message)
     Q_EMIT errorOccurred(message);
 }
 
-void LLMService::processOpenAIChunk(const QByteArray &data)
+void LLMService::processOpenAIChunk(QByteArray &buffer)
 {
-    // OpenAI SSE format: "data: {...}\n\ndata: {...}"
-    QStringList lines = QString::fromUtf8(data).split(QLatin1Char('\n'));
-    for (const QString &line : lines) {
-        if (line.startsWith(QLatin1String("data: "))) {
-            QString jsonStr = line.mid(6).trimmed();
-            if (jsonStr == QLatin1String("[DONE]")) continue;
-
-            QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
-            if (!doc.isNull() && doc.isObject()) {
-                QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
-                if (!choices.isEmpty()) {
-                    QString chunk = choices.at(0).toObject().value(QStringLiteral("delta")).toObject().value(QStringLiteral("content")).toString();
-                    if (!chunk.isEmpty()) {
-                        m_fullResponse += chunk;
-                        Q_EMIT responseChunk(chunk);
-                    }
-                }
-            }
-        }
-    }
-}
-
-void LLMService::processAnthropicChunk(const QByteArray &data)
-{
-    // Anthropic SSE format: "event: content_block_delta\ndata: {...}\n\n"
-    QString content = QString::fromUtf8(data);
-    QStringList events = content.split(QStringLiteral("\n\n"));
-
-    for (const QString &event : events) {
-        if (event.contains(QLatin1String("content_block_delta"))) {
-            int dataIdx = event.indexOf(QLatin1String("data: "));
-            if (dataIdx != -1) {
-                QString jsonStr = event.mid(dataIdx + 6).trimmed();
-                QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
-                if (!doc.isNull() && doc.isObject()) {
-                    QString chunk = doc.object().value(QStringLiteral("delta")).toObject().value(QStringLiteral("text")).toString();
-                    if (!chunk.isEmpty()) {
-                        m_fullResponse += chunk;
-                        Q_EMIT responseChunk(chunk);
-                    }
-                }
-            }
-        }
-    }
-}
-
-void LLMService::processOllamaChunk(const QByteArray &data)
-{
-    // Ollama native format: {"model":"...", "message":{"content":"..."}} \n ...
-    QStringList lines = QString::fromUtf8(data).split(QLatin1Char('\n'));
-    for (const QString &line : lines) {
-        if (line.trimmed().isEmpty()) continue;
-
-        QJsonDocument doc = QJsonDocument::fromJson(line.toUtf8());
+    // OpenAI SSE format: "data: {...}\n" lines. Process only complete lines;
+    // leave any incomplete trailing data in the buffer for the next readyRead().
+    while (true) {
+        int nl = buffer.indexOf('\n');
+        if (nl < 0) break;
+        QByteArray line = buffer.left(nl).trimmed();
+        buffer.remove(0, nl + 1);
+        if (!line.startsWith("data: ")) continue;
+        QByteArray jsonBytes = line.mid(6).trimmed();
+        if (jsonBytes == "[DONE]") continue;
+        QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
         if (!doc.isNull() && doc.isObject()) {
-            QString chunk = doc.object().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
+            QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
+            if (!choices.isEmpty()) {
+                QString chunk = choices.at(0).toObject()
+                    .value(QStringLiteral("delta")).toObject()
+                    .value(QStringLiteral("content")).toString();
+                if (!chunk.isEmpty()) {
+                    m_fullResponse += chunk;
+                    Q_EMIT responseChunk(chunk);
+                }
+            }
+        }
+    }
+}
+
+void LLMService::processAnthropicChunk(QByteArray &buffer)
+{
+    // Anthropic SSE format: multi-line events separated by "\n\n".
+    // Process only complete events (those ending with \n\n).
+    while (true) {
+        int sep = buffer.indexOf("\n\n");
+        if (sep < 0) break;
+        QByteArray event = buffer.left(sep).trimmed();
+        buffer.remove(0, sep + 2);
+        if (!event.contains("content_block_delta")) continue;
+        int dataIdx = event.indexOf("data: ");
+        if (dataIdx < 0) continue;
+        QByteArray jsonBytes = event.mid(dataIdx + 6).trimmed();
+        // Trim any trailing event lines after the JSON
+        int nl = jsonBytes.indexOf('\n');
+        if (nl >= 0) jsonBytes = jsonBytes.left(nl).trimmed();
+        QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
+        if (!doc.isNull() && doc.isObject()) {
+            QString chunk = doc.object().value(QStringLiteral("delta")).toObject()
+                .value(QStringLiteral("text")).toString();
+            if (!chunk.isEmpty()) {
+                m_fullResponse += chunk;
+                Q_EMIT responseChunk(chunk);
+            }
+        }
+    }
+}
+
+void LLMService::processOllamaChunk(QByteArray &buffer)
+{
+    // Ollama native format: newline-delimited JSON objects.
+    // Process only complete lines; leave any partial line in the buffer.
+    while (true) {
+        int nl = buffer.indexOf('\n');
+        if (nl < 0) break;
+        QByteArray line = buffer.left(nl).trimmed();
+        buffer.remove(0, nl + 1);
+        if (line.isEmpty()) continue;
+        QJsonDocument doc = QJsonDocument::fromJson(line);
+        if (!doc.isNull() && doc.isObject()) {
+            QString chunk = doc.object().value(QStringLiteral("message")).toObject()
+                .value(QStringLiteral("content")).toString();
             if (!chunk.isEmpty()) {
                 m_fullResponse += chunk;
                 Q_EMIT responseChunk(chunk);

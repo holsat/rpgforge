@@ -143,9 +143,9 @@ private:
     void handleFinished();
     void handleError(const QString &message);
 
-    void processOpenAIChunk(const QByteArray &data);
-    void processAnthropicChunk(const QByteArray &data);
-    void processOllamaChunk(const QByteArray &data);
+    void processOpenAIChunk(QByteArray &buffer);
+    void processAnthropicChunk(QByteArray &buffer);
+    void processOllamaChunk(QByteArray &buffer);
 
     // Resolves the model from request.model or settings (no hardcoded defaults).
     QString resolvedModel(const LLMRequest &request) const;
@@ -167,6 +167,10 @@ private:
     LLMProvider m_activeProvider;
     LLMRequest m_activeRequest;
     int m_retryCount = 0;
+
+    // Per-stream accumulation buffer. TCP readyRead() may deliver partial SSE
+    // lines; this buffer holds incomplete data until a full line arrives.
+    QByteArray m_streamBuffer;
 
     // Session model cache — populated on first validateModelThenDispatch() per provider.
     QHash<LLMProvider, QStringList> m_modelCache;
