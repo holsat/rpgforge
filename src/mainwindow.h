@@ -87,6 +87,7 @@ private Q_SLOTS:
     void closeProject();
     void importScrivener();
     void importWord();
+    void characterGenerator();
     void cloneProject();
     void projectSettings();
     void globalSettings();

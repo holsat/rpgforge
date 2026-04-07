@@ -110,13 +110,21 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 15 — Character Generator
 
-**Status:** Not Started
+**Status:** Complete
+
+**Goal:** AI-powered character sheet generation that follows project rules.
+
+**Key Deliverables:**
+- Multi-step Character Generator wizard.
+- RAG-powered rule compliance for stat and skill generation.
+- Iterative refinement loop for AI-generated data.
+- Direct project file saving (JSON/Markdown).
 
 ---
 
-## Phase 16 — MCP Interface & Project Bridge
+## Phase 16 — MCP Interface & Project Bridge (Expansion)
 
-**Status:** Not Started
+**Status:** In Progress
 
 **Goal:** Expose project rules and simulation state via Model Context Protocol.
 

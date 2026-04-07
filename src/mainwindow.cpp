@@ -39,6 +39,7 @@
 #include "settingsdialog.h"
 #include "chatpanel.h"
 #include "simulationpanel.h"
+#include "charactergenerator.h"
 #include "problemspanel.h"
 #include "analyzerservice.h"
 #include "knowledgebase.h"
@@ -286,23 +287,23 @@ void MainWindow::setupSidebar()
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
     m_fileExplorerId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("folder-explorer"), QIcon::fromTheme(QStringLiteral("folder"))),
+        QIcon::fromTheme(QStringLiteral("folder-symbolic")),
         i18n("Project Explorer"),
         explorerStack);
     m_outlineId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("view-list-tree")),
+        QIcon::fromTheme(QStringLiteral("view-list-tree-symbolic")),
         QStringLiteral("Document Outline"),
         m_outlinePanel);
     m_variablesId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("code-variable"), QIcon::fromTheme(QStringLiteral("variable"))),
+        QIcon::fromTheme(QStringLiteral("code-variable-symbolic")),
         QStringLiteral("Variables"),
         m_variablesPanel);
     m_chatId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
+        QIcon::fromTheme(QStringLiteral("chat-conversation-symbolic")),
         i18n("AI Writing Assistant"),
         m_chatPanel);
     m_simulationId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("media-playback-start"), QIcon::fromTheme(QStringLiteral("games-config"))),
+        QIcon::fromTheme(QStringLiteral("media-playback-start-symbolic")),
         i18n("Rule Simulation"),
         m_simulationPanel);
 
@@ -611,6 +612,12 @@ void MainWindow::setupActions()
     importWordAct->setIcon(QIcon::fromTheme(QStringLiteral("document-import")));
     actionCollection()->addAction(QStringLiteral("project_import_word"), importWordAct);
     connect(importWordAct, &QAction::triggered, this, &MainWindow::importWord);
+
+    auto *charGenAct = new QAction(this);
+    charGenAct->setText(i18n("AI Character Generator..."));
+    charGenAct->setIcon(QIcon::fromTheme(QStringLiteral("user-identity")));
+    actionCollection()->addAction(QStringLiteral("project_character_generator"), charGenAct);
+    connect(charGenAct, &QAction::triggered, this, &MainWindow::characterGenerator);
 
     auto *projectSettingsAct = new QAction(this);
     projectSettingsAct->setText(i18n("Project Settings..."));
@@ -1799,5 +1806,12 @@ void MainWindow::toggleFocusMode()
         showNormal();
     }
 }
+
+void MainWindow::characterGenerator()
+{
+    CharacterGenerator gen(this);
+    gen.exec();
+}
+
 
 

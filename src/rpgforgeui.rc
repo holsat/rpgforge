@@ -16,6 +16,7 @@
         <Action name="project_import_scrivener"/>
         <Action name="project_import_word"/>
       </Menu>
+      <Action name="project_character_generator"/>
       <Separator/>
       <Action name="file_save"/>
       <Action name="file_save_as"/>

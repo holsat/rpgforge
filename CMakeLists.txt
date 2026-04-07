@@ -103,6 +103,8 @@ add_executable(rpgforge
     src/simgriot.h
     src/simulationpanel.cpp
     src/simulationpanel.h
+    src/charactergenerator.cpp
+    src/charactergenerator.h
     src/simulationmanager.cpp
     src/simulationmanager.h
     src/mcpservice.cpp

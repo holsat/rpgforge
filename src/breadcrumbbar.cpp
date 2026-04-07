@@ -18,6 +18,7 @@
 
 #include "breadcrumbbar.h"
 
+#include <KColorScheme>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -34,10 +35,10 @@ BreadcrumbBar::BreadcrumbBar(QWidget *parent)
     setFixedHeight(26);
     setAutoFillBackground(true);
 
-    // Slightly different background to distinguish from the editor
+    // Use KDE color scheme to distinguish from the editor while maintaining theme consistency
+    KColorScheme scheme(QPalette::Active, KColorScheme::View);
     QPalette pal = palette();
-    QColor bg = pal.color(QPalette::Window).darker(110);
-    pal.setColor(QPalette::Window, bg);
+    pal.setColor(QPalette::Window, scheme.background(KColorScheme::AlternateBackground).color());
     setPalette(pal);
 
     // Debounce breadcrumb rebuilds — cursor moves rapidly during scrolling
