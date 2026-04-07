@@ -27,6 +27,7 @@
 #include <QStringList>
 #include <QVector>
 #include <functional>
+#include <QUuid>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -121,9 +122,11 @@ public:
     void retryWithModel(const QString &newModel);
 
 Q_SIGNALS:
-    void requestStarted();
-    void responseChunk(const QString &text);
-    void responseFinished(const QString &fullText);
+    /// Emitted when a new streaming request begins. requestId is a UUID that
+    /// callers can store and use to filter responseChunk/responseFinished.
+    void requestStarted(const QString &requestId);
+    void responseChunk(const QString &requestId, const QString &text);
+    void responseFinished(const QString &requestId, const QString &fullText);
     void errorOccurred(const QString &message);
 
     /**
@@ -171,6 +174,11 @@ private:
     // Per-stream accumulation buffer. TCP readyRead() may deliver partial SSE
     // lines; this buffer holds incomplete data until a full line arrives.
     QByteArray m_streamBuffer;
+
+    // Unique ID for the current streaming request. Emitted with requestStarted
+    // and included in responseChunk/responseFinished so callers can filter out
+    // chunks that don't belong to their own request.
+    QString m_currentStreamId;
 
     // Session model cache — populated on first validateModelThenDispatch() per provider.
     QHash<LLMProvider, QStringList> m_modelCache;

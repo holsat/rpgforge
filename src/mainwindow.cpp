@@ -567,9 +567,10 @@ void MainWindow::setupSidebar()
         if (ProjectManager::instance().isProjectOpen() && m_document->url().isLocalFile()) {
             QString filePath = m_document->url().toLocalFile();
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath);
-            
+
             SynopsisService::instance().requestUpdate(relPath, true);
-            GitService::instance().autoCommit(filePath);
+            // Note: autoCommit is handled by the setupAutoSync connection in setupEditor;
+            // calling it here again would create a duplicate commit on every save.
             KnowledgeBase::instance().indexFile(filePath);
         }
     });

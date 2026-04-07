@@ -66,8 +66,8 @@ public Q_SLOTS:
 
 private Q_SLOTS:
     void sendMessage();
-    void onResponseChunk(const QString &chunk);
-    void onResponseFinished(const QString &fullText);
+    void onResponseChunk(const QString &requestId, const QString &chunk);
+    void onResponseFinished(const QString &requestId, const QString &fullText);
     void onError(const QString &message);
     void clearChat();
     void updateModelList();
@@ -96,6 +96,7 @@ private:
     QProgressBar *m_progressBar;
 
     QString m_currentAiResponse;
+    QString m_currentStreamId; // ID from requestStarted; filters out foreign streams
     QList<LLMMessage> m_history;
     ChatBridge *m_bridge = nullptr;
 };

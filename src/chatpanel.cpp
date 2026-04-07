@@ -54,7 +54,8 @@ ChatPanel::ChatPanel(QWidget *parent)
     channel->registerObject(QStringLiteral("chatBridge"), m_bridge);
     m_webView->page()->setWebChannel(channel);
 
-    connect(&LLMService::instance(), &LLMService::requestStarted, this, [this]() {
+    connect(&LLMService::instance(), &LLMService::requestStarted, this, [this](const QString &requestId) {
+        m_currentStreamId = requestId;
         m_progressBar->show();
         m_sendBtn->setEnabled(false);
         m_currentAiResponse.clear();
@@ -413,17 +414,19 @@ void ChatPanel::askAI(const QString &userPrompt)
     LLMService::instance().sendRequest(request);
 }
 
-void ChatPanel::onResponseChunk(const QString &chunk)
+void ChatPanel::onResponseChunk(const QString &requestId, const QString &chunk)
 {
+    if (requestId != m_currentStreamId) return; // not our request
     m_currentAiResponse += chunk;
-    
+
     MarkdownParser parser;
     QString html = parser.renderHtml(m_currentAiResponse);
     updateLastMessageInView(html, m_currentAiResponse);
 }
 
-void ChatPanel::onResponseFinished(const QString &fullText)
+void ChatPanel::onResponseFinished(const QString &requestId, const QString &fullText)
 {
+    if (requestId != m_currentStreamId) return; // not our request
     m_progressBar->hide();
     m_sendBtn->setEnabled(true);
     m_history.append({QStringLiteral("assistant"), fullText});

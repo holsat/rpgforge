@@ -363,7 +363,8 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
     if (streaming) {
         m_activeReply = reply;
-        Q_EMIT requestStarted();
+        m_currentStreamId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        Q_EMIT requestStarted(m_currentStreamId);
         connect(reply, &QNetworkReply::readyRead, this, &LLMService::handleReadyRead);
         connect(reply, &QNetworkReply::finished, this, &LLMService::handleFinished);
     } else {
@@ -442,7 +443,7 @@ void LLMService::handleFinished()
         }
         handleError(errorMsg);
     } else if (m_activeReply->error() == QNetworkReply::NoError) {
-        Q_EMIT responseFinished(m_fullResponse);
+        Q_EMIT responseFinished(m_currentStreamId, m_fullResponse);
     }
 
     m_activeReply->deleteLater();
@@ -475,7 +476,7 @@ void LLMService::processOpenAIChunk(QByteArray &buffer)
                     .value(QStringLiteral("content")).toString();
                 if (!chunk.isEmpty()) {
                     m_fullResponse += chunk;
-                    Q_EMIT responseChunk(chunk);
+                    Q_EMIT responseChunk(m_currentStreamId, chunk);
                 }
             }
         }
@@ -504,7 +505,7 @@ void LLMService::processAnthropicChunk(QByteArray &buffer)
                 .value(QStringLiteral("text")).toString();
             if (!chunk.isEmpty()) {
                 m_fullResponse += chunk;
-                Q_EMIT responseChunk(chunk);
+                Q_EMIT responseChunk(m_currentStreamId, chunk);
             }
         }
     }
@@ -526,7 +527,7 @@ void LLMService::processOllamaChunk(QByteArray &buffer)
                 .value(QStringLiteral("content")).toString();
             if (!chunk.isEmpty()) {
                 m_fullResponse += chunk;
-                Q_EMIT responseChunk(chunk);
+                Q_EMIT responseChunk(m_currentStreamId, chunk);
             }
         }
     }
