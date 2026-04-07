@@ -18,12 +18,14 @@
 
 #include "mainwindow.h"
 #include "markdownparser.h"
+#include "mcpservice.h"
 
 #include <KAboutData>
 #include <KLocalizedString>
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QCommandLineOption>
 #include <QIcon>
 
 #include <QWebEngineProfile>
@@ -59,11 +61,22 @@ int main(int argc, char *argv[])
 
     QCommandLineParser parser;
     aboutData.setupCommandLine(&parser);
+    
+    QCommandLineOption mcpOption(QStringList() << QStringLiteral("mcp"), i18n("Start in Model Context Protocol (MCP) server mode."));
+    parser.addOption(mcpOption);
+
     parser.process(app);
     aboutData.processCommandLine(&parser);
 
     // Initialize cmark-gfm extensions (must happen once before any parsing)
     MarkdownParser::init();
+
+    if (parser.isSet(mcpOption)) {
+        // MCP Mode: Headless
+        MCPService mcp;
+        mcp.start();
+        return app.exec();
+    }
 
     auto *window = new MainWindow();
     window->show();

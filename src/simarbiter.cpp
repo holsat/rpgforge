@@ -1,0 +1,120 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#include "simarbiter.h"
+#include "llmservice.h"
+#include "knowledgebase.h"
+#include "diceengine.h"
+#include <KLocalizedString>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QSettings>
+#include <QDebug>
+
+SimulationArbiter::SimulationArbiter(QObject *parent)
+    : QObject(parent)
+{
+}
+
+void SimulationArbiter::processIntent(const QString &actorName, const QJsonObject &actorSheet, const QJsonObject &intent, const QJsonObject &worldState)
+{
+    Q_EMIT processingStarted();
+
+    // Step 1: Identify what rules to lookup based on the intent
+    QString action = intent.value(QStringLiteral("action")).toString();
+    performRuleLookup(action, actorName, actorSheet, intent, worldState);
+}
+
+void SimulationArbiter::performRuleLookup(const QString &query, const QString &actorName, const QJsonObject &actorSheet, const QJsonObject &intent, const QJsonObject &worldState)
+{
+    KnowledgeBase::instance().search(query, 5, QString(), [this, actorName, actorSheet, intent, worldState](const QList<SearchResult> &results) {
+        QString rulesContext;
+        for (const auto &res : results) {
+            rulesContext += QStringLiteral("--- Rule: %1 ---\n%2\n\n").arg(res.heading, res.content);
+        }
+        
+        finalizeOutcome(rulesContext, actorName, actorSheet, intent, worldState);
+    });
+}
+
+void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QString &actorName, const QJsonObject &actorSheet, const QJsonObject &intent, const QJsonObject &worldState)
+{
+    QString systemPrompt = QStringLiteral(
+        "You are the Arbiter of a tabletop RPG simulation. Your job is to enforce the rules and update the world state.\n\n"
+        "RELEVANT RULES:\n%1\n\n"
+        "CURRENT SITUATION:\n"
+        "- Actor: %2\n"
+        "- Actor Sheet: %3\n"
+        "- Intent: %4\n"
+        "- World State: %5\n\n"
+        "TASK:\n"
+        "1. Determine the outcome of the intent based on the rules provided.\n"
+        "2. If a dice roll is required, you must simulate it (but denote it clearly).\n"
+        "3. Output a valid JSON object with:\n"
+        "   - \"patch\": A JSON object containing dot-separated paths and their NEW values (e.g. {\"actors.fighter.hp\": 12}). Only include changed values.\n"
+        "   - \"log\": A concise, dry summary of the mechanics applied (e.g. \"Rolled 18 (1d20+5) vs AC 15. Target takes 6 damage.\").\n"
+        "   - \"narrative_hints\": Brief keywords for the storyteller (e.g. \"near miss\", \"bloody wound\").\n"
+        "Output ONLY the JSON object."
+    ).arg(rulesContext, actorName,
+          QString::fromUtf8(QJsonDocument(actorSheet).toJson(QJsonDocument::Compact)),
+          QString::fromUtf8(QJsonDocument(intent).toJson(QJsonDocument::Compact)),
+          QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
+
+    LLMRequest req;
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    
+    // Arbiter uses the "Analyzer" model if configured, or default
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("analyzer/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    req.model = settings.value(QStringLiteral("analyzer/model"), 
+        (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")) : settings.value(QStringLiteral("llm/ollama/model"))).toString();
+    
+    req.messages.append({QStringLiteral("system"), systemPrompt});
+    req.messages.append({QStringLiteral("user"), QStringLiteral("Apply the rules and generate the outcome JSON.")});
+    req.stream = false;
+    req.temperature = 0.1; // Maximum precision
+
+    LLMService::instance().sendNonStreamingRequest(req, [this](const QString &response) {
+        if (response.isEmpty()) {
+            Q_EMIT errorOccurred(i18n("Empty response from Arbiter."));
+            return;
+        }
+
+        // Parse JSON
+        QString cleanJson = response.trimmed();
+        if (cleanJson.startsWith(QLatin1String("```json"))) {
+            cleanJson = cleanJson.mid(7);
+            if (cleanJson.endsWith(QLatin1String("```"))) cleanJson.chop(3);
+        } else if (cleanJson.startsWith(QLatin1String("```"))) {
+            cleanJson = cleanJson.mid(3);
+            if (cleanJson.endsWith(QLatin1String("```"))) cleanJson.chop(3);
+        }
+
+        QJsonParseError error;
+        QJsonDocument doc = QJsonDocument::fromJson(cleanJson.toUtf8(), &error);
+        if (doc.isNull() || !doc.isObject()) {
+            Q_EMIT errorOccurred(i18n("Failed to parse Arbiter outcome: %1").arg(error.errorString()));
+            return;
+        }
+
+        QJsonObject obj = doc.object();
+        QJsonObject patch = obj.value(QStringLiteral("patch")).toObject();
+        QString log = obj.value(QStringLiteral("log")).toString();
+        
+        Q_EMIT outcomeDecided(patch, log);
+    });
+}

@@ -1,0 +1,64 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#ifndef SIMULATIONPANEL_H
+#define SIMULATIONPANEL_H
+
+#include <QWidget>
+#include "simulationmanager.h"
+
+class QTextEdit;
+class QTreeWidget;
+class QPushButton;
+class QSpinBox;
+class QCheckBox;
+
+/**
+ * @brief Dashboard for managing and visualizing simulations.
+ */
+class SimulationPanel : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit SimulationPanel(QWidget *parent = nullptr);
+    ~SimulationPanel() override;
+
+private Q_SLOTS:
+    void onStartClicked();
+    void onStopClicked();
+    void onSimulationStarted();
+    void onSimulationStopped();
+    void onLogMessage(const QString &message);
+    void onStateChanged();
+    void onBatchFinished(const BatchResult &results);
+
+private:
+    void setupUi();
+    void updateStateTree();
+    void showAnalytics(const BatchResult &results);
+
+    QTextEdit *m_logEdit;
+    QTreeWidget *m_stateTree;
+    QPushButton *m_startBtn;
+    QPushButton *m_stopBtn;
+    QSpinBox *m_batchSpin;
+    QSpinBox *m_turnsSpin;
+    QCheckBox *m_batchCheck;
+};
+
+#endif // SIMULATIONPANEL_H

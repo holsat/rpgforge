@@ -93,6 +93,22 @@ add_executable(rpgforge
     src/analyzerservice.h
     src/problemspanel.cpp
     src/problemspanel.h
+    src/simulationstate.cpp
+    src/simulationstate.h
+    src/simulationactor.cpp
+    src/simulationactor.h
+    src/simarbiter.cpp
+    src/simarbiter.h
+    src/simgriot.cpp
+    src/simgriot.h
+    src/simulationpanel.cpp
+    src/simulationpanel.h
+    src/simulationmanager.cpp
+    src/simulationmanager.h
+    src/mcpservice.cpp
+    src/mcpservice.h
+    src/diceengine.cpp
+    src/diceengine.h
     src/settingsdialog.cpp
     src/settingsdialog.h
     src/chatpanel.cpp

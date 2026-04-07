@@ -38,6 +38,7 @@
 #include "projectsettingsdialog.h"
 #include "settingsdialog.h"
 #include "chatpanel.h"
+#include "simulationpanel.h"
 #include "problemspanel.h"
 #include "analyzerservice.h"
 #include "knowledgebase.h"
@@ -280,6 +281,7 @@ void MainWindow::setupSidebar()
     m_previewPanel = new PreviewPanel(this);
     m_variablesPanel = new VariablesPanel(this);
     m_chatPanel = new ChatPanel(this);
+    m_simulationPanel = new SimulationPanel(this);
 
     // Create the sidebar and add panels
     m_sidebar = new Sidebar(this);
@@ -299,6 +301,10 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("chat-conversation"), QIcon::fromTheme(QStringLiteral("comment"))),
         i18n("AI Writing Assistant"),
         m_chatPanel);
+    m_simulationId = m_sidebar->addPanel(
+        QIcon::fromTheme(QStringLiteral("media-playback-start"), QIcon::fromTheme(QStringLiteral("games-config"))),
+        i18n("Rule Simulation"),
+        m_simulationPanel);
 
     connect(m_chatPanel, &ChatPanel::insertTextAtCursor, this, [this](const QString &text) {
         if (m_document && m_editorView) {

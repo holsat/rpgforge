@@ -40,6 +40,7 @@ class ProjectTreePanel;
 class VariablesPanel;
 class ChatPanel;
 class ProblemsPanel;
+class SimulationPanel;
 class Sidebar;
 class QWebEngineView;
 class QPushButton;
@@ -150,6 +151,7 @@ private:
     VariablesPanel *m_variablesPanel = nullptr;
     ChatPanel *m_chatPanel = nullptr;
     ProblemsPanel *m_problemsPanel = nullptr;
+    SimulationPanel *m_simulationPanel = nullptr;
     QLabel *m_diagnosticsStatus = nullptr;
     QLabel *m_wordCountStatus = nullptr;
     QLabel *m_projectStatsStatus = nullptr;
@@ -171,6 +173,7 @@ private:
     int m_gitId = -1;
     int m_variablesId = -1;
     int m_chatId = -1;
+    int m_simulationId = -1;
 
     QList<KTextEditor::MovingRange*> m_errorRanges;
     QList<KTextEditor::MovingRange*> m_diagnosticRanges;

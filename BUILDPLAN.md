@@ -80,13 +80,21 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 13 — Rules Simulation Engine (Core)
 
-**Status:** Not Started
+**Status:** Complete
 
-**Goal:** Define and run basic game simulations using LLM-as-GM.
+**Goal:** Define and run basic game simulations using LLM-as-GM with a logic-first architecture.
+
+**Key Deliverables:**
+- `DiceEngine` for cryptographically secure RPG rolls.
+- `SimulationState` for schema-less dynamic world tracking.
+- Multi-agent architecture (Arbiter, Griot, and independent Actors).
+- `SimulationPanel` dashboard with live log and state inspector.
+- Monte-Carlo batch mode for mechanical stress testing.
+- MCP Server interface to expose rules and state to external agents.
 
 ---
 
-## Phase 14 — Multi-Agent Simulation
+## Phase 14 — Multi-Agent Simulation (Advanced)
 
 **Status:** Not Started
 
@@ -100,6 +108,14 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ---
 
-## Phase 16 — Polish and Advanced Features
+## Phase 16 — MCP Interface & Project Bridge
+
+**Status:** Not Started
+
+**Goal:** Expose project rules and simulation state via Model Context Protocol.
+
+---
+
+## Phase 17 — Polish and Advanced Features
 
 **Status:** Not Started
