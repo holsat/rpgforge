@@ -90,23 +90,31 @@ void ProblemsPanel::refreshTable()
         QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath);
 
         for (const Diagnostic &d : it.value()) {
-            if (d.severity == QLatin1String("error")) totalErrors++;
-            else if (d.severity == QLatin1String("warning")) totalWarnings++;
+            if (d.severity == DiagnosticSeverity::Error) totalErrors++;
+            else if (d.severity == DiagnosticSeverity::Warning) totalWarnings++;
             else totalInfos++;
 
-            if (filterMode == 1 && d.severity != QLatin1String("error")) continue;
-            if (filterMode == 2 && d.severity != QLatin1String("warning")) continue;
-            if (filterMode == 3 && d.severity != QLatin1String("info")) continue;
+            if (filterMode == 1 && d.severity != DiagnosticSeverity::Error) continue;
+            if (filterMode == 2 && d.severity != DiagnosticSeverity::Warning) continue;
+            if (filterMode == 3 && d.severity != DiagnosticSeverity::Info) continue;
 
             int row = m_table->rowCount();
             m_table->insertRow(row);
 
             QIcon icon;
-            if (d.severity == QLatin1String("error")) icon = QIcon::fromTheme(QStringLiteral("dialog-error"));
-            else if (d.severity == QLatin1String("warning")) icon = QIcon::fromTheme(QStringLiteral("dialog-warning"));
-            else icon = QIcon::fromTheme(QStringLiteral("dialog-information"));
+            QString sevLabel;
+            if (d.severity == DiagnosticSeverity::Error) {
+                icon = QIcon::fromTheme(QStringLiteral("dialog-error"));
+                sevLabel = i18n("Error");
+            } else if (d.severity == DiagnosticSeverity::Warning) {
+                icon = QIcon::fromTheme(QStringLiteral("dialog-warning"));
+                sevLabel = i18n("Warning");
+            } else {
+                icon = QIcon::fromTheme(QStringLiteral("dialog-information"));
+                sevLabel = i18n("Info");
+            }
 
-            auto *sevItem = new QTableWidgetItem(icon, d.severity);
+            auto *sevItem = new QTableWidgetItem(icon, sevLabel);
             auto *msgItem = new QTableWidgetItem(d.message);
             auto *fileItem = new QTableWidgetItem(relPath);
             fileItem->setData(Qt::UserRole, filePath); // Store absolute path

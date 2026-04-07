@@ -80,11 +80,28 @@ void ChatPanel::setupUi()
     toolbar->setContentsMargins(5, 5, 5, 5);
 
     m_providerCombo = new QComboBox(this);
-    m_providerCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama")});
+    // Use setItemData so the combo index is independent from the LLMProvider enum value.
+    struct { const char *label; LLMProvider value; } providers[] = {
+        {"OpenAI",    LLMProvider::OpenAI},
+        {"Anthropic", LLMProvider::Anthropic},
+        {"Ollama",    LLMProvider::Ollama},
+        {"Grok",      LLMProvider::Grok},
+        {"Gemini",    LLMProvider::Gemini},
+    };
+    for (const auto &p : providers) {
+        m_providerCombo->addItem(QLatin1String(p.label),
+                                 QVariant::fromValue(static_cast<int>(p.value)));
+    }
     m_providerCombo->setMinimumWidth(100);
-    
+
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    m_providerCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
+    const int savedProvider = settings.value(QStringLiteral("llm/provider"), 0).toInt();
+    for (int i = 0; i < m_providerCombo->count(); ++i) {
+        if (m_providerCombo->itemData(i).toInt() == savedProvider) {
+            m_providerCombo->setCurrentIndex(i);
+            break;
+        }
+    }
     connect(m_providerCombo, &QComboBox::currentIndexChanged, this, &ChatPanel::onProviderChanged);
     toolbar->addWidget(m_providerCombo);
 
@@ -287,8 +304,7 @@ void ChatPanel::updateModelList()
     m_modelCombo->addItem(i18n("Loading models..."));
     m_modelCombo->setEnabled(false);
     
-    int providerIdx = m_providerCombo->currentIndex();
-    LLMProvider provider = static_cast<LLMProvider>(providerIdx);
+    LLMProvider provider = currentProvider();
 
     LLMService::instance().fetchModels(provider, [this, provider](const QStringList &models) {
         m_modelCombo->clear();
@@ -459,7 +475,7 @@ void ChatPanel::setPrompt(const QString &prompt)
 
 LLMProvider ChatPanel::currentProvider() const
 {
-    return static_cast<LLMProvider>(m_providerCombo->currentIndex());
+    return static_cast<LLMProvider>(m_providerCombo->currentData().toInt());
 }
 
 void ChatPanel::appendMessageToView(const QString &role, const QString &text, const QString &rawText)

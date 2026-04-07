@@ -134,7 +134,12 @@ QList<Diagnostic> AnalyzerService::parseDiagnostics(const QString &jsonResponse)
         
         Diagnostic d;
         d.line = obj.value(QStringLiteral("line")).toInt(0);
-        d.severity = obj.value(QStringLiteral("severity")).toString(QStringLiteral("info")).toLower();
+        {
+            const QString sev = obj.value(QStringLiteral("severity")).toString().toLower();
+            if (sev == QLatin1String("error")) d.severity = DiagnosticSeverity::Error;
+            else if (sev == QLatin1String("warning")) d.severity = DiagnosticSeverity::Warning;
+            else d.severity = DiagnosticSeverity::Info;
+        }
         d.message = obj.value(QStringLiteral("message")).toString();
         
         QJsonArray refs = obj.value(QStringLiteral("references")).toArray();

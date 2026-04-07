@@ -22,9 +22,14 @@
 #include <QWidget>
 
 class QLabel;
+class QPushButton;
 
-// Placeholder panel for Git/Versioning functionality (Phase 6).
-// Shows basic status for now.
+/**
+ * @brief Sidebar panel showing live Git status for the current project.
+ *
+ * Displays the current branch, whether there are uncommitted changes,
+ * the last commit message, and buttons to commit all and push.
+ */
 class GitPanel : public QWidget
 {
     Q_OBJECT
@@ -33,10 +38,29 @@ public:
     explicit GitPanel(QWidget *parent = nullptr);
     ~GitPanel() override;
 
+    /**
+     * @brief Sets the root path of the project and refreshes the panel.
+     */
     void setRootPath(const QString &path);
 
+    /**
+     * @brief Refreshes the panel from the current project path.
+     */
+    void refresh();
+
+private Q_SLOTS:
+    void onCommitAll();
+    void onPush();
+
 private:
-    QLabel *m_statusLabel = nullptr;
+    void setupUi();
+
+    QLabel *m_branchLabel = nullptr;
+    QLabel *m_changesLabel = nullptr;
+    QLabel *m_lastCommitLabel = nullptr;
+    QPushButton *m_commitBtn = nullptr;
+    QPushButton *m_pushBtn = nullptr;
+
     QString m_rootPath;
 };
 

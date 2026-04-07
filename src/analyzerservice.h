@@ -29,10 +29,12 @@ struct DiagnosticReference {
     int line;
 };
 
+enum class DiagnosticSeverity { Error, Warning, Info };
+
 struct Diagnostic {
     QString filePath;
     int line;
-    QString severity; // "error", "warning", "info"
+    DiagnosticSeverity severity = DiagnosticSeverity::Info;
     QString message;
     QList<DiagnosticReference> references;
 };

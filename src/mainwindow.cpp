@@ -469,6 +469,20 @@ void MainWindow::setupSidebar()
         m_diagnosticsStatus->setText(i18n("%1 Errors, %2 Warnings, %3 Info", errors, warnings, infos));
     });
 
+    // Reveal the Problems panel with a minimum height when diagnostics arrive,
+    // so users don't have to know to drag up the invisible splitter handle.
+    connect(&AnalyzerService::instance(), &AnalyzerService::diagnosticsUpdated, this,
+            [this](const QString &, const QList<Diagnostic> &diagnostics) {
+        if (!diagnostics.isEmpty()) {
+            QList<int> sizes = m_vSplitter->sizes();
+            if (sizes.size() >= 2 && sizes[1] < 120) {
+                sizes[1] = 120;
+                sizes[0] = qMax(sizes[0] - 120, 0);
+                m_vSplitter->setSizes(sizes);
+            }
+        }
+    });
+
     m_vSplitter = new QSplitter(Qt::Vertical, centralWidget);
     m_vSplitter->addWidget(m_mainSplitter);
     m_vSplitter->addWidget(m_problemsPanel);
@@ -1643,10 +1657,10 @@ void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagn
         auto *mr = doc->newMovingRange(range);
         
         KTextEditor::Attribute::Ptr attr(new KTextEditor::Attribute());
-        if (d.severity == QLatin1String("error")) {
+        if (d.severity == DiagnosticSeverity::Error) {
             attr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
             attr->setUnderlineColor(Qt::red);
-        } else if (d.severity == QLatin1String("warning")) {
+        } else if (d.severity == DiagnosticSeverity::Warning) {
             attr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
             attr->setUnderlineColor(Qt::yellow);
         } else {
