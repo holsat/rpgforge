@@ -139,4 +139,14 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 17 — Polish and Advanced Features
 
-**Status:** In Progress
+**Status:** Complete
+
+**Goal:** UI/UX refinements, performance optimization, and advanced analysis tools.
+
+**Key Deliverables:**
+- Global keyboard shortcuts for all AI/Simulation features.
+- Incremental RAG indexing with MD5 hash checks.
+- Auto-retry logic for transient LLM network failures.
+- Simulation Comparison UI for semantic diffing of results.
+- "Bridge Ambush" demo bundle included in the project template.
+- Comprehensive AI/Simulation guide in the default project README.

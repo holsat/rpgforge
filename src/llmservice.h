@@ -135,6 +135,8 @@ private:
     QNetworkReply *m_activeReply = nullptr;
     QString m_fullResponse;
     LLMProvider m_activeProvider;
+    LLMRequest m_activeRequest;
+    int m_retryCount = 0;
 };
 
 #endif // LLMSERVICE_H

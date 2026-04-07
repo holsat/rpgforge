@@ -139,7 +139,9 @@ void LLMService::sendRequest(const LLMRequest &request)
         cancelRequest();
     }
 
+    m_activeRequest = request;
     m_activeProvider = request.provider;
+    m_retryCount = 0;
     m_fullResponse.clear();
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
@@ -266,6 +268,15 @@ void LLMService::handleFinished()
     if (!m_activeReply) return;
 
     if (m_activeReply->error() != QNetworkReply::NoError && m_activeReply->error() != QNetworkReply::OperationCanceledError) {
+        if (m_retryCount < 3) {
+            m_retryCount++;
+            qWarning() << "LLM Request failed, retrying" << m_retryCount << "..." << m_activeReply->errorString();
+            m_activeReply->deleteLater();
+            m_activeReply = nullptr;
+            sendRequest(m_activeRequest);
+            return;
+        }
+
         QString errorMsg = m_activeReply->errorString();
         QByteArray serverResponse = m_activeReply->readAll();
         if (!serverResponse.isEmpty()) {

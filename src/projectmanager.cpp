@@ -246,6 +246,21 @@ Every save is a checkpoint. Use the **Exploration** menu in the Project Tree to 
 ## 🛠 Compilation
 
 Click the **Compile** button in the toolbar to generate a professional PDF of your manuscript.
+
+## 🤖 AI & Simulation
+
+### 1. AI Writing Assistant
+Open the sidebar and select **AI Writing Assistant**. It automatically sees the context of your current document. You can also right-click text in the editor to Expand, Rewrite, or Summarize it.
+
+### 2. Game Analyzer
+The **Problems** panel at the bottom continuously checks your rules for conflicts using RAG (Retrieval-Augmented Generation). It "remembers" your entire project!
+
+### 3. Rule Simulation
+Go to the **Rule Simulation** panel to test your mechanics. 
+*   **Participants:** Drag character files into the list.
+*   **Scenario:** Drag a markdown encounter file to set the scene.
+*   **Arbiter:** The AI acts as a neutral judge, enforcing your specific rules.
+*   **Griot:** The AI narrates the mechanical results into a story.
 )markdown";
         readmeFile.write(readmeContent);
         readmeFile.close();
@@ -284,9 +299,74 @@ Click the **Compile** button in the toolbar to generate a professional PDF of yo
             "!manuscript/\n"
             "!stylesheets/\n"
             "!media/\n"
-            ".rpgforge-vectors.db\n"
+            "!simulations/\n"
+            ".rpgforge-vectors.db*\n"
+            "*.db-shm\n"
+            "*.db-wal\n"
         );
         gitignore.close();
+    }
+
+    // 5. Simulations
+    projectDir.mkpath(QStringLiteral("simulations"));
+    QModelIndex simIdx = model.addFolder(i18n("Simulations"), QStringLiteral("simulations"), rootIdx);
+    
+    // Add Sample Encounter
+    QString encPath = QStringLiteral("simulations/sample_encounter.md");
+    QFile encFile(projectDir.absoluteFilePath(encPath));
+    if (encFile.open(QIODevice::WriteOnly)) {
+        const char* encContent = R"markdown(# Sample Encounter: The Bridge Ambush
+
+**Starting Situation:**
+The party is crossing a narrow stone bridge over a rushing river. Suddenly, three goblins jump out from behind the boulders on the far side.
+
+**Goal:** 
+Cross the bridge or defeat the goblins.
+
+**Environment:**
+- Narrow Bridge: Difficult terrain.
+- Rushing River: DC 15 Athletics check if fallen in.
+)markdown";
+        encFile.write(encContent);
+        encFile.close();
+    }
+    model.addFile(i18n("Sample Encounter"), encPath, simIdx);
+
+    // Add Sample Actors
+    QString valeriusPath = QStringLiteral("research/Characters/Valerius.json");
+    QFile valFile(projectDir.absoluteFilePath(valeriusPath));
+    if (valFile.open(QIODevice::WriteOnly)) {
+        const char* valContent = R"json({
+    "name": "Valerius the Bold",
+    "stats": {
+        "strength": 16,
+        "dexterity": 12,
+        "constitution": 14,
+        "hp": 22,
+        "ac": 16
+    },
+    "equipment": ["Longsword", "Shield", "Chain Mail"]
+})json";
+        valFile.write(valContent);
+        valFile.close();
+    }
+    
+    QString goblinPath = QStringLiteral("research/Characters/Goblin.json");
+    QFile gobFile(projectDir.absoluteFilePath(goblinPath));
+    if (gobFile.open(QIODevice::WriteOnly)) {
+        const char* gobContent = R"json({
+    "name": "Goblin Scout",
+    "stats": {
+        "strength": 8,
+        "dexterity": 14,
+        "constitution": 10,
+        "hp": 7,
+        "ac": 13
+    },
+    "equipment": ["Shortbow", "Scimitar"]
+})json";
+        gobFile.write(gobContent);
+        gobFile.close();
     }
 
     setTree(model.projectData());

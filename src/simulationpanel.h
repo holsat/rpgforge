@@ -41,6 +41,11 @@ public:
     explicit SimulationPanel(QWidget *parent = nullptr);
     ~SimulationPanel() override;
 
+    /**
+     * @brief Programmatically starts the simulation.
+     */
+    void startSimulation();
+
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -56,6 +61,7 @@ private Q_SLOTS:
     void onLoadScenario();
     void onAddActor();
     void onRemoveActor();
+    void onSaveResult();
 
 private:
     void setupUi();

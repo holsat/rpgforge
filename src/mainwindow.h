@@ -88,6 +88,8 @@ private Q_SLOTS:
     void importScrivener();
     void importWord();
     void characterGenerator();
+    void startSimulation();
+    void compareSimulations();
     void cloneProject();
     void projectSettings();
     void globalSettings();

@@ -105,6 +105,8 @@ add_executable(rpgforge
     src/simulationpanel.h
     src/charactergenerator.cpp
     src/charactergenerator.h
+    src/simulationcomparedialog.cpp
+    src/simulationcomparedialog.h
     src/simulationmanager.cpp
     src/simulationmanager.h
     src/mcpservice.cpp
