@@ -23,6 +23,7 @@
 #include <QString>
 #include <QFuture>
 #include <QDateTime>
+#include <QMutex>
 
 struct VersionInfo {
     QString hash;
@@ -166,6 +167,10 @@ private:
     GitService& operator=(const GitService&) = delete;
 
     bool internalCommit(const QString &filePath, const QString &message);
+
+    // Serializes concurrent internalCommit calls from QtConcurrent threads to
+    // prevent races on the libgit2 repository index.
+    QMutex m_commitMutex;
 };
 
 #endif // GITSERVICE_H

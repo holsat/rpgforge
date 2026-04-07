@@ -17,6 +17,7 @@
 */
 
 #include "gitservice.h"
+#include "githubservice.h"
 #include <git2.h>
 #include <QtConcurrent>
 #include <QFileInfo>
@@ -24,6 +25,21 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QMap>
+#include <QMutexLocker>
+#include <QSettings>
+
+// Creates a git_signature using the repository's configured user.name/user.email.
+// Falls back to reading RPGForge settings, then to a generic identity if nothing is set.
+static int makeSignature(git_signature **out, git_repository *repo)
+{
+    if (git_signature_default(out, repo) == 0) return 0;
+
+    // git_signature_default failed (no user.name/email in config); try app settings
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString name  = settings.value(QStringLiteral("git/author_name"), QStringLiteral("RPG Forge")).toString();
+    QString email = settings.value(QStringLiteral("git/author_email"), QStringLiteral("rpgforge@local")).toString();
+    return git_signature_now(out, name.toUtf8().constData(), email.toUtf8().constData());
+}
 
 GitService::GitService(QObject *parent)
     : QObject(parent)
@@ -81,7 +97,7 @@ QFuture<bool> GitService::commitAll(const QString &repoPath, const QString &mess
             if (git_commit_lookup(&parent, repo, &parent_oid) != 0) goto cleanup;
         }
 
-        if (git_signature_now(&signature, "RPG Forge", "rpgforge@example.com") != 0) goto cleanup;
+        if (makeSignature(&signature, repo) != 0) goto cleanup;
 
         if (git_commit_create(&commit_oid, repo, "HEAD", signature, signature,
                               nullptr, message.toUtf8().constData(), tree,
@@ -521,6 +537,7 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
 
 bool GitService::internalCommit(const QString &filePath, const QString &message)
 {
+    QMutexLocker locker(&m_commitMutex);
     git_repository *repo = nullptr;
     git_index *index = nullptr;
     git_oid tree_oid, parent_oid, commit_oid;
@@ -606,10 +623,60 @@ bool GitService::hasUncommittedChanges(const QString &path)
     return changes;
 }
 
+// Credential callback payload for HTTPS pushes using a PAT.
+struct PushCredPayload {
+    QByteArray username; // "x-access-token" for GitHub PATs
+    QByteArray password; // the token itself
+};
+
+static int pushCredCallback(git_credential **out, const char * /*url*/, const char * /*username_from_url*/,
+                            unsigned int allowed_types, void *payload)
+{
+    if (!(allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT)) return GIT_PASSTHROUGH;
+    auto *creds = static_cast<PushCredPayload *>(payload);
+    return git_credential_userpass_plaintext_new(out, creds->username.constData(), creds->password.constData());
+}
+
 QFuture<bool> GitService::push(const QString &path, const QString &remoteName)
 {
-    return QtConcurrent::run([path, remoteName]() {
-        return true;
+    // Read the cached token on the calling thread to avoid cross-thread access
+    // to KWallet; the GitHubService cache is populated on the main thread.
+    const QString token = GitHubService::instance().token();
+
+    return QtConcurrent::run([path, remoteName, token]() {
+        git_repository *repo = nullptr;
+        git_remote *remote = nullptr;
+        git_reference *head = nullptr;
+        bool success = false;
+
+        if (git_repository_open(&repo, path.toUtf8().constData()) != 0) goto cleanup;
+        if (git_remote_lookup(&remote, repo, remoteName.toUtf8().constData()) != 0) goto cleanup;
+        if (git_repository_head(&head, repo) != 0) goto cleanup;
+
+        {
+            // Build refspec "refs/heads/<branch>:refs/heads/<branch>"
+            QByteArray branchRef(git_reference_name(head));
+            QByteArray refspec = branchRef + ":" + branchRef;
+            char *refspecPtr = refspec.data();
+            git_strarray refspecs{&refspecPtr, 1};
+
+            PushCredPayload creds{
+                QByteArrayLiteral("x-access-token"),
+                token.toUtf8()
+            };
+
+            git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
+            push_opts.callbacks.credentials = pushCredCallback;
+            push_opts.callbacks.payload = &creds;
+
+            success = (git_remote_push(remote, &refspecs, &push_opts) == 0);
+        }
+
+    cleanup:
+        if (head)   git_reference_free(head);
+        if (remote) git_remote_free(remote);
+        if (repo)   git_repository_free(repo);
+        return success;
     });
 }
 
@@ -641,7 +708,7 @@ bool GitService::createTag(const QString &path, const QString &tagName, const QS
     }
 
     if (git_object_lookup(&target, repo, &oid, GIT_OBJECT_COMMIT) == 0) {
-        git_signature_now(&signature, "RPG Forge", "rpgforge@example.com");
+        makeSignature(&signature, repo);
         if (git_tag_create(&tag_oid, repo, tagName.toUtf8().constData(), target, signature, "", 0) == 0) {
             success = true;
         }
