@@ -20,6 +20,7 @@
 #define MCPSERVICE_H
 
 #include <QObject>
+#include <QByteArray>
 #include <QJsonObject>
 #include <QJsonArray>
 
@@ -61,6 +62,10 @@ private:
     void toolUpdateSimState(const QJsonValue &id, const QJsonObject &args);
 
     bool isPathSafe(const QString &path) const;
+
+    // Accumulates stdin bytes across readyRead() calls until a complete
+    // newline-terminated JSON message is available.
+    QByteArray m_stdinBuffer;
 };
 
 #endif // MCPSERVICE_H

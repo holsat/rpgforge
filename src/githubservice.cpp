@@ -44,7 +44,7 @@ void GitHubService::setToken(const QString &token)
     KWallet::Wallet *wallet = KWallet::Wallet::openWallet(KWallet::Wallet::LocalWallet(), 0, KWallet::Wallet::Asynchronous);
     if (!wallet) return;
 
-    connect(wallet, &KWallet::Wallet::walletOpened, this, [wallet, token](bool opened) {
+    connect(wallet, &KWallet::Wallet::walletOpened, this, [this, wallet, token](bool opened) {
         if (opened) {
             if (!wallet->hasFolder(QStringLiteral("RPGForge"))) {
                 wallet->createFolder(QStringLiteral("RPGForge"));
@@ -53,21 +53,26 @@ void GitHubService::setToken(const QString &token)
             wallet->writePassword(QStringLiteral("GitHubToken"), token);
         }
         wallet->deleteLater();
+        // Invalidate cache so next read fetches the new value
+        m_tokenCache.clear();
     });
 }
 
 QString GitHubService::token() const
 {
-    // Synchronous open for simple read (wait up to 1s)
+    // Return cached token if available, avoiding a synchronous KWallet open
+    if (!m_tokenCache.isEmpty()) return m_tokenCache;
+
     KWallet::Wallet *wallet = KWallet::Wallet::openWallet(KWallet::Wallet::LocalWallet(), 0, KWallet::Wallet::Synchronous);
     if (!wallet) return QString();
 
     if (wallet->hasFolder(QStringLiteral("RPGForge"))) {
         wallet->setFolder(QStringLiteral("RPGForge"));
-        QString token;
-        if (wallet->readPassword(QStringLiteral("GitHubToken"), token) == 0) {
+        QString tok;
+        if (wallet->readPassword(QStringLiteral("GitHubToken"), tok) == 0) {
+            m_tokenCache = tok;
             delete wallet;
-            return token;
+            return tok;
         }
     }
     delete wallet;

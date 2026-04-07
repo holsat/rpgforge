@@ -29,9 +29,13 @@
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
+#include <QStandardPaths>
 
+#ifdef QT_DEBUG
 static void logRequest(const QUrl &url, const QJsonObject &body, const QNetworkRequest &netRequest) {
-    QFile dbg(QStringLiteral("llm_debug.log"));
+    const QString logPath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
+                            + QLatin1String("/llm_debug.log");
+    QFile dbg(logPath);
     if (dbg.open(QIODevice::Append | QIODevice::Text)) {
         QTextStream out(&dbg);
         out << "\n--- NEW REQUEST ---\n";
@@ -47,6 +51,7 @@ static void logRequest(const QUrl &url, const QJsonObject &body, const QNetworkR
         out << "BODY: " << QJsonDocument(body).toJson() << "\n";
     }
 }
+#endif
 
 LLMService& LLMService::instance()
 {
@@ -76,7 +81,7 @@ void LLMService::setApiKey(LLMProvider provider, const QString &key)
         case LLMProvider::Ollama: return; // No key for Ollama usually
     }
 
-    connect(wallet, &KWallet::Wallet::walletOpened, this, [wallet, walletKey, key](bool opened) {
+    connect(wallet, &KWallet::Wallet::walletOpened, this, [this, wallet, walletKey, key, provider](bool opened) {
         if (opened) {
             if (!wallet->hasFolder(QStringLiteral("RPGForge"))) {
                 wallet->createFolder(QStringLiteral("RPGForge"));
@@ -85,11 +90,19 @@ void LLMService::setApiKey(LLMProvider provider, const QString &key)
             wallet->writePassword(walletKey, key);
         }
         wallet->deleteLater();
+        // Invalidate cache so next read fetches the new value
+        m_apiKeyCache.remove(provider);
     });
 }
 
 QString LLMService::apiKey(LLMProvider provider) const
 {
+    if (provider == LLMProvider::Ollama) return QString();
+
+    // Return cached key if available, avoiding a synchronous KWallet open
+    auto it = m_apiKeyCache.constFind(provider);
+    if (it != m_apiKeyCache.constEnd()) return it.value();
+
     KWallet::Wallet *wallet = KWallet::Wallet::openWallet(KWallet::Wallet::LocalWallet(), 0, KWallet::Wallet::Synchronous);
     if (!wallet) return QString();
 
@@ -102,16 +115,15 @@ QString LLMService::apiKey(LLMProvider provider) const
         case LLMProvider::Ollama: delete wallet; return QString();
     }
 
+    QString key;
     if (wallet->hasFolder(QStringLiteral("RPGForge"))) {
         wallet->setFolder(QStringLiteral("RPGForge"));
-        QString key;
         if (wallet->readPassword(walletKey, key) == 0) {
-            delete wallet;
-            return key;
+            m_apiKeyCache.insert(provider, key);
         }
     }
     delete wallet;
-    return QString();
+    return key;
 }
 
 static QUrl normalizeOllamaUrl(const QString &rawEndpoint, const QString &targetPath) {
@@ -342,7 +354,9 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
     netRequest.setUrl(url);
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+#ifdef QT_DEBUG
     logRequest(url, body, netRequest);
+#endif
 
     QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
 
@@ -652,7 +666,9 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     netRequest.setRawHeader("User-Agent", "Mozilla/5.0 RPGForge/1.0");
 
+#ifdef QT_DEBUG
     logRequest(url, QJsonObject(), netRequest);
+#endif
 
     QNetworkReply *reply = m_networkManager->get(netRequest);
     connect(reply, &QNetworkReply::finished, this, [reply, callback, provider, url]() {

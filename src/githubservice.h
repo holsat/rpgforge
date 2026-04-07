@@ -67,6 +67,10 @@ private:
     GitHubService& operator=(const GitHubService&) = delete;
 
     QNetworkAccessManager *m_networkManager;
+
+    // Token cache: avoids synchronous KWallet open on every request.
+    // Invalidated when setToken() is called.
+    mutable QString m_tokenCache;
 };
 
 #endif // GITHUBSERVICE_H

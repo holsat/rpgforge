@@ -28,6 +28,7 @@
 #include <QSocketNotifier>
 #include <QDebug>
 #include <iostream>
+#include <unistd.h>
 
 MCPService::MCPService(QObject *parent)
     : QObject(parent)
@@ -43,11 +44,24 @@ void MCPService::start()
 
 void MCPService::onReadyRead()
 {
-    // MCP messages are usually single-line or length-prefixed. 
-    // For simplicity in this implementation, we read until newline or EOF.
-    char buffer[4096];
-    if (fgets(buffer, sizeof(buffer), stdin)) {
-        processMessage(QByteArray(buffer));
+    // Read all available bytes into the accumulation buffer. MCP messages are
+    // newline-delimited JSON; a single readyRead() may deliver a partial line
+    // or multiple lines, so we buffer and extract only complete messages.
+    char buf[4096];
+    ssize_t n;
+    while ((n = ::read(fileno(stdin), buf, sizeof(buf))) > 0) {
+        m_stdinBuffer.append(buf, static_cast<int>(n));
+        if (n < static_cast<ssize_t>(sizeof(buf))) break; // no more data available
+    }
+
+    while (true) {
+        int nl = m_stdinBuffer.indexOf('\n');
+        if (nl < 0) break;
+        QByteArray line = m_stdinBuffer.left(nl).trimmed();
+        m_stdinBuffer.remove(0, nl + 1);
+        if (!line.isEmpty()) {
+            processMessage(line);
+        }
     }
 }
 
@@ -355,8 +369,23 @@ bool MCPService::isPathSafe(const QString &path) const
     QString projectPath = ProjectManager::instance().projectPath();
     if (projectPath.isEmpty()) return false;
 
-    QString projectRoot = QDir(projectPath).absolutePath();
-    QString targetPath = QFileInfo(path).absoluteFilePath();
-    
-    return targetPath.startsWith(projectRoot);
+    // Use canonicalFilePath() to resolve symlinks before comparing, preventing
+    // a symlink inside the project directory from escaping to arbitrary paths.
+    const QString projectRoot = QFileInfo(projectPath).canonicalFilePath();
+    if (projectRoot.isEmpty()) return false;
+
+    // For files that don't exist yet (e.g. write_file creating a new file),
+    // resolve the parent directory and append the filename.
+    QFileInfo targetInfo(path);
+    QString targetPath;
+    if (targetInfo.exists()) {
+        targetPath = targetInfo.canonicalFilePath();
+    } else {
+        const QString parentCanonical = QFileInfo(targetInfo.absolutePath()).canonicalFilePath();
+        if (parentCanonical.isEmpty()) return false;
+        targetPath = parentCanonical + QLatin1Char('/') + targetInfo.fileName();
+    }
+
+    return targetPath.startsWith(projectRoot + QLatin1Char('/'))
+        || targetPath == projectRoot;
 }

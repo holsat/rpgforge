@@ -178,6 +178,10 @@ private:
     };
     bool m_hasPendingRequest = false;
     PendingRequest m_pendingRequest;
+
+    // API key cache: populated on first KWallet read, avoids synchronous wallet
+    // opens on every request. Invalidated when setApiKey() is called.
+    mutable QHash<LLMProvider, QString> m_apiKeyCache;
 };
 
 #endif // LLMSERVICE_H
