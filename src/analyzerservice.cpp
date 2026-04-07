@@ -19,6 +19,7 @@
 #include "analyzerservice.h"
 #include "knowledgebase.h"
 #include "llmservice.h"
+#include "textutils.h"
 #include "projectmanager.h"
 
 #include <QSettings>
@@ -116,18 +117,7 @@ QList<Diagnostic> AnalyzerService::parseDiagnostics(const QString &jsonResponse)
     QList<Diagnostic> results;
     
     // Clean up response if it has markdown formatting
-    QString cleanJson = jsonResponse.trimmed();
-    if (cleanJson.startsWith(QLatin1String("```json"))) {
-        cleanJson = cleanJson.mid(7);
-        if (cleanJson.endsWith(QLatin1String("```"))) {
-            cleanJson.chop(3);
-        }
-    } else if (cleanJson.startsWith(QLatin1String("```"))) {
-        cleanJson = cleanJson.mid(3);
-        if (cleanJson.endsWith(QLatin1String("```"))) {
-            cleanJson.chop(3);
-        }
-    }
+    QString cleanJson = stripMarkdownFences(jsonResponse);
     
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(cleanJson.toUtf8(), &error);

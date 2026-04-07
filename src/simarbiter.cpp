@@ -18,6 +18,7 @@
 
 #include "simarbiter.h"
 #include "llmservice.h"
+#include "textutils.h"
 #include "knowledgebase.h"
 #include "diceengine.h"
 #include "simulationmanager.h"
@@ -98,14 +99,7 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
         }
 
         // Parse JSON
-        QString cleanJson = response.trimmed();
-        if (cleanJson.startsWith(QLatin1String("```json"))) {
-            cleanJson = cleanJson.mid(7);
-            if (cleanJson.endsWith(QLatin1String("```"))) cleanJson.chop(3);
-        } else if (cleanJson.startsWith(QLatin1String("```"))) {
-            cleanJson = cleanJson.mid(3);
-            if (cleanJson.endsWith(QLatin1String("```"))) cleanJson.chop(3);
-        }
+        QString cleanJson = stripMarkdownFences(response);
 
         QJsonParseError error;
         QJsonDocument doc = QJsonDocument::fromJson(cleanJson.toUtf8(), &error);

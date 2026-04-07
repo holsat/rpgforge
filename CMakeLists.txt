@@ -91,6 +91,7 @@ add_executable(rpgforge
     src/knowledgebase.h
     src/analyzerservice.cpp
     src/analyzerservice.h
+    src/textutils.h
     src/problemspanel.cpp
     src/problemspanel.h
     src/simulationstate.cpp
