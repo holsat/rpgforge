@@ -90,12 +90,10 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     LLMRequest req;
     req.provider = provider;
     
-    QString defaultModel;
-    if (provider == LLMProvider::OpenAI) defaultModel = settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o-mini")).toString();
-    else if (provider == LLMProvider::Anthropic) defaultModel = settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-latest")).toString();
-    else defaultModel = settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString();
-
-    req.model = settings.value(QStringLiteral("analyzer/model"), defaultModel).toString();
+    // Model is resolved by LLMService from settings; setting an empty model here
+    // lets sendNonStreamingRequest use the provider's configured default.
+    // If analyzer/model is explicitly set, that takes precedence.
+    req.model = settings.value(QStringLiteral("analyzer/model")).toString();
     req.temperature = 0.2; // Low temp for analytical tasks
     req.stream = false;
     

@@ -24,6 +24,7 @@
 
 #include <QFile>
 #include <QDir>
+#include <QSettings>
 #include <QTimer>
 #include <QDebug>
 #include <KLocalizedString>
@@ -131,8 +132,8 @@ void SynopsisService::processNext()
 void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &content)
 {
     LLMRequest req;
-    req.provider = LLMProvider::OpenAI;
-    req.model = QStringLiteral("gpt-4o-mini");
+    req.provider = static_cast<LLMProvider>(QSettings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge")).value(QStringLiteral("llm/provider"), 0).toInt());
+    // Leave req.model empty — LLMService resolves it from settings for the active provider.
     req.stream = false;
     
     LLMMessage sys;
@@ -182,8 +183,8 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     }
 
     LLMRequest req;
-    req.provider = LLMProvider::OpenAI;
-    req.model = QStringLiteral("gpt-4o-mini");
+    req.provider = static_cast<LLMProvider>(QSettings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge")).value(QStringLiteral("llm/provider"), 0).toInt());
+    // Leave req.model empty — LLMService resolves it from settings for the active provider.
     req.stream = false;
     
     LLMMessage sys;

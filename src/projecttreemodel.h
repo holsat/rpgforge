@@ -76,6 +76,11 @@ public:
     bool removeItem(const QModelIndex &index);
     bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
 
+    // Suppress per-row signals during bulk operations (e.g. import).
+    // Call beginBulkImport() before, endBulkImport() after; the view refreshes atomically.
+    void beginBulkImport();
+    void endBulkImport();
+
     QModelIndex indexForItem(ProjectTreeItem *item) const;
 
     // Drag and Drop
@@ -92,6 +97,7 @@ private:
     QJsonObject saveItem(ProjectTreeItem *item) const;
 
     ProjectTreeItem *m_rootItem;
+    bool m_bulkImporting = false;
 };
 
 #endif // PROJECTTREEMODEL_H

@@ -43,6 +43,10 @@
 #include "simulationcomparedialog.h"
 #include "problemspanel.h"
 #include "analyzerservice.h"
+#include "llmservice.h"
+#include <QComboBox>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include "knowledgebase.h"
 #include "metadatadialog.h"
 #include "newprojectdialog.h"
@@ -102,9 +106,8 @@ MainWindow::MainWindow(QWidget *parent)
     // Merge KTextEditor::View's GUI (Edit, View, Selection, Tools menus)
     guiFactory()->addClient(m_editorView);
 
-    if (m_diffView && m_diffView->part()) {
-        guiFactory()->addClient(m_diffView->part());
-    }
+    // Kompare part GUI is added/removed dynamically in showCentralView() so its
+    // toolbar only appears when the diff view is actually active.
 
     // Hide duplicate save actions from the merged client to avoid toolbar clutter
     if (auto *editorAction = m_editorView->action(QStringLiteral("file_save"))) editorAction->setVisible(false);
@@ -113,6 +116,9 @@ MainWindow::MainWindow(QWidget *parent)
         if (auto *editorAction = m_researchView->action(QStringLiteral("file_save"))) editorAction->setVisible(false);
         if (auto *editorAction = m_researchView->action(QStringLiteral("file_save_as"))) editorAction->setVisible(false);
     }
+
+    connect(&LLMService::instance(), &LLMService::modelNotFound,
+            this, &MainWindow::onModelNotFound);
 
     updateTitle();
     resize(1400, 900);
@@ -391,10 +397,11 @@ void MainWindow::setupSidebar()
     m_mainSplitter->addWidget(m_previewPanel);
 
     // Set initial sizes: sidebar (250px), editor (1), preview (1)
-    m_mainSplitter->setSizes({250, 600, 550});
-    m_mainSplitter->setStretchFactor(0, 0); 
+    m_mainSplitter->setSizes({250, 1150, 0});
+    m_mainSplitter->setStretchFactor(0, 0);
     m_mainSplitter->setStretchFactor(1, 1);
-    m_mainSplitter->setStretchFactor(2, 1);
+    m_mainSplitter->setStretchFactor(2, 0);
+    m_previewPanel->hide();
 
     m_problemsPanel = new ProblemsPanel(this);
 
@@ -695,7 +702,7 @@ void MainWindow::setupActions()
     m_togglePreviewAction->setText(i18n("Show Preview"));
     m_togglePreviewAction->setIcon(QIcon::fromTheme(QStringLiteral("view-split-left-right")));
     m_togglePreviewAction->setCheckable(true);
-    m_togglePreviewAction->setChecked(true);
+    m_togglePreviewAction->setChecked(false);
     actionCollection()->addAction(QStringLiteral("toggle_preview"), m_togglePreviewAction);
     actionCollection()->setDefaultShortcut(m_togglePreviewAction, Qt::CTRL | Qt::Key_P);
     connect(m_togglePreviewAction, &QAction::triggered, this, &MainWindow::togglePreview);
@@ -851,6 +858,7 @@ void MainWindow::saveFile()
     } else {
         doc->save();
     }
+    ProjectManager::instance().saveProject();
 }
 
 void MainWindow::saveFileAs()
@@ -1174,6 +1182,19 @@ void MainWindow::showCentralView(QWidget *widget)
     m_imagePreview->setVisible(widget == m_imagePreview);
     m_diffView->setVisible(widget == m_diffView);
     m_pdfViewer->setVisible(widget == m_pdfViewer);
+
+    // Add the Kompare part's toolbar only while the diff view is visible,
+    // so its actions never pollute the primary toolbar.
+    if (m_diffView && m_diffView->part()) {
+        const bool showingDiff = (widget == m_diffView);
+        if (showingDiff && !m_diffClientAdded) {
+            guiFactory()->addClient(m_diffView->part());
+            m_diffClientAdded = true;
+        } else if (!showingDiff && m_diffClientAdded) {
+            guiFactory()->removeClient(m_diffView->part());
+            m_diffClientAdded = false;
+        }
+    }
 }
 
 void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2)
@@ -1896,6 +1917,38 @@ void MainWindow::compareSimulations()
         SimulationCompareDialog dialog(objA, objB, this);
         dialog.exec();
     }
+}
+
+void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available)
+{
+    auto *dlg = new QDialog(this);
+    dlg->setWindowTitle(i18n("Model Unavailable"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+    auto *layout = new QVBoxLayout(dlg);
+    auto *label = new QLabel(i18n(
+        "The model <b>%1</b> is no longer available from this provider.<br/>"
+        "Select a replacement model to use instead:", invalidModel), dlg);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+
+    auto *combo = new QComboBox(dlg);
+    combo->addItems(available);
+    layout->addWidget(combo);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+
+    connect(dlg, &QDialog::accepted, this, [combo]() {
+        const QString selected = combo->currentText();
+        if (!selected.isEmpty())
+            LLMService::instance().retryWithModel(selected);
+    });
+
+    dlg->open();
+    Q_UNUSED(provider)
 }
 
 

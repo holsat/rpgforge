@@ -56,6 +56,7 @@ class QLineEdit;
 #include <QList>
 #include <QUrl>
 #include "analyzerservice.h"
+#include "llmservice.h"
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -111,6 +112,7 @@ private Q_SLOTS:
     void aiRewrite();
     void aiSummarize();
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
+    void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available);
 
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }
@@ -165,6 +167,7 @@ private:
     QSplitter *m_mainSplitter = nullptr;
     QSplitter *m_vSplitter = nullptr;
     QAction *m_togglePreviewAction = nullptr;
+    bool m_diffClientAdded = false;
 
     QTimer *m_cursorDebounce = nullptr;
     QTimer *m_textChangeDebounce = nullptr;

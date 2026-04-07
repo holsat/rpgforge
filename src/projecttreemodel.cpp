@@ -276,20 +276,33 @@ QModelIndex ProjectTreeModel::indexForItem(ProjectTreeItem *item) const
     return createIndex(row, 0, item);
 }
 
+void ProjectTreeModel::beginBulkImport()
+{
+    m_bulkImporting = true;
+    beginResetModel();
+}
+
+void ProjectTreeModel::endBulkImport()
+{
+    m_bulkImporting = false;
+    endResetModel();
+}
+
 QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path, const QModelIndex &parent)
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     int row = parentItem->children.count();
-    
-    beginInsertRows(parent, row, row);
+
+    if (!m_bulkImporting) beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::Folder;
     item->name = name;
     item->path = path;
     item->parent = parentItem;
     parentItem->children.append(item);
-    endInsertRows();
-    
+    if (!m_bulkImporting) endInsertRows();
+
+    // During bulk import the view is reset at the end; return a best-effort index.
     return index(row, 0, parent);
 }
 
@@ -297,16 +310,16 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     int row = parentItem->children.count();
-    
-    beginInsertRows(parent, row, row);
+
+    if (!m_bulkImporting) beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::File;
     item->name = name;
     item->path = path;
     item->parent = parentItem;
     parentItem->children.append(item);
-    endInsertRows();
-    
+    if (!m_bulkImporting) endInsertRows();
+
     return index(row, 0, parent);
 }
 
