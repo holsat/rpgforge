@@ -34,6 +34,7 @@
 #include <QDataStream>
 #include <QRegularExpression>
 #include <KLocalizedString>
+#include <QCryptographicHash>
 
 KnowledgeBase& KnowledgeBase::instance()
 {
@@ -97,6 +98,7 @@ void KnowledgeBase::setupDatabase()
                               "file_path TEXT,"
                               "heading TEXT,"
                               "content TEXT,"
+                              "file_hash TEXT,"
                               "embedding BLOB)"));
 }
 
@@ -123,6 +125,21 @@ void KnowledgeBase::onFileChanged(const QString &path)
 
 void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &content)
 {
+    QString relativePath = QDir(m_projectPath).relativeFilePath(filePath);
+    QByteArray currentHash = QCryptographicHash::hash(content.toUtf8(), QCryptographicHash::Md5).toHex();
+
+    QSqlDatabase db = QSqlDatabase::database(QStringLiteral("rpgforge_vectors"));
+    if (db.isOpen()) {
+        QSqlQuery query(db);
+        query.prepare(QStringLiteral("SELECT file_hash FROM chunks WHERE file_path = ? LIMIT 1"));
+        query.addBindValue(relativePath);
+        if (query.exec() && query.next()) {
+            if (query.value(0).toByteArray() == currentHash) {
+                return; // Content hasn't changed, skip re-indexing
+            }
+        }
+    }
+
     // Extremely simplified chunker: split by markdown H1/H2
     QStringList rawChunks = content.split(QRegularExpression(QStringLiteral("(?=\\n##? )")));
     
@@ -138,11 +155,10 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
     // Clear old chunks for this file
-    QSqlDatabase db = QSqlDatabase::database(QStringLiteral("rpgforge_vectors"));
     if (db.isOpen()) {
         QSqlQuery query(db);
         query.prepare(QStringLiteral("DELETE FROM chunks WHERE file_path = ?"));
-        query.addBindValue(QDir(m_projectPath).relativeFilePath(filePath));
+        query.addBindValue(relativePath);
         query.exec();
     }
 
@@ -163,9 +179,9 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         m_pendingEmbeddings++;
         Q_EMIT indexingProgress(0, m_pendingEmbeddings); // just indicating busy
 
-        LLMService::instance().generateEmbedding(provider, model, trimmed, [this, filePath, heading, trimmed](const QVector<float> &embedding) {
+        LLMService::instance().generateEmbedding(provider, model, trimmed, [this, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
             if (!embedding.isEmpty()) {
-                storeChunk(filePath, heading, trimmed, embedding);
+                storeChunk(filePath, heading, trimmed, embedding, currentHash);
             }
             m_pendingEmbeddings--;
             if (m_pendingEmbeddings <= 0) {
@@ -176,7 +192,7 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     }
 }
 
-void KnowledgeBase::storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding)
+void KnowledgeBase::storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding, const QByteArray &fileHash)
 {
     QSqlDatabase db = QSqlDatabase::database(QStringLiteral("rpgforge_vectors"));
     if (!db.isOpen()) return;
@@ -187,10 +203,11 @@ void KnowledgeBase::storeChunk(const QString &filePath, const QString &heading, 
     stream << embedding;
 
     QSqlQuery query(db);
-    query.prepare(QStringLiteral("INSERT INTO chunks (file_path, heading, content, embedding) VALUES (?, ?, ?, ?)"));
+    query.prepare(QStringLiteral("INSERT INTO chunks (file_path, heading, content, file_hash, embedding) VALUES (?, ?, ?, ?, ?)"));
     query.addBindValue(QDir(m_projectPath).relativeFilePath(filePath));
     query.addBindValue(heading);
     query.addBindValue(content);
+    query.addBindValue(fileHash);
     query.addBindValue(blob);
     query.exec();
 }

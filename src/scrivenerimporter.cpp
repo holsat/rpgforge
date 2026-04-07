@@ -65,12 +65,18 @@ bool ScrivenerImporter::import(const QString &scrivPath,
 
     Q_EMIT progress(0, i18n("Starting import..."));
 
+    // Suppress per-row signals during the recursive tree build to avoid
+    // rowsInserted → rowCount re-entrancy on partially-constructed items.
+    model->beginBulkImport();
+
     // Process top-level binder items
     QDomElement item = binder.firstChildElement(QStringLiteral("BinderItem"));
     while (!item.isNull()) {
         processBinderItem(item, QModelIndex(), scrivPath, targetProjectDir, model);
         item = item.nextSiblingElement(QStringLiteral("BinderItem"));
     }
+
+    model->endBulkImport();
 
     Q_EMIT finished(true, i18n("Import complete."));
     return true;

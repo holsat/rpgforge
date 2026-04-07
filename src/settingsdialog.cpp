@@ -73,13 +73,13 @@ QWidget* SettingsDialog::createLLMTab()
     auto *layout = new QVBoxLayout(tab);
 
     m_activeProviderCombo = new QComboBox(this);
-    m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama")});
+    m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok (xAI)"), QStringLiteral("Gemini (Google)")});
     
     auto *providerLayout = new QFormLayout();
     providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
     // Provider agnostic
     m_embeddingModelEdit = new QLineEdit(this);
-    m_embeddingModelEdit->setPlaceholderText(QStringLiteral("text-embedding-3-small"));
+    m_embeddingModelEdit->setPlaceholderText(i18n("Select via provider model list"));
     providerLayout->addRow(i18n("Embedding Model:"), m_embeddingModelEdit);
     layout->addLayout(providerLayout);
 
@@ -90,7 +90,7 @@ QWidget* SettingsDialog::createLLMTab()
     m_openaiKeyEdit->setEchoMode(QLineEdit::Password);
     openaiLayout->addRow(i18n("API Key:"), m_openaiKeyEdit);
     m_openaiModelEdit = new QLineEdit(this);
-    m_openaiModelEdit->setPlaceholderText(QStringLiteral("gpt-4o"));
+    m_openaiModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
     openaiLayout->addRow(i18n("Default Model:"), m_openaiModelEdit);
     m_openaiEndpointEdit = new QLineEdit(this);
     m_openaiEndpointEdit->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
@@ -104,7 +104,7 @@ QWidget* SettingsDialog::createLLMTab()
     m_anthropicKeyEdit->setEchoMode(QLineEdit::Password);
     anthropicLayout->addRow(i18n("API Key:"), m_anthropicKeyEdit);
     m_anthropicModelEdit = new QLineEdit(this);
-    m_anthropicModelEdit->setPlaceholderText(QStringLiteral("claude-sonnet-4-6"));
+    m_anthropicModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
     anthropicLayout->addRow(i18n("Default Model:"), m_anthropicModelEdit);
     m_anthropicEndpointEdit = new QLineEdit(this);
     m_anthropicEndpointEdit->setPlaceholderText(QStringLiteral("https://api.anthropic.com/v1/messages"));
@@ -118,9 +118,37 @@ QWidget* SettingsDialog::createLLMTab()
     m_ollamaEndpointEdit->setPlaceholderText(QStringLiteral("http://localhost:11434/api/chat"));
     ollamaLayout->addRow(i18n("Local Endpoint:"), m_ollamaEndpointEdit);
     m_ollamaModelEdit = new QLineEdit(this);
-    m_ollamaModelEdit->setPlaceholderText(QStringLiteral("llama3"));
+    m_ollamaModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
     ollamaLayout->addRow(i18n("Default Model:"), m_ollamaModelEdit);
     layout->addWidget(ollamaGroup);
+
+    // Grok Group
+    auto *grokGroup = new QGroupBox(i18n("Grok (xAI)"), this);
+    auto *grokLayout = new QFormLayout(grokGroup);
+    m_grokKeyEdit = new QLineEdit(this);
+    m_grokKeyEdit->setEchoMode(QLineEdit::Password);
+    grokLayout->addRow(i18n("API Key:"), m_grokKeyEdit);
+    m_grokModelEdit = new QLineEdit(this);
+    m_grokModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
+    grokLayout->addRow(i18n("Default Model:"), m_grokModelEdit);
+    m_grokEndpointEdit = new QLineEdit(this);
+    m_grokEndpointEdit->setPlaceholderText(QStringLiteral("https://api.x.ai/v1/chat/completions"));
+    grokLayout->addRow(i18n("Endpoint:"), m_grokEndpointEdit);
+    layout->addWidget(grokGroup);
+
+    // Gemini Group
+    auto *geminiGroup = new QGroupBox(i18n("Gemini (Google)"), this);
+    auto *geminiLayout = new QFormLayout(geminiGroup);
+    m_geminiKeyEdit = new QLineEdit(this);
+    m_geminiKeyEdit->setEchoMode(QLineEdit::Password);
+    geminiLayout->addRow(i18n("API Key:"), m_geminiKeyEdit);
+    m_geminiModelEdit = new QLineEdit(this);
+    m_geminiModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
+    geminiLayout->addRow(i18n("Default Model:"), m_geminiModelEdit);
+    m_geminiEndpointEdit = new QLineEdit(this);
+    m_geminiEndpointEdit->setPlaceholderText(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"));
+    geminiLayout->addRow(i18n("Endpoint:"), m_geminiEndpointEdit);
+    layout->addWidget(geminiGroup);
 
     layout->addStretch();
     return tab;
@@ -174,7 +202,7 @@ QWidget* SettingsDialog::createAnalyzerTab()
     layout->addRow(i18n("Analyzer Provider:"), m_analyzerProviderCombo);
 
     m_analyzerModelEdit = new QLineEdit(this);
-    m_analyzerModelEdit->setPlaceholderText(i18n("Fast/cheap model recommended (e.g. gpt-4o-mini)"));
+    m_analyzerModelEdit->setPlaceholderText(i18n("Leave blank to use provider default model"));
     layout->addRow(i18n("Analyzer Model:"), m_analyzerModelEdit);
 
     return tab;
@@ -198,22 +226,32 @@ void SettingsDialog::load()
     m_typewriterScrollingCheck->setChecked(settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool());
 
     m_activeProviderCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model"), QStringLiteral("text-embedding-3-small")).toString());
+    // Model fields: no hardcoded defaults — empty means "not configured yet"
+    // Placeholder text in the widget gives the user a hint without seeding QSettings.
+    m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model")).toString());
 
-    m_openaiModelEdit->setText(settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString());
+    m_openaiModelEdit->setText(settings.value(QStringLiteral("llm/openai/model")).toString());
     m_openaiEndpointEdit->setText(settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString());
     m_openaiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::OpenAI));
 
-    m_anthropicModelEdit->setText(settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString());
+    m_anthropicModelEdit->setText(settings.value(QStringLiteral("llm/anthropic/model")).toString());
     m_anthropicEndpointEdit->setText(settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString());
     m_anthropicKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Anthropic));
 
-    m_ollamaModelEdit->setText(settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString());
+    m_ollamaModelEdit->setText(settings.value(QStringLiteral("llm/ollama/model")).toString());
     m_ollamaEndpointEdit->setText(settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434/api/chat")).toString());
+
+    m_grokModelEdit->setText(settings.value(QStringLiteral("llm/grok/model"), QString()).toString());
+    m_grokEndpointEdit->setText(settings.value(QStringLiteral("llm/grok/endpoint"), QStringLiteral("https://api.x.ai/v1/chat/completions")).toString());
+    m_grokKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Grok));
+
+    m_geminiModelEdit->setText(settings.value(QStringLiteral("llm/gemini/model"), QString()).toString());
+    m_geminiEndpointEdit->setText(settings.value(QStringLiteral("llm/gemini/endpoint"), QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")).toString());
+    m_geminiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Gemini));
 
     m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
     m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/provider"), 0).toInt());
-    m_analyzerModelEdit->setText(settings.value(QStringLiteral("analyzer/model"), QStringLiteral("gpt-4o-mini")).toString());
+    m_analyzerModelEdit->setText(settings.value(QStringLiteral("analyzer/model")).toString());
 
     // Load Prompts
     QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
@@ -255,6 +293,14 @@ void SettingsDialog::save()
 
     settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelEdit->text());
     settings.setValue(QStringLiteral("llm/ollama/endpoint"), m_ollamaEndpointEdit->text());
+
+    settings.setValue(QStringLiteral("llm/grok/model"), m_grokModelEdit->text());
+    settings.setValue(QStringLiteral("llm/grok/endpoint"), m_grokEndpointEdit->text());
+    LLMService::instance().setApiKey(LLMProvider::Grok, m_grokKeyEdit->text());
+
+    settings.setValue(QStringLiteral("llm/gemini/model"), m_geminiModelEdit->text());
+    settings.setValue(QStringLiteral("llm/gemini/endpoint"), m_geminiEndpointEdit->text());
+    LLMService::instance().setApiKey(LLMProvider::Gemini, m_geminiKeyEdit->text());
 
     settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
     settings.setValue(QStringLiteral("analyzer/provider"), m_analyzerProviderCombo->currentIndex());

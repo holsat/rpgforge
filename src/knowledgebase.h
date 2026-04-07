@@ -83,7 +83,7 @@ private:
 
     void setupDatabase();
     void chunkAndEmbed(const QString &filePath, const QString &content);
-    void storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding);
+    void storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding, const QByteArray &fileHash);
     float cosineSimilarity(const QVector<float> &a, const QVector<float> &b);
 
     QString m_projectPath;

@@ -17,6 +17,7 @@
 */
 
 #include "simulationpanel.h"
+#include "projectmanager.h"
 #include <KLocalizedString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -39,6 +40,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFile>
+#include <QDateTime>
 
 SimulationPanel::SimulationPanel(QWidget *parent)
     : QWidget(parent)
@@ -72,6 +74,11 @@ void SimulationPanel::setupUi()
     m_stopBtn->setEnabled(false);
     connect(m_stopBtn, &QPushButton::clicked, this, &SimulationPanel::onStopClicked);
     toolbar->addWidget(m_stopBtn);
+
+    auto *saveBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("document-save")), QString(), this);
+    saveBtn->setToolTip(i18n("Save current world state to JSON"));
+    connect(saveBtn, &QPushButton::clicked, this, &SimulationPanel::onSaveResult);
+    toolbar->addWidget(saveBtn);
 
     toolbar->addSpacing(10);
     
@@ -150,6 +157,11 @@ void SimulationPanel::setupUi()
     tabs->addTab(m_stateTree, i18n("World State"));
 
     layout->addWidget(tabs);
+}
+
+void SimulationPanel::startSimulation()
+{
+    onStartClicked();
 }
 
 void SimulationPanel::onStartClicked()
@@ -321,6 +333,29 @@ void SimulationPanel::onAddActor()
 void SimulationPanel::onRemoveActor()
 {
     delete m_actorList->currentItem();
+}
+
+void SimulationPanel::onSaveResult()
+{
+    QString projectPath = ProjectManager::instance().projectPath();
+    if (projectPath.isEmpty()) return;
+
+    QString simDir = QDir(projectPath).absoluteFilePath(QStringLiteral("simulations"));
+    QDir().mkpath(simDir);
+
+    QString defaultName = QStringLiteral("sim_%1.json").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+    QString path = QFileDialog::getSaveFileName(this, i18n("Save Simulation State"), 
+        QDir(simDir).absoluteFilePath(defaultName),
+        i18n("JSON Files (*.json)"));
+
+    if (!path.isEmpty()) {
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QJsonObject state = SimulationManager::instance().state()->state();
+            file.write(QJsonDocument(state).toJson());
+            file.close();
+        }
+    }
 }
 
 void SimulationPanel::addActorFromFile(const QString &path)

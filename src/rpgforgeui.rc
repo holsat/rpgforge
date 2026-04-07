@@ -17,6 +17,8 @@
         <Action name="project_import_word"/>
       </Menu>
       <Action name="project_character_generator"/>
+      <Action name="simulation_start"/>
+      <Action name="simulation_compare"/>
       <Separator/>
       <Action name="file_save"/>
       <Action name="file_save_as"/>

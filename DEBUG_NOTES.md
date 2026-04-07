@@ -84,6 +84,14 @@
 - **Tactical Aggression:** Added a UI slider to control AI strategic intensity (Level 1-5).
 - **MCP Server:** Added `--mcp` flag to expose rules and sim-state via Model Context Protocol.
 
+## 2026-04-04: Phase 17 Completion (Polish & Hardening)
+- **UX/UI Polish:** Added shortcuts (`Ctrl+Shift+C`, `F5`, `Ctrl+Shift+D`), Breeze symbolic icons, and a "Typewriter Effect" for AI text insertion.
+- **Incremental RAG:** Optimized indexing using MD5 hash checks, skipping redundant re-embedding of unchanged files.
+- **LLM Resilience:** Implemented a 3x auto-retry mechanism for transient network failures in `LLMService`.
+- **Simulation Comparison:** Created a semantic JSON diffing UI (`SimulationCompareDialog`) to analyze mechanical shifts between rules versions.
+- **Onboarding Demo:** Integrated a "Bridge Ambush" sample encounter and demo character sheets into the default project template.
+
+
 ## 2026-04-04: Phase 15 & 16 Completion (Generator & MCP Bridge)
 - **AI Character Generator:** Implemented a multi-step wizard using RAG to generate rule-compliant character sheets with iterative refinement.
 - **Bi-directional MCP Expansion:** 

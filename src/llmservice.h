@@ -21,8 +21,10 @@
 
 #include <QObject>
 #include <QString>
+#include <QHash>
 #include <QList>
 #include <QPair>
+#include <QStringList>
 #include <QVector>
 #include <functional>
 
@@ -32,7 +34,9 @@ class QNetworkReply;
 enum class LLMProvider {
     OpenAI,
     Anthropic,
-    Ollama
+    Ollama,
+    Grok,
+    Gemini
 };
 
 struct LLMMessage {
@@ -110,11 +114,23 @@ public:
      */
     void pullModel(const QString &modelName, std::function<void(double progress, const QString &status)> progressCallback, std::function<void(bool success, const QString &error)> completionCallback);
 
+    /**
+     * @brief Retries the last request that was blocked due to an invalid model.
+     * Call this after the user has selected a replacement model from the picker.
+     */
+    void retryWithModel(const QString &newModel);
+
 Q_SIGNALS:
     void requestStarted();
     void responseChunk(const QString &text);
     void responseFinished(const QString &fullText);
     void errorOccurred(const QString &message);
+
+    /**
+     * @brief Emitted when the configured model is not in the provider's current model list.
+     * Connect to this to show a model selection UI, then call retryWithModel().
+     */
+    void modelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available);
 
 private:
     explicit LLMService(QObject *parent = nullptr);
@@ -131,10 +147,37 @@ private:
     void processAnthropicChunk(const QByteArray &data);
     void processOllamaChunk(const QByteArray &data);
 
+    // Resolves the model from request.model or settings (no hardcoded defaults).
+    QString resolvedModel(const LLMRequest &request) const;
+
+    // Validates the model against the session-cached provider model list,
+    // fetching it on first use. Dispatches the request if valid, otherwise
+    // emits modelNotFound() and stores the request for retryWithModel().
+    void validateModelThenDispatch(const LLMRequest &request,
+                                   std::function<void(const QString&)> nonStreamCallback = nullptr);
+
+    // Builds and POSTs the request with the already-resolved model.
+    // nonStreamCallback == nullptr → streaming path; non-null → non-streaming path.
+    void dispatchRequest(const LLMRequest &request, const QString &model,
+                         std::function<void(const QString&)> nonStreamCallback);
+
     QNetworkAccessManager *m_networkManager;
     QNetworkReply *m_activeReply = nullptr;
     QString m_fullResponse;
     LLMProvider m_activeProvider;
+    LLMRequest m_activeRequest;
+    int m_retryCount = 0;
+
+    // Session model cache — populated on first validateModelThenDispatch() per provider.
+    QHash<LLMProvider, QStringList> m_modelCache;
+
+    // Pending request held while the user selects a replacement model.
+    struct PendingRequest {
+        LLMRequest request;
+        std::function<void(const QString&)> nonStreamCallback;
+    };
+    bool m_hasPendingRequest = false;
+    PendingRequest m_pendingRequest;
 };
 
 #endif // LLMSERVICE_H

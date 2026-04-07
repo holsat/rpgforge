@@ -354,7 +354,7 @@ void OnboardingWizard::updateAiFields()
             "1. Visit <a href='https://platform.openai.com/api-keys'>OpenAI API Keys</a>.<br/>"
             "2. Sign in and click 'Create new secret key'.<br/>"
             "3. Copy and paste the key below.<br/><br/>"
-            "<i>Tip: Select a <b>vision-capable</b> model (e.g. gpt-4o) for best experience.</i>"
+            "<i>Tip: Select a vision-capable model from the list below for best experience.</i>"
         ));
     } else if (provider == LLMProvider::Anthropic) {
         m_aiInstructions->setText(i18n(
@@ -362,13 +362,13 @@ void OnboardingWizard::updateAiFields()
             "1. Visit <a href='https://console.anthropic.com/settings/keys'>Anthropic Console</a>.<br/>"
             "2. Sign in and create a new key.<br/>"
             "3. Copy and paste the key below.<br/><br/>"
-            "<i>Tip: <b>claude-3-5-sonnet</b> is vision-capable and highly recommended.</i>"
+            "<i>Tip: Select a vision-capable model from the list below for best experience.</i>"
         ));
     } else {
         m_aiInstructions->setText(i18n(
             "<b>Ollama (Local AI)</b><br/>"
             "Ollama allows you to run powerful AI models locally on your own machine.<br/><br/>"
-            "<i>Tip: For vision, install <b>llava</b>, <b>moondream</b>, or <b>llama3.2-vision</b>.</i>"
+            "<i>Tip: For image analysis, install a vision-capable model via Ollama.</i>"
         ));
         m_aiKeyEdit->setEnabled(false);
         checkOllama();
@@ -380,9 +380,8 @@ void OnboardingWizard::updateAiFields()
         m_aiModelCombo->setPlaceholderText(QString());
         m_aiModelCombo->addItems(models);
         
-        // If no models found for Ollama, suggest some good ones
-        if (models.isEmpty() && provider == LLMProvider::Ollama) {
-            m_aiModelCombo->addItems({QStringLiteral("llama3"), QStringLiteral("mistral"), QStringLiteral("llava"), QStringLiteral("moondream")});
+        if (models.isEmpty()) {
+            m_aiModelCombo->setPlaceholderText(i18n("No models found — check connection or install models"));
         }
     });
 }

@@ -40,8 +40,13 @@
 #include "chatpanel.h"
 #include "simulationpanel.h"
 #include "charactergenerator.h"
+#include "simulationcomparedialog.h"
 #include "problemspanel.h"
 #include "analyzerservice.h"
+#include "llmservice.h"
+#include <QComboBox>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include "knowledgebase.h"
 #include "metadatadialog.h"
 #include "newprojectdialog.h"
@@ -101,9 +106,8 @@ MainWindow::MainWindow(QWidget *parent)
     // Merge KTextEditor::View's GUI (Edit, View, Selection, Tools menus)
     guiFactory()->addClient(m_editorView);
 
-    if (m_diffView && m_diffView->part()) {
-        guiFactory()->addClient(m_diffView->part());
-    }
+    // Kompare part GUI is added/removed dynamically in showCentralView() so its
+    // toolbar only appears when the diff view is actually active.
 
     // Hide duplicate save actions from the merged client to avoid toolbar clutter
     if (auto *editorAction = m_editorView->action(QStringLiteral("file_save"))) editorAction->setVisible(false);
@@ -112,6 +116,9 @@ MainWindow::MainWindow(QWidget *parent)
         if (auto *editorAction = m_researchView->action(QStringLiteral("file_save"))) editorAction->setVisible(false);
         if (auto *editorAction = m_researchView->action(QStringLiteral("file_save_as"))) editorAction->setVisible(false);
     }
+
+    connect(&LLMService::instance(), &LLMService::modelNotFound,
+            this, &MainWindow::onModelNotFound);
 
     updateTitle();
     resize(1400, 900);
@@ -309,8 +316,24 @@ void MainWindow::setupSidebar()
 
     connect(m_chatPanel, &ChatPanel::insertTextAtCursor, this, [this](const QString &text) {
         if (m_document && m_editorView) {
-            m_document->insertText(m_editorView->cursorPosition(), text);
             m_editorView->setFocus();
+            
+            // Typewriter effect
+            int *index = new int(0);
+            QTimer *timer = new QTimer(this);
+            connect(timer, &QTimer::timeout, this, [this, timer, index, text]() {
+                if (*index < text.length()) {
+                    // Insert a chunk of characters for speed/smoothness balance
+                    int chunk = qMin(5, text.length() - *index);
+                    m_document->insertText(m_editorView->cursorPosition(), text.mid(*index, chunk));
+                    *index += chunk;
+                } else {
+                    timer->stop();
+                    timer->deleteLater();
+                    delete index;
+                }
+            });
+            timer->start(20); // 20ms between chunks
         }
     });
 
@@ -374,10 +397,11 @@ void MainWindow::setupSidebar()
     m_mainSplitter->addWidget(m_previewPanel);
 
     // Set initial sizes: sidebar (250px), editor (1), preview (1)
-    m_mainSplitter->setSizes({250, 600, 550});
-    m_mainSplitter->setStretchFactor(0, 0); 
+    m_mainSplitter->setSizes({250, 1150, 0});
+    m_mainSplitter->setStretchFactor(0, 0);
     m_mainSplitter->setStretchFactor(1, 1);
-    m_mainSplitter->setStretchFactor(2, 1);
+    m_mainSplitter->setStretchFactor(2, 0);
+    m_previewPanel->hide();
 
     m_problemsPanel = new ProblemsPanel(this);
 
@@ -617,7 +641,22 @@ void MainWindow::setupActions()
     charGenAct->setText(i18n("AI Character Generator..."));
     charGenAct->setIcon(QIcon::fromTheme(QStringLiteral("user-identity")));
     actionCollection()->addAction(QStringLiteral("project_character_generator"), charGenAct);
+    actionCollection()->setDefaultShortcut(charGenAct, Qt::CTRL | Qt::SHIFT | Qt::Key_C);
     connect(charGenAct, &QAction::triggered, this, &MainWindow::characterGenerator);
+
+    auto *startSimAct = new QAction(this);
+    startSimAct->setText(i18n("Start Simulation"));
+    startSimAct->setIcon(QIcon::fromTheme(QStringLiteral("media-playback-start")));
+    actionCollection()->addAction(QStringLiteral("simulation_start"), startSimAct);
+    actionCollection()->setDefaultShortcut(startSimAct, Qt::Key_F5);
+    connect(startSimAct, &QAction::triggered, this, &MainWindow::startSimulation);
+
+    auto *compareSimAct = new QAction(this);
+    compareSimAct->setText(i18n("Compare Simulation Results..."));
+    compareSimAct->setIcon(QIcon::fromTheme(QStringLiteral("insert-link")));
+    actionCollection()->addAction(QStringLiteral("simulation_compare"), compareSimAct);
+    actionCollection()->setDefaultShortcut(compareSimAct, Qt::CTRL | Qt::SHIFT | Qt::Key_D);
+    connect(compareSimAct, &QAction::triggered, this, &MainWindow::compareSimulations);
 
     auto *projectSettingsAct = new QAction(this);
     projectSettingsAct->setText(i18n("Project Settings..."));
@@ -631,26 +670,30 @@ void MainWindow::setupActions()
 
     auto *expandAct = new QAction(this);
     expandAct->setText(i18n("AI: Expand Selection"));
-    expandAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    expandAct->setIcon(QIcon::fromTheme(QStringLiteral("list-add")));
     actionCollection()->addAction(QStringLiteral("ai_expand"), expandAct);
+    actionCollection()->setDefaultShortcut(expandAct, Qt::CTRL | Qt::ALT | Qt::Key_E);
     connect(expandAct, &QAction::triggered, this, &MainWindow::aiExpand);
 
     auto *rewriteAct = new QAction(this);
     rewriteAct->setText(i18n("AI: Rewrite Selection"));
-    rewriteAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    rewriteAct->setIcon(QIcon::fromTheme(QStringLiteral("edit-copy")));
     actionCollection()->addAction(QStringLiteral("ai_rewrite"), rewriteAct);
+    actionCollection()->setDefaultShortcut(rewriteAct, Qt::CTRL | Qt::ALT | Qt::Key_R);
     connect(rewriteAct, &QAction::triggered, this, &MainWindow::aiRewrite);
 
     auto *summarizeAct = new QAction(this);
     summarizeAct->setText(i18n("AI: Summarize Selection"));
-    summarizeAct->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    summarizeAct->setIcon(QIcon::fromTheme(QStringLiteral("view-list-details")));
     actionCollection()->addAction(QStringLiteral("ai_summarize"), summarizeAct);
+    actionCollection()->setDefaultShortcut(summarizeAct, Qt::CTRL | Qt::ALT | Qt::Key_S);
     connect(summarizeAct, &QAction::triggered, this, &MainWindow::aiSummarize);
 
     auto *compileAct = new QAction(this);
     compileAct->setText(i18n("Compile to PDF..."));
     compileAct->setIcon(QIcon::fromTheme(QStringLiteral("document-export-pdf")));
     actionCollection()->addAction(QStringLiteral("compile_project"), compileAct);
+    actionCollection()->setDefaultShortcut(compileAct, Qt::CTRL | Qt::SHIFT | Qt::Key_P);
     connect(compileAct, &QAction::triggered, this, &MainWindow::compileToPdf);
 
     KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
@@ -659,7 +702,7 @@ void MainWindow::setupActions()
     m_togglePreviewAction->setText(i18n("Show Preview"));
     m_togglePreviewAction->setIcon(QIcon::fromTheme(QStringLiteral("view-split-left-right")));
     m_togglePreviewAction->setCheckable(true);
-    m_togglePreviewAction->setChecked(true);
+    m_togglePreviewAction->setChecked(false);
     actionCollection()->addAction(QStringLiteral("toggle_preview"), m_togglePreviewAction);
     actionCollection()->setDefaultShortcut(m_togglePreviewAction, Qt::CTRL | Qt::Key_P);
     connect(m_togglePreviewAction, &QAction::triggered, this, &MainWindow::togglePreview);
@@ -815,6 +858,7 @@ void MainWindow::saveFile()
     } else {
         doc->save();
     }
+    ProjectManager::instance().saveProject();
 }
 
 void MainWindow::saveFileAs()
@@ -1138,6 +1182,19 @@ void MainWindow::showCentralView(QWidget *widget)
     m_imagePreview->setVisible(widget == m_imagePreview);
     m_diffView->setVisible(widget == m_diffView);
     m_pdfViewer->setVisible(widget == m_pdfViewer);
+
+    // Add the Kompare part's toolbar only while the diff view is visible,
+    // so its actions never pollute the primary toolbar.
+    if (m_diffView && m_diffView->part()) {
+        const bool showingDiff = (widget == m_diffView);
+        if (showingDiff && !m_diffClientAdded) {
+            guiFactory()->addClient(m_diffView->part());
+            m_diffClientAdded = true;
+        } else if (!showingDiff && m_diffClientAdded) {
+            guiFactory()->removeClient(m_diffView->part());
+            m_diffClientAdded = false;
+        }
+    }
 }
 
 void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2)
@@ -1361,6 +1418,14 @@ void MainWindow::saveSession()
         settings.setValue(QStringLiteral("editorSplitter"), m_editorSplitter->saveState());
     }
 
+    if (m_mainSplitter) {
+        settings.setValue(QStringLiteral("mainSplitter"), m_mainSplitter->saveState());
+    }
+
+    if (m_vSplitter) {
+        settings.setValue(QStringLiteral("vSplitter"), m_vSplitter->saveState());
+    }
+
     // Save which sidebar panel is active
     if (m_sidebar) {
         settings.setValue(QStringLiteral("sidebarPanel"), m_sidebar->currentPanel());
@@ -1425,6 +1490,14 @@ void MainWindow::restoreSession()
 
     if (m_editorSplitter && settings.contains(QStringLiteral("editorSplitter"))) {
         m_editorSplitter->restoreState(settings.value(QStringLiteral("editorSplitter")).toByteArray());
+    }
+
+    if (m_mainSplitter && settings.contains(QStringLiteral("mainSplitter"))) {
+        m_mainSplitter->restoreState(settings.value(QStringLiteral("mainSplitter")).toByteArray());
+    }
+
+    if (m_vSplitter && settings.contains(QStringLiteral("vSplitter"))) {
+        m_vSplitter->restoreState(settings.value(QStringLiteral("vSplitter")).toByteArray());
     }
 
     // Restore active sidebar panel
@@ -1812,6 +1885,73 @@ void MainWindow::characterGenerator()
     CharacterGenerator gen(this);
     gen.exec();
 }
+
+void MainWindow::startSimulation()
+{
+    if (m_simulationPanel) {
+        m_sidebar->showPanel(m_simulationId);
+        m_simulationPanel->startSimulation();
+    }
+}
+
+void MainWindow::compareSimulations()
+{
+    QString projectPath = ProjectManager::instance().projectPath();
+    if (projectPath.isEmpty()) return;
+
+    QString simDir = QDir(projectPath).absoluteFilePath(QStringLiteral("simulations"));
+    
+    QString pathA = QFileDialog::getOpenFileName(this, i18n("Select First Result"), simDir, i18n("JSON Files (*.json)"));
+    if (pathA.isEmpty()) return;
+
+    QString pathB = QFileDialog::getOpenFileName(this, i18n("Select Second Result"), simDir, i18n("JSON Files (*.json)"));
+    if (pathB.isEmpty()) return;
+
+    QFile fileA(pathA);
+    QFile fileB(pathB);
+
+    if (fileA.open(QIODevice::ReadOnly) && fileB.open(QIODevice::ReadOnly)) {
+        QJsonObject objA = QJsonDocument::fromJson(fileA.readAll()).object();
+        QJsonObject objB = QJsonDocument::fromJson(fileB.readAll()).object();
+        
+        SimulationCompareDialog dialog(objA, objB, this);
+        dialog.exec();
+    }
+}
+
+void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available)
+{
+    auto *dlg = new QDialog(this);
+    dlg->setWindowTitle(i18n("Model Unavailable"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+    auto *layout = new QVBoxLayout(dlg);
+    auto *label = new QLabel(i18n(
+        "The model <b>%1</b> is no longer available from this provider.<br/>"
+        "Select a replacement model to use instead:", invalidModel), dlg);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+
+    auto *combo = new QComboBox(dlg);
+    combo->addItems(available);
+    layout->addWidget(combo);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+
+    connect(dlg, &QDialog::accepted, this, [combo]() {
+        const QString selected = combo->currentText();
+        if (!selected.isEmpty())
+            LLMService::instance().retryWithModel(selected);
+    });
+
+    dlg->open();
+    Q_UNUSED(provider)
+}
+
+
 
 
 

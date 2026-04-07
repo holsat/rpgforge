@@ -71,6 +71,8 @@ void LLMService::setApiKey(LLMProvider provider, const QString &key)
     switch (provider) {
         case LLMProvider::OpenAI: walletKey = QStringLiteral("OpenAI_Key"); break;
         case LLMProvider::Anthropic: walletKey = QStringLiteral("Anthropic_Key"); break;
+        case LLMProvider::Grok: walletKey = QStringLiteral("Grok_Key"); break;
+        case LLMProvider::Gemini: walletKey = QStringLiteral("Gemini_Key"); break;
         case LLMProvider::Ollama: return; // No key for Ollama usually
     }
 
@@ -95,6 +97,8 @@ QString LLMService::apiKey(LLMProvider provider) const
     switch (provider) {
         case LLMProvider::OpenAI: walletKey = QStringLiteral("OpenAI_Key"); break;
         case LLMProvider::Anthropic: walletKey = QStringLiteral("Anthropic_Key"); break;
+        case LLMProvider::Grok: walletKey = QStringLiteral("Grok_Key"); break;
+        case LLMProvider::Gemini: walletKey = QStringLiteral("Gemini_Key"); break;
         case LLMProvider::Ollama: delete wallet; return QString();
     }
 
@@ -133,23 +137,134 @@ static QUrl normalizeOllamaUrl(const QString &rawEndpoint, const QString &target
     return QUrl(endpoint);
 }
 
+// ---------------------------------------------------------------------------
+// Helper: map provider → settings key prefix
+// ---------------------------------------------------------------------------
+static QString providerSettingsKey(LLMProvider p)
+{
+    switch (p) {
+        case LLMProvider::OpenAI:    return QStringLiteral("llm/openai");
+        case LLMProvider::Anthropic: return QStringLiteral("llm/anthropic");
+        case LLMProvider::Grok:      return QStringLiteral("llm/grok");
+        case LLMProvider::Gemini:    return QStringLiteral("llm/gemini");
+        case LLMProvider::Ollama:    return QStringLiteral("llm/ollama");
+    }
+    return QStringLiteral("llm/openai");
+}
+
+// ---------------------------------------------------------------------------
+// Resolve the model: prefer request.model, else read settings (no fallback).
+// ---------------------------------------------------------------------------
+QString LLMService::resolvedModel(const LLMRequest &request) const
+{
+    if (!request.model.isEmpty()) return request.model;
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    return settings.value(providerSettingsKey(request.provider) + QStringLiteral("/model")).toString();
+}
+
+// ---------------------------------------------------------------------------
+// Thin public entry points — both delegate to validateModelThenDispatch.
+// ---------------------------------------------------------------------------
 void LLMService::sendRequest(const LLMRequest &request)
 {
-    if (m_activeReply) {
-        cancelRequest();
+    validateModelThenDispatch(request, nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Validate model against the session cache, fetching the list if needed.
+// Dispatches immediately if valid; emits modelNotFound() and stores a pending
+// request if the model is absent from the provider's current model list.
+// ---------------------------------------------------------------------------
+void LLMService::validateModelThenDispatch(const LLMRequest &request,
+                                           std::function<void(const QString&)> nonStreamCallback)
+{
+    const QString model = resolvedModel(request);
+    if (model.isEmpty()) {
+        if (nonStreamCallback) {
+            qWarning() << "LLM: no model configured — aborting request";
+            nonStreamCallback(QString());
+        } else {
+            handleError(i18n("No model configured. Open Settings and enter a model name for this provider."));
+        }
+        return;
     }
 
-    m_activeProvider = request.provider;
-    m_fullResponse.clear();
+    const LLMProvider provider = request.provider;
+
+    // Use cached list if available.
+    if (m_modelCache.contains(provider)) {
+        const QStringList &cached = m_modelCache[provider];
+        if (cached.isEmpty() || cached.contains(model)) {
+            // Empty cache = fetch failed previously; give the request a chance.
+            dispatchRequest(request, model, nonStreamCallback);
+        } else {
+            m_hasPendingRequest = true;
+            m_pendingRequest = {request, nonStreamCallback};
+            Q_EMIT modelNotFound(provider, model, cached);
+        }
+        return;
+    }
+
+    // First use for this provider this session — fetch the model list.
+    fetchModels(provider, [this, request, model, nonStreamCallback](const QStringList &available) {
+        m_modelCache[request.provider] = available; // cache even if empty
+
+        if (available.isEmpty() || available.contains(model)) {
+            dispatchRequest(request, model, nonStreamCallback);
+        } else {
+            m_hasPendingRequest = true;
+            m_pendingRequest = {request, nonStreamCallback};
+            Q_EMIT modelNotFound(request.provider, model, available);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Retry the pending request with a user-selected replacement model.
+// Also persists the new model to settings so subsequent requests use it.
+// ---------------------------------------------------------------------------
+void LLMService::retryWithModel(const QString &newModel)
+{
+    if (!m_hasPendingRequest) return;
+    PendingRequest pending = m_pendingRequest;
+    m_hasPendingRequest = false;
+
+    // Update cache so this model is considered valid going forward.
+    if (!m_modelCache[pending.request.provider].contains(newModel))
+        m_modelCache[pending.request.provider].append(newModel);
+
+    // Persist to settings — this becomes the new source of truth.
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    settings.setValue(providerSettingsKey(pending.request.provider) + QStringLiteral("/model"), newModel);
+
+    LLMRequest updated = pending.request;
+    updated.model = newModel;
+    dispatchRequest(updated, newModel, pending.nonStreamCallback);
+}
+
+// ---------------------------------------------------------------------------
+// Build and POST the request. nonStreamCallback==nullptr → streaming path.
+// ---------------------------------------------------------------------------
+void LLMService::dispatchRequest(const LLMRequest &request, const QString &model,
+                                  std::function<void(const QString&)> nonStreamCallback)
+{
+    const bool streaming = (nonStreamCallback == nullptr);
+
+    if (streaming) {
+        if (m_activeReply) cancelRequest();
+        m_activeRequest = request;
+        m_activeRequest.model = model;
+        m_activeProvider = request.provider;
+        m_retryCount = 0;
+        m_fullResponse.clear();
+    }
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     QUrl url;
     QNetworkRequest netRequest;
     QJsonObject body;
+    const QString key = apiKey(request.provider);
 
-    QString key = apiKey(request.provider);
-
-    // Common Body Prep
     QJsonArray messagesArray;
     for (const auto &msg : request.messages) {
         QJsonObject m;
@@ -158,34 +273,39 @@ void LLMService::sendRequest(const LLMRequest &request)
         messagesArray.append(m);
     }
 
-    if (request.provider == LLMProvider::OpenAI) {
-        QString endpoint = settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString();
-        url = QUrl(endpoint);
+    if (request.provider == LLMProvider::OpenAI
+        || request.provider == LLMProvider::Grok
+        || request.provider == LLMProvider::Gemini) {
+        const QString sk = providerSettingsKey(request.provider);
+        const QString defaultEndpoint =
+            (request.provider == LLMProvider::Grok)
+                ? QStringLiteral("https://api.x.ai/v1/chat/completions")
+            : (request.provider == LLMProvider::Gemini)
+                ? QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            : QStringLiteral("https://api.openai.com/v1/chat/completions");
+
+        url = QUrl(settings.value(sk + QStringLiteral("/endpoint"), defaultEndpoint).toString());
         netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
-        
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString() : request.model;
+        body[QStringLiteral("model")] = model;
         body[QStringLiteral("messages")] = messagesArray;
-        body[QStringLiteral("stream")] = request.stream;
+        body[QStringLiteral("stream")] = streaming;
         body[QStringLiteral("temperature")] = request.temperature;
         body[QStringLiteral("max_tokens")] = request.maxTokens;
-    } 
+    }
     else if (request.provider == LLMProvider::Anthropic) {
-        QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString().trimmed();
+        QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"),
+            QStringLiteral("https://api.anthropic.com/v1/messages")).toString().trimmed();
         if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
         url = QUrl(endpoint);
-        
+
         netRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
         netRequest.setRawHeader("x-api-key", key.toUtf8());
         netRequest.setRawHeader("anthropic-version", "2023-06-01");
         netRequest.setRawHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-        if (request.stream) {
-            netRequest.setRawHeader("Accept", "text/event-stream");
-        }
-        
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20241022")).toString() : request.model;
-        
-        // Anthropic: system message must be a single top-level string
+        if (streaming) netRequest.setRawHeader("Accept", "text/event-stream");
+
+        body[QStringLiteral("model")] = model;
         QStringList systemParts;
         QJsonArray anthropicMessages;
         for (const auto &msg : request.messages) {
@@ -199,28 +319,22 @@ void LLMService::sendRequest(const LLMRequest &request)
                 anthropicMessages.append(m);
             }
         }
-
-        if (!systemParts.isEmpty()) {
+        if (!systemParts.isEmpty())
             body[QStringLiteral("system")] = systemParts.join(QStringLiteral("\n\n"));
-        }
-
-        // Anthropic requires the first message to be "user"
-        if (anthropicMessages.isEmpty()) {
-             anthropicMessages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QStringLiteral("Hello")}});
-        }
-        
+        if (anthropicMessages.isEmpty())
+            anthropicMessages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QStringLiteral("Hello")}});
         body[QStringLiteral("messages")] = anthropicMessages;
-        body[QStringLiteral("stream")] = request.stream;
+        body[QStringLiteral("stream")] = streaming;
         body[QStringLiteral("max_tokens")] = request.maxTokens > 0 ? request.maxTokens : 4096;
         body[QStringLiteral("temperature")] = request.temperature;
     }
     else if (request.provider == LLMProvider::Ollama) {
-        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
+        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"),
+            QStringLiteral("http://localhost:11434")).toString();
         url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/chat"));
-        
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString() : request.model;
+        body[QStringLiteral("model")] = model;
         body[QStringLiteral("messages")] = messagesArray;
-        body[QStringLiteral("stream")] = request.stream;
+        body[QStringLiteral("stream")] = streaming;
         QJsonObject options;
         options[QStringLiteral("temperature")] = request.temperature;
         body[QStringLiteral("options")] = options;
@@ -228,15 +342,42 @@ void LLMService::sendRequest(const LLMRequest &request)
 
     netRequest.setUrl(url);
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-
     logRequest(url, body, netRequest);
 
-    m_activeReply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    
-    Q_EMIT requestStarted();
+    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
 
-    connect(m_activeReply, &QNetworkReply::readyRead, this, &LLMService::handleReadyRead);
-    connect(m_activeReply, &QNetworkReply::finished, this, &LLMService::handleFinished);
+    if (streaming) {
+        m_activeReply = reply;
+        Q_EMIT requestStarted();
+        connect(reply, &QNetworkReply::readyRead, this, &LLMService::handleReadyRead);
+        connect(reply, &QNetworkReply::finished, this, &LLMService::handleFinished);
+    } else {
+        connect(reply, &QNetworkReply::finished, this, [reply, nonStreamCallback, provider = request.provider]() {
+            QString result;
+            if (reply->error() == QNetworkReply::NoError) {
+                QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+                if (!doc.isNull() && doc.isObject()) {
+                    if (provider == LLMProvider::OpenAI
+                        || provider == LLMProvider::Grok
+                        || provider == LLMProvider::Gemini) {
+                        QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
+                        if (!choices.isEmpty())
+                            result = choices.at(0).toObject().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
+                    } else if (provider == LLMProvider::Anthropic) {
+                        QJsonArray content = doc.object().value(QStringLiteral("content")).toArray();
+                        if (!content.isEmpty())
+                            result = content.at(0).toObject().value(QStringLiteral("text")).toString();
+                    } else if (provider == LLMProvider::Ollama) {
+                        result = doc.object().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
+                    }
+                }
+            } else {
+                qWarning() << "LLM Non-Streaming Error:" << reply->errorString() << reply->readAll();
+            }
+            if (nonStreamCallback) nonStreamCallback(result);
+            reply->deleteLater();
+        });
+    }
 }
 
 void LLMService::cancelRequest()
@@ -255,7 +396,9 @@ void LLMService::handleReadyRead()
     QByteArray data = m_activeReply->readAll();
     
     switch (m_activeProvider) {
-        case LLMProvider::OpenAI: processOpenAIChunk(data); break;
+        case LLMProvider::OpenAI:
+        case LLMProvider::Grok:
+        case LLMProvider::Gemini: processOpenAIChunk(data); break;
         case LLMProvider::Anthropic: processAnthropicChunk(data); break;
         case LLMProvider::Ollama: processOllamaChunk(data); break;
     }
@@ -266,6 +409,15 @@ void LLMService::handleFinished()
     if (!m_activeReply) return;
 
     if (m_activeReply->error() != QNetworkReply::NoError && m_activeReply->error() != QNetworkReply::OperationCanceledError) {
+        if (m_retryCount < 3) {
+            m_retryCount++;
+            qWarning() << "LLM Request failed, retrying" << m_retryCount << "..." << m_activeReply->errorString();
+            m_activeReply->deleteLater();
+            m_activeReply = nullptr;
+            sendRequest(m_activeRequest);
+            return;
+        }
+
         QString errorMsg = m_activeReply->errorString();
         QByteArray serverResponse = m_activeReply->readAll();
         if (!serverResponse.isEmpty()) {
@@ -361,14 +513,30 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
     QString key = apiKey(provider);
 
     if (provider == LLMProvider::OpenAI) {
+        const QString embModel = model.isEmpty()
+            ? settings.value(QStringLiteral("llm/embedding_model")).toString()
+            : model;
+        if (embModel.isEmpty()) {
+            qWarning() << "LLM: no embedding model configured. Set one in Settings → Embedding Model.";
+            if (callback) callback(QVector<float>());
+            return;
+        }
         url = QUrl(QStringLiteral("https://api.openai.com/v1/embeddings"));
         netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
-        body[QStringLiteral("model")] = model.isEmpty() ? QStringLiteral("text-embedding-3-small") : model;
+        body[QStringLiteral("model")] = embModel;
         body[QStringLiteral("input")] = text;
     } else if (provider == LLMProvider::Ollama) {
+        const QString embModel = model.isEmpty()
+            ? settings.value(QStringLiteral("llm/embedding_model")).toString()
+            : model;
+        if (embModel.isEmpty()) {
+            qWarning() << "LLM: no embedding model configured. Set one in Settings → Embedding Model.";
+            if (callback) callback(QVector<float>());
+            return;
+        }
         QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
         url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/embeddings"));
-        body[QStringLiteral("model")] = model.isEmpty() ? QStringLiteral("nomic-embed-text") : model;
+        body[QStringLiteral("model")] = embModel;
         body[QStringLiteral("prompt")] = text;
     } else {
         // Anthropic doesn't have an embedding API currently
@@ -411,136 +579,32 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
 
 void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback)
 {
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    QUrl url;
-    QNetworkRequest netRequest;
-    QJsonObject body;
-
-    QString key = apiKey(request.provider);
-
-    QJsonArray messagesArray;
-    for (const auto &msg : request.messages) {
-        QJsonObject m;
-        m[QStringLiteral("role")] = msg.role;
-        m[QStringLiteral("content")] = msg.content;
-        messagesArray.append(m);
-    }
-
-    if (request.provider == LLMProvider::OpenAI) {
-        QString endpoint = settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString();
-        url = QUrl(endpoint);
-        netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
-        
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString() : request.model;
-        body[QStringLiteral("messages")] = messagesArray;
-        body[QStringLiteral("stream")] = false;
-        body[QStringLiteral("temperature")] = request.temperature;
-        body[QStringLiteral("max_tokens")] = request.maxTokens;
-    } 
-    else if (request.provider == LLMProvider::Anthropic) {
-        QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString().trimmed();
-        if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
-        url = QUrl(endpoint);
-        
-        netRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
-        netRequest.setRawHeader("x-api-key", key.toUtf8());
-        netRequest.setRawHeader("anthropic-version", "2023-06-01");
-        netRequest.setRawHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-        
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-3-5-sonnet-20241022")).toString() : request.model;
-        
-        // Anthropic: system message must be a single top-level string
-        QStringList systemParts;
-        QJsonArray anthropicMessages;
-        for (const auto &msg : request.messages) {
-            if (msg.role == QLatin1String("system")) {
-                QString content = msg.content.trimmed();
-                if (!content.isEmpty()) systemParts << content;
-            } else {
-                QJsonObject m;
-                m[QStringLiteral("role")] = msg.role;
-                m[QStringLiteral("content")] = msg.content;
-                anthropicMessages.append(m);
-            }
-        }
-
-        if (!systemParts.isEmpty()) {
-            body[QStringLiteral("system")] = systemParts.join(QStringLiteral("\n\n"));
-        }
-
-        // Anthropic requires the first message to be "user"
-        if (anthropicMessages.isEmpty()) {
-             anthropicMessages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QStringLiteral("Hello")}});
-        }
-        
-        body[QStringLiteral("messages")] = anthropicMessages;
-        body[QStringLiteral("stream")] = false;
-        body[QStringLiteral("max_tokens")] = request.maxTokens > 0 ? request.maxTokens : 4096;
-        body[QStringLiteral("temperature")] = request.temperature;
-    }
-    else if (request.provider == LLMProvider::Ollama) {
-        QString endpoint = settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434")).toString();
-        url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/chat"));
-        
-        body[QStringLiteral("model")] = request.model.isEmpty() ? settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString() : request.model;
-        body[QStringLiteral("messages")] = messagesArray;
-        body[QStringLiteral("stream")] = false;
-        QJsonObject options;
-        options[QStringLiteral("temperature")] = request.temperature;
-        body[QStringLiteral("options")] = options;
-    }
-
-    netRequest.setUrl(url);
-    netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-
-    logRequest(url, body, netRequest);
-
-    QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [reply, callback, provider = request.provider]() {
-        QString result;
-        if (reply->error() == QNetworkReply::NoError) {
-            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-            if (!doc.isNull() && doc.isObject()) {
-                if (provider == LLMProvider::OpenAI) {
-                    QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
-                    if (!choices.isEmpty()) {
-                        result = choices.at(0).toObject().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
-                    }
-                } else if (provider == LLMProvider::Anthropic) {
-                    QJsonArray contentArray = doc.object().value(QStringLiteral("content")).toArray();
-                    if (!contentArray.isEmpty()) {
-                        result = contentArray.at(0).toObject().value(QStringLiteral("text")).toString();
-                    }
-                } else if (provider == LLMProvider::Ollama) {
-                    result = doc.object().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
-                }
-            }
-        } else {
-            qWarning() << "LLM Non-Streaming Error:" << reply->errorString() << reply->readAll();
-        }
-        if (callback) {
-            callback(result);
-        }
-        reply->deleteLater();
-    });
+    validateModelThenDispatch(request, callback);
 }
 
 void LLMService::pingAnthropic(std::function<void(bool, const QString&)> callback)
 {
-    LLMRequest req;
-    req.provider = LLMProvider::Anthropic;
-    req.model = QStringLiteral("claude-haiku-4-5"); // Smallest/cheapest for ping
-    req.maxTokens = 1;
-    req.messages.append({QStringLiteral("user"), QStringLiteral("ping")});
-    req.stream = false;
-
-    sendNonStreamingRequest(req, [callback](const QString &result) {
-        if (!result.isEmpty()) {
-            callback(true, QString());
-        } else {
-            callback(false, i18n("API test failed. Check your key and logs."));
+    // Fetch the live model list first — if that succeeds the API key is valid,
+    // and we use the first available model for a 1-token ping (no hardcoded names).
+    fetchModels(LLMProvider::Anthropic, [this, callback](const QStringList &models) {
+        if (models.isEmpty()) {
+            callback(false, i18n("API test failed — could not retrieve model list. Check your API key."));
+            return;
         }
+        LLMRequest req;
+        req.provider = LLMProvider::Anthropic;
+        req.model = models.first(); // guaranteed valid — just fetched
+        req.maxTokens = 1;
+        req.stream = false;
+        req.messages.append({QStringLiteral("user"), QStringLiteral("ping")});
+
+        // Bypass the cache-validation step — we already know the model is live.
+        dispatchRequest(req, req.model, [callback](const QString &result) {
+            if (!result.isEmpty())
+                callback(true, QString());
+            else
+                callback(false, i18n("API test failed. Check your key and logs."));
+        });
     });
 }
 
@@ -551,14 +615,20 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
     QNetworkRequest netRequest;
     QString key = apiKey(provider);
 
-    if (provider == LLMProvider::OpenAI) {
-        QString endpoint = settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString().trimmed();
-        // Models endpoint is usually /v1/models
+    if (provider == LLMProvider::OpenAI
+        || provider == LLMProvider::Grok
+        || provider == LLMProvider::Gemini) {
+        QString settingsKey = (provider == LLMProvider::Grok) ? QStringLiteral("llm/grok")
+                            : (provider == LLMProvider::Gemini) ? QStringLiteral("llm/gemini")
+                            : QStringLiteral("llm/openai");
+        QString fallback = (provider == LLMProvider::Grok) ? QStringLiteral("https://api.x.ai/v1/chat/completions")
+                         : (provider == LLMProvider::Gemini) ? QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+                         : QStringLiteral("https://api.openai.com/v1/chat/completions");
+        QString endpoint = settings.value(settingsKey + QStringLiteral("/endpoint"), fallback).toString().trimmed();
         if (endpoint.endsWith(QStringLiteral("/chat/completions"))) {
             endpoint.replace(QStringLiteral("/chat/completions"), QStringLiteral("/models"));
         } else if (!endpoint.contains(QStringLiteral("/models"))) {
-            // best effort fallback
-            endpoint = QStringLiteral("https://api.openai.com/v1/models");
+            endpoint = fallback.replace(QStringLiteral("/chat/completions"), QStringLiteral("/models"));
         }
         url = QUrl(endpoint);
         netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
@@ -590,7 +660,8 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
         if (reply->error() == QNetworkReply::NoError) {
             QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
             if (!doc.isNull() && doc.isObject()) {
-                if (provider == LLMProvider::OpenAI || provider == LLMProvider::Anthropic) {
+                if (provider == LLMProvider::OpenAI || provider == LLMProvider::Anthropic
+                    || provider == LLMProvider::Grok || provider == LLMProvider::Gemini) {
                     QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
                     for (const QJsonValue &v : data) {
                         QString id = v.toObject().value(QStringLiteral("id")).toString();

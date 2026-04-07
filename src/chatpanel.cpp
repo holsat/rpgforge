@@ -298,25 +298,35 @@ void ChatPanel::updateModelList()
         if (!models.isEmpty()) {
             m_modelCombo->addItems(models);
             
-            // Try to select the default from settings
-            QString defaultModel;
-            if (provider == LLMProvider::OpenAI) defaultModel = settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString();
-            else if (provider == LLMProvider::Anthropic) defaultModel = settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString();
-            else defaultModel = settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString();
+            // Try to select the configured model from settings
+            QString settingsKey;
+            if (provider == LLMProvider::OpenAI) settingsKey = QStringLiteral("llm/openai/model");
+            else if (provider == LLMProvider::Anthropic) settingsKey = QStringLiteral("llm/anthropic/model");
+            else if (provider == LLMProvider::Grok) settingsKey = QStringLiteral("llm/grok/model");
+            else if (provider == LLMProvider::Gemini) settingsKey = QStringLiteral("llm/gemini/model");
+            else settingsKey = QStringLiteral("llm/ollama/model");
 
-            int idx = m_modelCombo->findText(defaultModel);
+            const QString configuredModel = settings.value(settingsKey).toString();
+            int idx = m_modelCombo->findText(configuredModel);
             if (idx != -1) m_modelCombo->setCurrentIndex(idx);
         } else {
-            // Fallback to hardcoded defaults if fetch failed
+            // Fetch failed — show configured model if set, otherwise leave empty
+            // (suggestions would be hardcoded model names which we must not inject into the request path)
             if (provider == LLMProvider::OpenAI) {
-                m_modelCombo->addItem(settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString());
-                m_modelCombo->addItems({QStringLiteral("gpt-4o-mini"), QStringLiteral("gpt-4-turbo"), QStringLiteral("gpt-3.5-turbo")});
+                const QString m = settings.value(QStringLiteral("llm/openai/model")).toString();
+                if (!m.isEmpty()) m_modelCombo->addItem(m);
             } else if (provider == LLMProvider::Anthropic) {
-                m_modelCombo->addItem(settings.value(QStringLiteral("llm/anthropic/model"), QStringLiteral("claude-sonnet-4-6")).toString());
-                m_modelCombo->addItems({QStringLiteral("claude-sonnet-4-5"), QStringLiteral("claude-opus-4-6"), QStringLiteral("claude-haiku-4-5")});
+                const QString m = settings.value(QStringLiteral("llm/anthropic/model")).toString();
+                if (!m.isEmpty()) m_modelCombo->addItem(m);
+            } else if (provider == LLMProvider::Grok) {
+                const QString m = settings.value(QStringLiteral("llm/grok/model")).toString();
+                if (!m.isEmpty()) m_modelCombo->addItem(m);
+            } else if (provider == LLMProvider::Gemini) {
+                const QString m = settings.value(QStringLiteral("llm/gemini/model")).toString();
+                if (!m.isEmpty()) m_modelCombo->addItem(m);
             } else { // Ollama
-                m_modelCombo->addItem(settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString());
-                m_modelCombo->addItems({QStringLiteral("qwen3.5"), QStringLiteral("mistral"), QStringLiteral("phi3")});
+                const QString m = settings.value(QStringLiteral("llm/ollama/model")).toString();
+                if (!m.isEmpty()) m_modelCombo->addItem(m);
             }
         }
     });

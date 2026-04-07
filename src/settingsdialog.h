@@ -61,6 +61,12 @@ private:
     QLineEdit *m_anthropicEndpointEdit;
     QLineEdit *m_ollamaModelEdit;
     QLineEdit *m_ollamaEndpointEdit;
+    QLineEdit *m_grokKeyEdit;
+    QLineEdit *m_grokModelEdit;
+    QLineEdit *m_grokEndpointEdit;
+    QLineEdit *m_geminiKeyEdit;
+    QLineEdit *m_geminiModelEdit;
+    QLineEdit *m_geminiEndpointEdit;
     QLineEdit *m_embeddingModelEdit;
 
     // Prompts
