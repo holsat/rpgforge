@@ -64,7 +64,7 @@ void SettingsDialog::setupUi()
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);
 
-    resize(500, 600);
+    setMinimumSize(450, 550);
 }
 
 QWidget* SettingsDialog::createLLMTab()

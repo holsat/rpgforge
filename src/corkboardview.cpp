@@ -23,6 +23,7 @@
 #include "variablemanager.h"
 
 #include <QGridLayout>
+#include <QPalette>
 #include <QWidget>
 #include <QFile>
 #include <QDir>
@@ -42,7 +43,8 @@ CorkboardView::CorkboardView(QWidget *parent)
 
     m_dropIndicator = new QWidget(m_contentWidget);
     m_dropIndicator->setFixedWidth(4);
-    m_dropIndicator->setStyleSheet(QStringLiteral("background-color: #2196F3;"));
+    m_dropIndicator->setStyleSheet(
+        QStringLiteral("background-color: %1;").arg(palette().color(QPalette::Highlight).name()));
     m_dropIndicator->hide();
 }
 

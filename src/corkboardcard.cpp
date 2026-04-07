@@ -27,6 +27,7 @@
 #include <QDrag>
 #include <QMimeData>
 #include <QApplication>
+#include <QPalette>
 #include <QFile>
 #include <QDir>
 
@@ -54,11 +55,24 @@ CorkboardCard::CorkboardCard(ProjectTreeItem *item, QWidget *parent)
     setFixedSize(200, 150);
     setFrameShape(QFrame::StyledPanel);
     setFrameShadow(QFrame::Raised);
+    // Use palette roles so the card adapts to dark/light KDE themes.
+    // The warm tint is derived from the active highlight colour to stay on-theme
+    // rather than forcing a hard-coded yellow that clashes on dark palettes.
+    const QPalette &pal = palette();
+    const QColor base = pal.color(QPalette::Base);
+    const QColor highlight = pal.color(QPalette::Highlight);
+    // Blend base with a touch of highlight for a subtle warm tint
+    const QColor cardBg(
+        (base.red()   * 3 + highlight.red())   / 4,
+        (base.green() * 3 + highlight.green()) / 4,
+        (base.blue()  * 3 + highlight.blue())  / 4
+    );
+    const QColor borderColor = pal.color(QPalette::Mid);
+    const QColor hoverBorder = highlight;
     setStyleSheet(QStringLiteral(
-        "CorkboardCard { background-color: #fff9c4; border: 1px solid #fbc02d; border-radius: 4px; }"
-        "CorkboardCard:hover { border: 2px solid #f9a825; }"
-        "QLabel { color: #000000; }"
-    ));
+        "CorkboardCard { background-color: %1; border: 1px solid %2; border-radius: 4px; }"
+        "CorkboardCard:hover { border: 2px solid %3; }"
+    ).arg(cardBg.name(), borderColor.name(), hoverBorder.name()));
     
     setupUi();
 }

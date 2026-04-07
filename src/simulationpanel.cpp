@@ -77,6 +77,7 @@ void SimulationPanel::setupUi()
 
     auto *saveBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("document-save")), QString(), this);
     saveBtn->setToolTip(i18n("Save current world state to JSON"));
+    saveBtn->setAccessibleName(i18n("Save world state"));
     connect(saveBtn, &QPushButton::clicked, this, &SimulationPanel::onSaveResult);
     toolbar->addWidget(saveBtn);
 
@@ -119,6 +120,7 @@ void SimulationPanel::setupUi()
     
     auto *loadScenarioBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("document-open")), QString(), this);
     loadScenarioBtn->setToolTip(i18n("Select scenario file"));
+    loadScenarioBtn->setAccessibleName(i18n("Load scenario file"));
     connect(loadScenarioBtn, &QPushButton::clicked, this, &SimulationPanel::onLoadScenario);
     scenarioLayout->addWidget(loadScenarioBtn);
     

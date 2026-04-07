@@ -74,7 +74,7 @@ void CharacterGenerator::setupUi()
 
     mainLayout->addLayout(btnLayout);
 
-    resize(600, 500);
+    setMinimumSize(550, 450);
 }
 
 QWidget* CharacterGenerator::createConceptStep()

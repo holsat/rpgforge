@@ -25,6 +25,7 @@
 #include "scrivenerimporter.h"
 
 #include <KLocalizedString>
+#include <KColorScheme>
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLineEdit>
@@ -58,7 +59,7 @@ OnboardingWizard::OnboardingWizard(QWidget *parent)
 {
     setWindowTitle(i18n("Welcome to RPG Forge"));
     setWizardStyle(QWizard::ModernStyle);
-    setFixedSize(650, 500);
+    setMinimumSize(600, 480);
 
     setPage(Page_Welcome, createWelcomePage());
     setPage(Page_Project, createProjectPage());
@@ -203,7 +204,8 @@ QWizardPage* OnboardingWizard::createProjectPage()
     layout->addLayout(form);
     
     auto *hint = new QLabel(i18n("A folder named after your project will be created inside this directory."), page);
-    hint->setStyleSheet(QStringLiteral("font-style: italic; color: #7f8c8d;"));
+    hint->setForegroundRole(QPalette::PlaceholderText);
+    hint->setStyleSheet(QStringLiteral("font-style: italic;"));
     layout->addWidget(hint);
     layout->addStretch();
 
@@ -424,7 +426,10 @@ void OnboardingWizard::checkOllama()
     proc.start(QStringLiteral("ollama"), {QStringLiteral("--version")});
     if (!proc.waitForFinished(1000) || proc.exitCode() != 0) {
         m_ollamaStatus->show();
-        m_ollamaStatus->setStyleSheet(QStringLiteral("color: #c0392b; background-color: #f9ebea; padding: 10px; border-radius: 4px;"));
+        const QColor errorFg = KColorScheme(QPalette::Active, KColorScheme::Window).foreground(KColorScheme::NegativeText).color();
+        const QColor errorBg = KColorScheme(QPalette::Active, KColorScheme::Window).background(KColorScheme::NegativeBackground).color();
+        m_ollamaStatus->setStyleSheet(QStringLiteral("color: %1; background-color: %2; padding: 10px; border-radius: 4px;")
+            .arg(errorFg.name(), errorBg.name()));
         m_ollamaStatus->setText(i18n(
             "<b>Ollama not detected!</b><br/>"
             "To use local AI, you must install Ollama.<br/><br/>"
@@ -433,7 +438,10 @@ void OnboardingWizard::checkOllama()
         ));
     } else {
         m_ollamaStatus->show();
-        m_ollamaStatus->setStyleSheet(QStringLiteral("color: #27ae60; background-color: #eafaf1; padding: 10px; border-radius: 4px;"));
+        const QColor okFg = KColorScheme(QPalette::Active, KColorScheme::Window).foreground(KColorScheme::PositiveText).color();
+        const QColor okBg = KColorScheme(QPalette::Active, KColorScheme::Window).background(KColorScheme::PositiveBackground).color();
+        m_ollamaStatus->setStyleSheet(QStringLiteral("color: %1; background-color: %2; padding: 10px; border-radius: 4px;")
+            .arg(okFg.name(), okBg.name()));
         m_ollamaStatus->setText(i18n("Ollama is installed and ready to use."));
     }
 }

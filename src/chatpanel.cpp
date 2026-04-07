@@ -112,6 +112,7 @@ void ChatPanel::setupUi()
 
     m_refreshModelsBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("view-refresh")), QString(), this);
     m_refreshModelsBtn->setToolTip(i18n("Refresh model list"));
+    m_refreshModelsBtn->setAccessibleName(i18n("Refresh model list"));
     connect(m_refreshModelsBtn, &QPushButton::clicked, this, &ChatPanel::updateModelList);
     toolbar->addWidget(m_refreshModelsBtn);
 
@@ -119,6 +120,7 @@ void ChatPanel::setupUi()
 
     m_clearBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("edit-clear")), QString(), this);
     m_clearBtn->setToolTip(i18n("Clear Chat"));
+    m_clearBtn->setAccessibleName(i18n("Clear Chat"));
     connect(m_clearBtn, &QPushButton::clicked, this, &ChatPanel::clearChat);
     toolbar->addWidget(m_clearBtn);
 
