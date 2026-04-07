@@ -1332,20 +1332,20 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                         view->setCursorPosition(cursor);
                     }
 
-                    // Decode item pointers to get project names; pair each with its URL
+                    // Decode item paths (encoded as newline-separated relative paths)
+                    // and pair each with its URL. Resolving by path is safe even if
+                    // the tree reloaded between dragStart and drop.
                     QList<QPair<QString, QUrl>> items;
-                    QByteArray encoded = e->mimeData()->data(QStringLiteral("application/x-rpgforge-treeitem"));
+                    const QStringList paths = QString::fromUtf8(
+                        e->mimeData()->data(QStringLiteral("application/x-rpgforge-treeitem"))
+                    ).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
                     QList<QUrl> urls = e->mimeData()->urls();
-                    const int count = encoded.size() / static_cast<int>(sizeof(ProjectTreeItem*));
-                    for (int i = 0; i < count && i < urls.size(); ++i) {
-                        ProjectTreeItem *dragItem = *reinterpret_cast<ProjectTreeItem**>(
-                            encoded.data() + i * static_cast<int>(sizeof(ProjectTreeItem*)));
-                        QString name = (dragItem && !dragItem->name.isEmpty())
-                            ? dragItem->name
-                            : QFileInfo(urls[i].toLocalFile()).completeBaseName();
+                    for (int i = 0; i < paths.size() && i < urls.size(); ++i) {
+                        QString name = QFileInfo(paths[i]).completeBaseName();
+                        if (name.isEmpty()) name = QFileInfo(urls[i].toLocalFile()).completeBaseName();
                         items.append({name, urls[i]});
                     }
-                    // Fallback: if pointer decoding produced fewer entries than URLs
+                    // Fallback: if paths had fewer entries than URLs
                     for (int i = items.size(); i < urls.size(); ++i) {
                         items.append({QFileInfo(urls[i].toLocalFile()).completeBaseName(), urls[i]});
                     }

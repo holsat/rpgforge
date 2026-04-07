@@ -475,13 +475,16 @@ QMimeData* ProjectTreeModel::mimeData(const QModelIndexList &indexes) const {
     if (indexes.isEmpty()) return nullptr;
     auto *mimeData = new QMimeData();
 
-    QByteArray encodedData;
+    // Encode each item as its relative path separated by '\n'.
+    // Encoding raw pointers is unsafe: if the tree reloads between dragStart
+    // and drop the pointer is dangling. Paths survive tree reloads.
+    QStringList paths;
     QList<QUrl> fileUrls;
 
     for (const QModelIndex &idx : indexes) {
         if (!idx.isValid()) continue;
         ProjectTreeItem *item = itemFromIndex(idx);
-        encodedData.append(reinterpret_cast<const char*>(&item), sizeof(item));
+        paths << item->path;
 
         // For file items, also include an absolute URI so the editor can receive drops
         if (item->type == ProjectTreeItem::File && ProjectManager::instance().isProjectOpen()) {
@@ -491,7 +494,8 @@ QMimeData* ProjectTreeModel::mimeData(const QModelIndexList &indexes) const {
         }
     }
 
-    mimeData->setData(QStringLiteral("application/x-rpgforge-treeitem"), encodedData);
+    mimeData->setData(QStringLiteral("application/x-rpgforge-treeitem"),
+                      paths.join(QLatin1Char('\n')).toUtf8());
     if (!fileUrls.isEmpty())
         mimeData->setUrls(fileUrls);
 
@@ -512,17 +516,18 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
     if (!newParentItem) newParentItem = m_rootItem;
 
     if (data->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))) {
-        QByteArray encodedData = data->data(QStringLiteral("application/x-rpgforge-treeitem"));
-        const int count = encodedData.size() / static_cast<int>(sizeof(ProjectTreeItem*));
-        if (count == 0) return false;
+        const QStringList paths = QString::fromUtf8(
+            data->data(QStringLiteral("application/x-rpgforge-treeitem"))
+        ).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+
+        if (paths.isEmpty()) return false;
 
         int insertRow = row;
         if (insertRow == -1) insertRow = newParentItem->children.count();
 
         bool anyMoved = false;
-        for (int i = 0; i < count; i++) {
-            ProjectTreeItem *dragItem = *reinterpret_cast<ProjectTreeItem**>(
-                encodedData.data() + i * static_cast<int>(sizeof(ProjectTreeItem*)));
+        for (const QString &path : paths) {
+            ProjectTreeItem *dragItem = findItem(path);
 
             if (!dragItem) continue;
 

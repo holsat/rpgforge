@@ -158,7 +158,6 @@ void SimulationManager::applyOutcome(const QJsonObject &patch, const QString &lo
         checkSimulationEnd();
     } else {
         // Step 4: Let the Griot narrate the result
-        SimulationActor *actor = m_actors.at(m_currentActorIndex);
         m_griot.narrate(actor->name(), actor->lastIntent(), log, patch, m_state.state());
     }
 }

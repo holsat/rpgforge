@@ -141,7 +141,14 @@ bool ProjectManager::openProject(const QString &filePath)
 
     m_projectFilePath = filePath;
     m_data = doc.object();
-    
+
+    // Warn if the schema version is newer than what we understand
+    const int fileVersion = m_data.value(QStringLiteral("version")).toInt(0);
+    if (fileVersion > 1) {
+        qWarning() << "rpgforge.project was written by a newer version of RPG Forge (schema version"
+                   << fileVersion << "). Some data may not load correctly.";
+    }
+
     Q_EMIT projectOpened();
     return true;
 }
@@ -388,6 +395,9 @@ bool ProjectManager::saveProject()
     if (!file.open(QIODevice::WriteOnly)) {
         return false;
     }
+
+    // Always write the schema version so future readers can detect incompatible formats
+    m_data[QStringLiteral("version")] = 1;
 
     QJsonDocument doc(m_data);
     file.write(doc.toJson());
