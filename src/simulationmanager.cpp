@@ -77,6 +77,7 @@ void SimulationManager::start()
     m_currentActorIndex = -1;
     m_currentRunIndex = 0;
     m_turnCounter = 0;
+    m_recentIntents = QJsonArray();
     m_currentBatch = BatchResult();
     m_currentBatch.totalRuns = m_runCount;
     
@@ -109,13 +110,21 @@ void SimulationManager::nextTurn()
     Q_EMIT turnStarted(current->name());
     Q_EMIT logMessage(QStringLiteral("--- Turn %1: %2 ---").arg(QString::number(m_turnCounter), current->name()));
     
-    current->think(m_state.state());
+    current->think(m_state.state(), m_recentIntents, m_tacticalAggression);
 }
 
 void SimulationManager::processActorIntent(SimulationActor *actor, const QJsonObject &intent)
 {
     Q_EMIT turnFinished(actor->name(), intent);
     
+    // Add to recent intents
+    QJsonObject record = intent;
+    record.insert(QStringLiteral("actor"), actor->name());
+    m_recentIntents.append(record);
+    if (m_recentIntents.size() > m_actors.size()) {
+        m_recentIntents.removeAt(0);
+    }
+
     QString desc = intent.value(QStringLiteral("description")).toString();
     QString reasoning = intent.value(QStringLiteral("reasoning")).toString();
     
@@ -139,6 +148,10 @@ void SimulationManager::applyOutcome(const QJsonObject &patch, const QString &lo
     for (auto it = patch.begin(); it != patch.end(); ++it) {
         m_state.setValue(it.key(), it.value());
     }
+
+    // Add result to actor's memory
+    SimulationActor *actor = m_actors.at(m_currentActorIndex);
+    actor->addMemory(QStringLiteral("Outcome of my last turn: %1").arg(log));
 
     if (m_isBatchMode) {
         // In batch mode, we skip the Griot to save time/tokens

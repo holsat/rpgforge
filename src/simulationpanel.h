@@ -27,6 +27,9 @@ class QTreeWidget;
 class QPushButton;
 class QSpinBox;
 class QCheckBox;
+class QListWidget;
+class QLineEdit;
+class QSlider;
 
 /**
  * @brief Dashboard for managing and visualizing simulations.
@@ -38,6 +41,10 @@ public:
     explicit SimulationPanel(QWidget *parent = nullptr);
     ~SimulationPanel() override;
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private Q_SLOTS:
     void onStartClicked();
     void onStopClicked();
@@ -46,19 +53,27 @@ private Q_SLOTS:
     void onLogMessage(const QString &message);
     void onStateChanged();
     void onBatchFinished(const BatchResult &results);
+    void onLoadScenario();
+    void onAddActor();
+    void onRemoveActor();
 
 private:
     void setupUi();
     void updateStateTree();
     void showAnalytics(const BatchResult &results);
+    void addActorFromFile(const QString &path);
 
     QTextEdit *m_logEdit;
     QTreeWidget *m_stateTree;
+    QListWidget *m_actorList;
+    QLineEdit *m_scenarioEdit;
+
     QPushButton *m_startBtn;
     QPushButton *m_stopBtn;
     QSpinBox *m_batchSpin;
     QSpinBox *m_turnsSpin;
     QCheckBox *m_batchCheck;
+    QSlider *m_aggressionSlider;
 };
 
 #endif // SIMULATIONPANEL_H

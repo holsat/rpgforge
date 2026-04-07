@@ -19,6 +19,7 @@
 #include "simulationactor.h"
 #include "llmservice.h"
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QSettings>
 
 SimulationActor::SimulationActor(const QString &name, QObject *parent)
@@ -26,32 +27,63 @@ SimulationActor::SimulationActor(const QString &name, QObject *parent)
 {
 }
 
-void SimulationActor::think(const QJsonObject &worldState)
+void SimulationActor::addMemory(const QString &observation)
+{
+    m_memory.append(observation);
+    if (m_memory.size() > 20) {
+        m_memory.removeFirst();
+    }
+}
+
+void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &recentIntents, int tacticalAggression)
 {
     Q_EMIT thinkingStarted();
+
+    QString aggressionNote;
+    switch (tacticalAggression) {
+        case 1: aggressionNote = QStringLiteral("Focus on narrative and character flavor. Don't worry about winning; focus on what makes a good story."); break;
+        case 2: aggressionNote = QStringLiteral("Be reasonable, but favor cinematic choices over optimal ones."); break;
+        case 3: aggressionNote = QStringLiteral("Balance story and strategy. Play the game fairly and effectively."); break;
+        case 4: aggressionNote = QStringLiteral("Be highly tactical. Use your abilities to their full potential to win."); break;
+        case 5: aggressionNote = QStringLiteral("MUNCHKIN MODE: Find every loophole, maximize every bonus, and use the most exploitative tactics possible to ensure total victory."); break;
+        default: aggressionNote = QStringLiteral("Play standard strategy."); break;
+    }
 
     QString systemPrompt = QStringLiteral(
         "You are an autonomous agent in a tabletop RPG simulation.\n"
         "Name: %1\n"
         "Motive: %2\n"
         "Your Character Sheet (JSON): %3\n\n"
-        "Current World State (JSON): %4\n\n"
+        "TACTICAL AGGRESSION (Level %4): %5\n\n"
+        "--- YOUR MEMORY (Last few turns) ---\n"
+        "%6\n\n"
+        "--- YOUR CURRENT PLAN ---\n"
+        "%7\n\n"
+        "--- RECENT ACTIONS BY OTHERS ---\n"
+        "%8\n\n"
+        "Current World State (JSON): %9\n\n"
         "TASK:\n"
-        "Decide on your next action based on your motive and current situation.\n"
+        "1. Observe the world state, your memories, and what others just did.\n"
+        "2. Evaluate if your current plan is still valid given your TACTICAL AGGRESSION level.\n"
+        "3. Decide on your next action and update your plan.\n\n"
         "Output ONLY a valid JSON object with the following fields:\n"
-        "- \"action\": A short string describing the action (e.g. \"attack\", \"heal\", \"hide\").\n"
-        "- \"target\": The name of the target or object (if applicable).\n"
+        "- \"action\": A short string describing the action.\n"
+        "- \"target\": The name of the target (if applicable).\n"
         "- \"description\": A one-sentence description of what you are doing in character.\n"
-        "- \"reasoning\": A brief internal monologue explaining your choice.\n"
+        "- \"reasoning\": A brief internal monologue.\n"
+        "- \"current_plan\": A list of 1-3 strings describing your immediate next steps.\n"
         "Do not include any other text."
     ).arg(m_name, m_motive, 
           QString::fromUtf8(QJsonDocument(m_sheet).toJson(QJsonDocument::Compact)),
+          QString::number(tacticalAggression), aggressionNote,
+          m_memory.isEmpty() ? QStringLiteral("No memories yet.") : m_memory.join(QLatin1String("\n")),
+          m_plan.isEmpty() ? QStringLiteral("No plan yet.") : m_plan.join(QLatin1String(" -> ")),
+          QString::fromUtf8(QJsonDocument(recentIntents).toJson(QJsonDocument::Compact)),
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     
-    // Actors use the default chat provider/model for now
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     req.model = (req.provider == LLMProvider::OpenAI) 
         ? settings.value(QStringLiteral("llm/openai/model")).toString()
@@ -69,7 +101,6 @@ void SimulationActor::think(const QJsonObject &worldState)
             return;
         }
 
-        // Try to parse JSON from response
         QString cleanJson = response.trimmed();
         if (cleanJson.startsWith(QLatin1String("```json"))) {
             cleanJson = cleanJson.mid(7);
@@ -87,6 +118,14 @@ void SimulationActor::think(const QJsonObject &worldState)
         }
 
         m_lastIntent = doc.object();
+        
+        // Update the plan from the LLM's decision
+        m_plan.clear();
+        QJsonArray planArray = m_lastIntent.value(QStringLiteral("current_plan")).toArray();
+        for (const QJsonValue &v : planArray) {
+            m_plan.append(v.toString());
+        }
+
         Q_EMIT intentDecided(m_lastIntent);
     });
 }

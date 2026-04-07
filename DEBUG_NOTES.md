@@ -76,6 +76,15 @@
 - **Inline Diagnostics:** Rendered diagnostic results directly in `KTextEditor` using squiggly underlines via `MovingRange`.
 - **Status Bar Integration:** Added a live diagnostic counter to the IDE's status bar.
 
+## 2026-04-04: Phase 13 & 14 Completion (Simulation Engine)
+- **`SimulationManager` Implementation:** Logic-first architecture where C++ handles the "Truth" (state and dice) and LLMs handle "Intent" and "Narrative".
+- **Multi-Agent Architecture:** Implemented `SimulationArbiter` (Judge), `SimulationGriot` (Storyteller), and `SimulationActor` (Autonomous agents).
+- **RAG & RAG-Logic Loop:** The Arbiter uses vector search to find specific rules before applying outcomes.
+- **GOAP & Memory:** Enhanced actors with persistent memory and goal-oriented planning prompts.
+- **Tactical Aggression:** Added a UI slider to control AI strategic intensity (Level 1-5).
+- **MCP Server:** Added `--mcp` flag to expose rules and sim-state via Model Context Protocol.
+
+
 ## 2026-04-03: Phase 10 Refinements & AI Assistant UX
 - **Dynamic Model Fetching:** Implemented `/v1/models` (OpenAI/Anthropic) and `/api/tags` (Ollama) integration to auto-populate model dropdowns.
 - **Insert into Document:** Added "Insert at Cursor" buttons to AI responses using `QWebChannel` for secure JS-to-C++ communication.

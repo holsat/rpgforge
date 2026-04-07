@@ -94,11 +94,17 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ---
 
-## Phase 14 — Multi-Agent Simulation (Advanced)
+## Phase 14 — Multi-Agent Simulation (Advanced Strategy)
 
-**Status:** Not Started
+**Status:** Complete
 
-**Goal:** Player sub-agents that make autonomous decisions during simulation.
+**Goal:** Player sub-agents that make autonomous decisions during simulation using GOAP and memory.
+
+**Key Deliverables:**
+- Persistent Actor Memory tracking past turns and outcomes.
+- Goal-Oriented Action Planning (GOAP) loop in actor prompts.
+- Ally/Enemy Coordination via shared recent intent context.
+- Tactical Aggression slider (1-5) for "Narrative" vs "Munchkin" behavior.
 
 ---
 

@@ -43,10 +43,18 @@ public:
 
     QJsonObject lastIntent() const { return m_lastIntent; }
 
+    QStringList memory() const { return m_memory; }
+    QStringList plan() const { return m_plan; }
+
     /**
-     * @brief Asks the actor to decide on their next intent based on the world state.
+     * @brief Adds a specific observation to the actor's memory.
      */
-    virtual void think(const QJsonObject &worldState);
+    void addMemory(const QString &observation);
+
+    /**
+     * @brief Asks the actor to decide on their next intent based on the world state and recent actions.
+     */
+    virtual void think(const QJsonObject &worldState, const QJsonArray &recentIntents, int tacticalAggression);
 
 Q_SIGNALS:
     /**
@@ -62,6 +70,8 @@ private:
     QString m_motive;
     QJsonObject m_sheet;
     QJsonObject m_lastIntent;
+    QStringList m_memory;
+    QStringList m_plan;
 };
 
 #endif // SIMULATIONACTOR_H

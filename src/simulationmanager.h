@@ -21,6 +21,7 @@
 
 #include <QObject>
 #include <QList>
+#include <QJsonArray>
 #include "simulationstate.h"
 #include "simulationactor.h"
 #include "simarbiter.h"
@@ -52,9 +53,14 @@ public:
 
     SimulationState* state() { return &m_state; }
 
+    void setScenario(const QString &text) { m_scenario = text; }
+    QString scenario() const { return m_scenario; }
+
     void setBatchMode(bool enabled) { m_isBatchMode = enabled; }
     void setMaxTurns(int turns) { m_maxTurns = turns; }
     void setRunCount(int count) { m_runCount = count; }
+    void setTacticalAggression(int level) { m_tacticalAggression = level; }
+    int tacticalAggression() const { return m_tacticalAggression; }
 
     /**
      * @brief Starts the simulation loop.
@@ -96,6 +102,8 @@ private:
     SimulationArbiter m_arbiter;
     SimulationGriot m_griot;
     QList<SimulationActor*> m_actors;
+    QJsonArray m_recentIntents;
+    QString m_scenario;
     int m_currentActorIndex = -1;
     bool m_isRunning = false;
 
@@ -103,6 +111,7 @@ private:
     bool m_isBatchMode = false;
     int m_maxTurns = 50;
     int m_runCount = 1;
+    int m_tacticalAggression = 3; // 1-5
     int m_currentRunIndex = 0;
     int m_turnCounter = 0;
     
