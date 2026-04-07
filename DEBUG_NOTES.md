@@ -84,6 +84,15 @@
 - **Tactical Aggression:** Added a UI slider to control AI strategic intensity (Level 1-5).
 - **MCP Server:** Added `--mcp` flag to expose rules and sim-state via Model Context Protocol.
 
+## 2026-04-04: Phase 15 & 16 Completion (Generator & MCP Bridge)
+- **AI Character Generator:** Implemented a multi-step wizard using RAG to generate rule-compliant character sheets with iterative refinement.
+- **Bi-directional MCP Expansion:** 
+    - Added `write_file` and `append_to_file` tools to allow external AIs to update project markdown.
+    - Implemented `update_sim_state` to let external agents manipulate the live simulation.
+    - Added strict `isPathSafe` checks to prevent file operations outside the project root.
+- **Simulation Refinements:** Added Scenario Loading, Actor Library (Drag-and-Drop), and styled HTML logging.
+
+
 
 ## 2026-04-03: Phase 10 Refinements & AI Assistant UX
 - **Dynamic Model Fetching:** Implemented `/v1/models` (OpenAI/Anthropic) and `/api/tags` (Ollama) integration to auto-populate model dropdowns.

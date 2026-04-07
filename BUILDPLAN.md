@@ -124,12 +124,19 @@ RPG Forge is a KDE-native IDE for RPG game designers. It combines a powerful mar
 
 ## Phase 16 — MCP Interface & Project Bridge (Expansion)
 
-**Status:** In Progress
+**Status:** Complete
 
-**Goal:** Expose project rules and simulation state via Model Context Protocol.
+**Goal:** Expose project rules and simulation state via Model Context Protocol, allowing bi-directional interaction.
+
+**Key Deliverables:**
+- `lookup_rule` tool for RAG-based rule retrieval via MCP.
+- `roll_dice` tool for secure C++ dice logic via MCP.
+- `get_sim_state` and `update_sim_state` tools for live simulation interaction.
+- `write_file` and `append_to_file` tools with path safety for automated rule/content updates.
+- Headless `--mcp` mode for external agent integration.
 
 ---
 
 ## Phase 17 — Polish and Advanced Features
 
-**Status:** Not Started
+**Status:** In Progress

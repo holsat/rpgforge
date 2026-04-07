@@ -56,6 +56,11 @@ private:
     void toolLookupRule(const QJsonValue &id, const QJsonObject &args);
     void toolRollDice(const QJsonValue &id, const QJsonObject &args);
     void toolGetSimState(const QJsonValue &id);
+    void toolWriteFile(const QJsonValue &id, const QJsonObject &args);
+    void toolAppendToFile(const QJsonValue &id, const QJsonObject &args);
+    void toolUpdateSimState(const QJsonValue &id, const QJsonObject &args);
+
+    bool isPathSafe(const QString &path) const;
 };
 
 #endif // MCPSERVICE_H

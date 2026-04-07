@@ -20,7 +20,9 @@
 #include "knowledgebase.h"
 #include "diceengine.h"
 #include "simulationmanager.h"
+#include "projectmanager.h"
 #include <QFile>
+#include <QDir>
 #include <QTextStream>
 #include <QJsonDocument>
 #include <QSocketNotifier>
@@ -149,6 +151,47 @@ void MCPService::handleListTools(const QJsonValue &id)
     state[QStringLiteral("inputSchema")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("object")}};
     tools.append(state);
 
+    // Tool: update_sim_state
+    QJsonObject updateSim;
+    updateSim[QStringLiteral("name")] = QStringLiteral("update_sim_state");
+    updateSim[QStringLiteral("description")] = QStringLiteral("Applies a JSON patch to the live simulation state.");
+    QJsonObject updateSimInput;
+    updateSimInput[QStringLiteral("type")] = QStringLiteral("object");
+    QJsonObject updateSimProps;
+    updateSimProps[QStringLiteral("patch")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("object")}, {QStringLiteral("description"), QStringLiteral("JSON object with dot-separated paths to update.")}};
+    updateSimInput[QStringLiteral("properties")] = updateSimProps;
+    updateSimInput[QStringLiteral("required")] = QJsonArray{QStringLiteral("patch")};
+    updateSim[QStringLiteral("inputSchema")] = updateSimInput;
+    tools.append(updateSim);
+
+    // Tool: write_file
+    QJsonObject write;
+    write[QStringLiteral("name")] = QStringLiteral("write_file");
+    write[QStringLiteral("description")] = QStringLiteral("Writes content to a file within the project directory.");
+    QJsonObject writeInput;
+    writeInput[QStringLiteral("type")] = QStringLiteral("object");
+    QJsonObject writeProps;
+    writeProps[QStringLiteral("path")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}, {QStringLiteral("description"), QStringLiteral("Relative path within the project.")}};
+    writeProps[QStringLiteral("content")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}, {QStringLiteral("description"), QStringLiteral("The text content to write.")}};
+    writeInput[QStringLiteral("properties")] = writeProps;
+    writeInput[QStringLiteral("required")] = QJsonArray{QStringLiteral("path"), QStringLiteral("content")};
+    write[QStringLiteral("inputSchema")] = writeInput;
+    tools.append(write);
+
+    // Tool: append_to_file
+    QJsonObject append;
+    append[QStringLiteral("name")] = QStringLiteral("append_to_file");
+    append[QStringLiteral("description")] = QStringLiteral("Appends content to an existing file within the project directory.");
+    QJsonObject appendInput;
+    appendInput[QStringLiteral("type")] = QStringLiteral("object");
+    QJsonObject appendProps;
+    appendProps[QStringLiteral("path")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}, {QStringLiteral("description"), QStringLiteral("Relative path within the project.")}};
+    appendProps[QStringLiteral("content")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}, {QStringLiteral("description"), QStringLiteral("The text content to append.")}};
+    appendInput[QStringLiteral("properties")] = appendProps;
+    appendInput[QStringLiteral("required")] = QJsonArray{QStringLiteral("path"), QStringLiteral("content")};
+    append[QStringLiteral("inputSchema")] = appendInput;
+    tools.append(append);
+
     QJsonObject result;
     result[QStringLiteral("tools")] = tools;
     sendResponse(id, result);
@@ -165,6 +208,12 @@ void MCPService::handleCallTool(const QJsonValue &id, const QJsonObject &params)
         toolRollDice(id, args);
     } else if (name == QLatin1String("get_sim_state")) {
         toolGetSimState(id);
+    } else if (name == QLatin1String("update_sim_state")) {
+        toolUpdateSimState(id, args);
+    } else if (name == QLatin1String("write_file")) {
+        toolWriteFile(id, args);
+    } else if (name == QLatin1String("append_to_file")) {
+        toolAppendToFile(id, args);
     } else {
         sendError(id, -32602, QStringLiteral("Tool not found"));
     }
@@ -222,4 +271,92 @@ void MCPService::toolGetSimState(const QJsonValue &id)
     
     result[QStringLiteral("content")] = content;
     sendResponse(id, result);
+}
+
+void MCPService::toolUpdateSimState(const QJsonValue &id, const QJsonObject &args)
+{
+    QJsonObject patch = args.value(QStringLiteral("patch")).toObject();
+    SimulationState *state = SimulationManager::instance().state();
+    
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        state->setValue(it.key(), it.value());
+    }
+
+    QJsonObject result;
+    QJsonArray content;
+    QJsonObject item;
+    item[QStringLiteral("type")] = QStringLiteral("text");
+    item[QStringLiteral("text")] = QStringLiteral("Simulation state updated successfully.");
+    content.append(item);
+    result[QStringLiteral("content")] = content;
+    sendResponse(id, result);
+}
+
+void MCPService::toolWriteFile(const QJsonValue &id, const QJsonObject &args)
+{
+    QString relPath = args.value(QStringLiteral("path")).toString();
+    QString content = args.value(QStringLiteral("content")).toString();
+    QString absPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
+
+    if (!isPathSafe(absPath)) {
+        sendError(id, -32602, QStringLiteral("Access denied: Path outside project directory."));
+        return;
+    }
+
+    QFile file(absPath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        file.write(content.toUtf8());
+        file.close();
+        
+        QJsonObject result;
+        QJsonArray resContent;
+        QJsonObject item;
+        item[QStringLiteral("type")] = QStringLiteral("text");
+        item[QStringLiteral("text")] = QStringLiteral("File written successfully: %1").arg(relPath);
+        resContent.append(item);
+        result[QStringLiteral("content")] = resContent;
+        sendResponse(id, result);
+    } else {
+        sendError(id, -32000, QStringLiteral("Failed to open file for writing."));
+    }
+}
+
+void MCPService::toolAppendToFile(const QJsonValue &id, const QJsonObject &args)
+{
+    QString relPath = args.value(QStringLiteral("path")).toString();
+    QString content = args.value(QStringLiteral("content")).toString();
+    QString absPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
+
+    if (!isPathSafe(absPath)) {
+        sendError(id, -32602, QStringLiteral("Access denied: Path outside project directory."));
+        return;
+    }
+
+    QFile file(absPath);
+    if (file.open(QIODevice::Append | QIODevice::Text)) {
+        file.write(content.toUtf8());
+        file.close();
+        
+        QJsonObject result;
+        QJsonArray resContent;
+        QJsonObject item;
+        item[QStringLiteral("type")] = QStringLiteral("text");
+        item[QStringLiteral("text")] = QStringLiteral("Content appended successfully: %1").arg(relPath);
+        resContent.append(item);
+        result[QStringLiteral("content")] = resContent;
+        sendResponse(id, result);
+    } else {
+        sendError(id, -32000, QStringLiteral("Failed to open file for appending."));
+    }
+}
+
+bool MCPService::isPathSafe(const QString &path) const
+{
+    QString projectPath = ProjectManager::instance().projectPath();
+    if (projectPath.isEmpty()) return false;
+
+    QString projectRoot = QDir(projectPath).absolutePath();
+    QString targetPath = QFileInfo(path).absoluteFilePath();
+    
+    return targetPath.startsWith(projectRoot);
 }
