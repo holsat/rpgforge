@@ -71,6 +71,13 @@ private:
 
     // Prompts
     QListWidget *m_promptsList;
+    QLineEdit *m_analyzerPromptEdit;
+    QLineEdit *m_synopsisFilePromptEdit;
+    QLineEdit *m_synopsisFolderPromptEdit;
+    QLineEdit *m_charGenPromptEdit;
+    QLineEdit *m_simArbiterPromptEdit;
+    QLineEdit *m_simGriotPromptEdit;
+    QLineEdit *m_simActorPromptEdit;
 
     // Analyzer
     QComboBox *m_analyzerRunModeCombo;

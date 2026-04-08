@@ -157,14 +157,14 @@ void CharacterGenerator::generateCharacter()
             rulesContext += QStringLiteral("--- Rule: %1 ---\n%2\n\n").arg(res.heading, res.content);
         }
 
-        QString systemPrompt = QStringLiteral(
-            "You are an expert RPG character generator. Your goal is to create a character sheet that strictly follows the PROJECT RULES provided below.\n\n"
-            "PROJECT RULES:\n%1\n\n"
-            "TASK:\n"
-            "1. Output a valid JSON object representing the character sheet.\n"
-            "2. The JSON must include 'name', 'concept', 'stats', 'skills', 'equipment', and 'biography'.\n"
-            "Output ONLY the JSON object. Do not include markdown code blocks or conversational text."
-        ).arg(rulesContext);
+        QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        QString systemPrompt = settings.value(QStringLiteral("chargen/system_prompt"),
+            QStringLiteral("You are an expert RPG character generator. Your goal is to create a character sheet that strictly follows the PROJECT RULES provided below.\n\n"
+                           "PROJECT RULES:\n%1\n\n"
+                           "TASK:\n"
+                           "1. Output a valid JSON object representing the character sheet.\n"
+                           "2. The JSON must include 'name', 'concept', 'stats', 'skills', 'equipment', and 'biography'.\n"
+                           "Output ONLY the JSON object. Do not include markdown code blocks or conversational text.")).toString().arg(rulesContext);
 
         QString userPrompt;
         if (currentJson.isEmpty()) {

@@ -166,12 +166,14 @@ void SynopsisService::processNext()
 void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &content)
 {
     LLMRequest req;
-    req.provider = static_cast<LLMProvider>(QSettings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge")).value(QStringLiteral("llm/provider"), 0).toInt());
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     req.stream = false;
     
     LLMMessage sys;
     sys.role = QStringLiteral("system");
-    sys.content = QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.");
+    sys.content = settings.value(QStringLiteral("synopsis/file_prompt"),
+        QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString();
     
     LLMMessage user;
     user.role = QStringLiteral("user");
@@ -215,12 +217,14 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     }
 
     LLMRequest req;
-    req.provider = static_cast<LLMProvider>(QSettings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge")).value(QStringLiteral("llm/provider"), 0).toInt());
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     req.stream = false;
     
     LLMMessage sys;
     sys.role = QStringLiteral("system");
-    sys.content = QStringLiteral("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').");
+    sys.content = settings.value(QStringLiteral("synopsis/folder_prompt"),
+        QStringLiteral("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').")).toString();
     
     LLMMessage user;
     user.role = QStringLiteral("user");

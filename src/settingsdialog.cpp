@@ -159,15 +159,42 @@ QWidget* SettingsDialog::createPromptsTab()
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
 
+    // Reusable Templates Section
+    auto *templatesGroup = new QGroupBox(i18n("Editor Prompt Templates"), this);
+    auto *templatesLayout = new QVBoxLayout(templatesGroup);
     m_promptsList = new QListWidget(this);
-    layout->addWidget(m_promptsList);
+    m_promptsList->setMaximumHeight(150);
+    templatesLayout->addWidget(m_promptsList);
 
     auto *btnLayout = new QHBoxLayout();
     auto *addBtn = new QPushButton(i18n("Add Template..."), this);
     auto *removeBtn = new QPushButton(i18n("Remove"), this);
     btnLayout->addWidget(addBtn);
     btnLayout->addWidget(removeBtn);
-    layout->addLayout(btnLayout);
+    templatesLayout->addLayout(btnLayout);
+    layout->addWidget(templatesGroup);
+
+    // Core System Prompts Section
+    auto *coreGroup = new QGroupBox(i18n("Core Engine System Prompts"), this);
+    auto *coreLayout = new QFormLayout(coreGroup);
+
+    m_analyzerPromptEdit = new QLineEdit(this);
+    m_synopsisFilePromptEdit = new QLineEdit(this);
+    m_synopsisFolderPromptEdit = new QLineEdit(this);
+    m_charGenPromptEdit = new QLineEdit(this);
+    m_simArbiterPromptEdit = new QLineEdit(this);
+    m_simGriotPromptEdit = new QLineEdit(this);
+    m_simActorPromptEdit = new QLineEdit(this);
+
+    coreLayout->addRow(i18n("Game Analyzer:"), m_analyzerPromptEdit);
+    coreLayout->addRow(i18n("File Synopsis:"), m_synopsisFilePromptEdit);
+    coreLayout->addRow(i18n("Folder Synopsis:"), m_synopsisFolderPromptEdit);
+    coreLayout->addRow(i18n("Character Generator:"), m_charGenPromptEdit);
+    coreLayout->addRow(i18n("Simulation Arbiter:"), m_simArbiterPromptEdit);
+    coreLayout->addRow(i18n("Simulation Griot:"), m_simGriotPromptEdit);
+    coreLayout->addRow(i18n("Simulation Actor:"), m_simActorPromptEdit);
+
+    layout->addWidget(coreGroup);
 
     connect(addBtn, &QPushButton::clicked, this, [this]() {
         bool ok;
@@ -185,6 +212,7 @@ QWidget* SettingsDialog::createPromptsTab()
         delete m_promptsList->currentItem();
     });
 
+    layout->addStretch();
     return tab;
 }
 
@@ -253,6 +281,66 @@ void SettingsDialog::load()
     m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/provider"), 0).toInt());
     m_analyzerModelEdit->setText(settings.value(QStringLiteral("analyzer/model")).toString());
 
+    // Load Core System Prompts
+    m_analyzerPromptEdit->setText(settings.value(QStringLiteral("analyzer/system_prompt"),
+        QStringLiteral("You are an expert RPG game design analyzer.\n"
+                       "Analyze the provided document for rule conflicts, ambiguities, and completeness gaps.\n"
+                       "You must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\n"
+                       "Format: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]")).toString());
+
+    m_synopsisFilePromptEdit->setText(settings.value(QStringLiteral("synopsis/file_prompt"),
+        QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString());
+
+    m_synopsisFolderPromptEdit->setText(settings.value(QStringLiteral("synopsis/folder_prompt"),
+        QStringLiteral("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').")).toString());
+
+    m_charGenPromptEdit->setText(settings.value(QStringLiteral("chargen/system_prompt"),
+        QStringLiteral("You are an expert RPG character generator. Your goal is to create a character sheet that strictly follows the PROJECT RULES provided below.\n\n"
+                       "PROJECT RULES:\n%1\n\n"
+                       "TASK:\n"
+                       "1. Output a valid JSON object representing the character sheet.\n"
+                       "2. The JSON must include 'name', 'concept', 'stats', 'skills', 'equipment', and 'biography'.")).toString());
+
+    m_simArbiterPromptEdit->setText(settings.value(QStringLiteral("simulation/arbiter_prompt"),
+        QStringLiteral("You are the Arbiter of a tabletop RPG simulation. Your job is to enforce the rules and update the world state.\n\n"
+                       "SCENARIO CONTEXT:\n%1\n\n"
+                       "RELEVANT RULES:\n%2\n\n"
+                       "CURRENT SITUATION:\n"
+                       "- Actor: %3\n"
+                       "- Intent: %4\n"
+                       "- World State: %5\n\n"
+                       "TASK:\n"
+                       "1. Evaluate the intent based on rules and context.\n"
+                       "2. Generate a 'logical_patch' (JSON) to update the world state.\n"
+                       "3. Write a 'mechanical_log' explaining the result.\n"
+                       "4. Return ONLY a JSON object with 'logical_patch' and 'mechanical_log'.")).toString());
+
+    m_simGriotPromptEdit->setText(settings.value(QStringLiteral("simulation/griot_prompt"),
+        QStringLiteral("You are the Griot, an immersive storyteller for an RPG simulation.\n"
+                       "Your task is to take dry mechanical results and turn them into cinematic prose.\n\n"
+                       "INPUTS:\n"
+                       "- Actor: %1\n"
+                       "- Intent: %2\n"
+                       "- Mechanical Result: %3\n"
+                       "- World Changes: %4\n"
+                       "- Current State: %5\n\n"
+                       "STYLE:\n"
+                       "- Evocative but concise.\n"
+                       "- Second-person perspective if appropriate, or third-person cinematic.\n"
+                       "- No mechanical jargon.")).toString());
+
+    m_simActorPromptEdit->setText(settings.value(QStringLiteral("simulation/actor_prompt"),
+        QStringLiteral("You are an autonomous agent in a tabletop RPG simulation.\n"
+                       "Name: %1\n"
+                       "Motive: %2\n"
+                       "Your Character Sheet (JSON): %3\n\n"
+                       "TACTICAL AGGRESSION (Level %4): %5\n\n"
+                       "CURRENT WORLD STATE (JSON): %6\n\n"
+                       "RULES CONTEXT:\n%7\n\n"
+                       "TASK:\n"
+                       "Decide your next action based on your motive and the current state.\n"
+                       "Return ONLY a JSON object: {\"intent\": \"...\", \"reasoning\": \"...\"}")).toString());
+
     // Load Prompts
     QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
     if (!promptsJson.isEmpty()) {
@@ -305,6 +393,15 @@ void SettingsDialog::save()
     settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
     settings.setValue(QStringLiteral("analyzer/provider"), m_analyzerProviderCombo->currentIndex());
     settings.setValue(QStringLiteral("analyzer/model"), m_analyzerModelEdit->text());
+
+    // Save Core System Prompts
+    settings.setValue(QStringLiteral("analyzer/system_prompt"), m_analyzerPromptEdit->text());
+    settings.setValue(QStringLiteral("synopsis/file_prompt"), m_synopsisFilePromptEdit->text());
+    settings.setValue(QStringLiteral("synopsis/folder_prompt"), m_synopsisFolderPromptEdit->text());
+    settings.setValue(QStringLiteral("chargen/system_prompt"), m_charGenPromptEdit->text());
+    settings.setValue(QStringLiteral("simulation/arbiter_prompt"), m_simArbiterPromptEdit->text());
+    settings.setValue(QStringLiteral("simulation/griot_prompt"), m_simGriotPromptEdit->text());
+    settings.setValue(QStringLiteral("simulation/actor_prompt"), m_simActorPromptEdit->text());
 
     // Save Prompts
     QJsonObject obj;

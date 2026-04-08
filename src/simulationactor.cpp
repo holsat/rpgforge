@@ -50,31 +50,32 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
         default: aggressionNote = QStringLiteral("Play standard strategy."); break;
     }
 
-    QString systemPrompt = QStringLiteral(
-        "You are an autonomous agent in a tabletop RPG simulation.\n"
-        "Name: %1\n"
-        "Motive: %2\n"
-        "Your Character Sheet (JSON): %3\n\n"
-        "TACTICAL AGGRESSION (Level %4): %5\n\n"
-        "--- YOUR MEMORY (Last few turns) ---\n"
-        "%6\n\n"
-        "--- YOUR CURRENT PLAN ---\n"
-        "%7\n\n"
-        "--- RECENT ACTIONS BY OTHERS ---\n"
-        "%8\n\n"
-        "Current World State (JSON): %9\n\n"
-        "TASK:\n"
-        "1. Observe the world state, your memories, and what others just did.\n"
-        "2. Evaluate if your current plan is still valid given your TACTICAL AGGRESSION level.\n"
-        "3. Decide on your next action and update your plan.\n\n"
-        "Output ONLY a valid JSON object with the following fields:\n"
-        "- \"action\": A short string describing the action.\n"
-        "- \"target\": The name of the target (if applicable).\n"
-        "- \"description\": A one-sentence description of what you are doing in character.\n"
-        "- \"reasoning\": A brief internal monologue.\n"
-        "- \"current_plan\": A list of 1-3 strings describing your immediate next steps.\n"
-        "Do not include any other text."
-    ).arg(m_name, m_motive, 
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString systemPrompt = settings.value(QStringLiteral("simulation/actor_prompt"),
+        QStringLiteral("You are an autonomous agent in a tabletop RPG simulation.\n"
+                       "Name: %1\n"
+                       "Motive: %2\n"
+                       "Your Character Sheet (JSON): %3\n\n"
+                       "TACTICAL AGGRESSION (Level %4): %5\n\n"
+                       "--- YOUR MEMORY (Last few turns) ---\n"
+                       "%6\n\n"
+                       "--- YOUR CURRENT PLAN ---\n"
+                       "%7\n\n"
+                       "--- RECENT ACTIONS BY OTHERS ---\n"
+                       "%8\n\n"
+                       "Current World State (JSON): %9\n\n"
+                       "TASK:\n"
+                       "1. Observe the world state, your memories, and what others just did.\n"
+                       "2. Evaluate if your current plan is still valid given your TACTICAL AGGRESSION level.\n"
+                       "3. Decide on your next action and update your plan.\n\n"
+                       "Output ONLY a valid JSON object with the following fields:\n"
+                       "- \"action\": A short string describing the action.\n"
+                       "- \"target\": The name of the target (if applicable).\n"
+                       "- \"description\": A one-sentence description of what you are doing in character.\n"
+                       "- \"reasoning\": A brief internal monologue.\n"
+                       "- \"current_plan\": A list of 1-3 strings describing your immediate next steps.\n"
+                       "Do not include any other text.")).toString()
+        .arg(m_name, m_motive, 
           QString::fromUtf8(QJsonDocument(m_sheet).toJson(QJsonDocument::Compact)),
           QString::number(tacticalAggression), aggressionNote,
           m_memory.isEmpty() ? QStringLiteral("No memories yet.") : m_memory.join(QLatin1String("\n")),
@@ -83,7 +84,6 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
 
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     // Leave req.model empty so LLMService::validateModelThenDispatch handles resolution,

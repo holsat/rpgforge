@@ -57,30 +57,30 @@ void SimulationArbiter::performRuleLookup(const QString &query, const QString &a
 void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QString &actorName, const QJsonObject &actorSheet, const QJsonObject &intent, const QJsonObject &worldState)
 {
     QString scenario = SimulationManager::instance().scenario();
-    QString systemPrompt = QStringLiteral(
-        "You are the Arbiter of a tabletop RPG simulation. Your job is to enforce the rules and update the world state.\n\n"
-        "SCENARIO CONTEXT:\n%1\n\n"
-        "RELEVANT RULES:\n%2\n\n"
-        "CURRENT SITUATION:\n"
-        "- Actor: %3\n"
-        "- Actor Sheet: %4\n"
-        "- Intent: %5\n"
-        "- World State: %6\n\n"
-        "TASK:\n"
-        "1. Determine the outcome of the intent based on the rules provided.\n"
-        "2. If a dice roll is required, you must simulate it (but denote it clearly).\n"
-        "3. Output a valid JSON object with:\n"
-        "   - \"patch\": A JSON object containing dot-separated paths and their NEW values (e.g. {\"actors.fighter.hp\": 12}). Only include changed values.\n"
-        "   - \"log\": A concise, dry summary of the mechanics applied (e.g. \"Rolled 18 (1d20+5) vs AC 15. Target takes 6 damage.\").\n"
-        "   - \"narrative_hints\": Brief keywords for the storyteller (e.g. \"near miss\", \"bloody wound\").\n"
-        "Output ONLY the JSON object."
-    ).arg(scenario, rulesContext, actorName,
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QString systemPrompt = settings.value(QStringLiteral("simulation/arbiter_prompt"),
+        QStringLiteral("You are the Arbiter of a tabletop RPG simulation. Your job is to enforce the rules and update the world state.\n\n"
+                       "SCENARIO CONTEXT:\n%1\n\n"
+                       "RELEVANT RULES:\n%2\n\n"
+                       "CURRENT SITUATION:\n"
+                       "- Actor: %3\n"
+                       "- Actor Sheet: %4\n"
+                       "- Intent: %5\n"
+                       "- World State: %6\n\n"
+                       "TASK:\n"
+                       "1. Determine the outcome of the intent based on the rules provided.\n"
+                       "2. If a dice roll is required, you must simulate it (but denote it clearly).\n"
+                       "3. Output a valid JSON object with:\n"
+                       "   - \"patch\": A JSON object containing dot-separated paths and their NEW values (e.g. {\"actors.fighter.hp\": 12}). Only include changed values.\n"
+                       "   - \"log\": A concise, dry summary of the mechanics applied (e.g. \"Rolled 18 (1d20+5) vs AC 15. Target takes 6 damage.\").\n"
+                       "   - \"narrative_hints\": Brief keywords for the storyteller (e.g. \"near miss\", \"bloody wound\").\n"
+                       "Output ONLY the JSON object.")).toString()
+        .arg(scenario, rulesContext, actorName,
           QString::fromUtf8(QJsonDocument(actorSheet).toJson(QJsonDocument::Compact)),
           QString::fromUtf8(QJsonDocument(intent).toJson(QJsonDocument::Compact)),
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     
     // Arbiter uses the "Analyzer" model if configured, or default
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("analyzer/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
