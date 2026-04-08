@@ -27,6 +27,7 @@ class QComboBox;
 class QTabWidget;
 class QListWidget;
 class QCheckBox;
+class QProgressBar;
 
 class SettingsDialog : public QDialog
 {
@@ -44,7 +45,21 @@ private:
     QWidget* createLLMTab();
     QWidget* createPromptsTab();
     QWidget* createAnalyzerTab();
+    QWidget* createAgentsTab();
     QWidget* createEditorTab();
+
+    struct AgentConfig {
+        QComboBox *providerCombo;
+        QComboBox *modelCombo;
+        QString keyPrefix; // e.g. "analyzer", "synopsis_file"
+    };
+    QHash<QString, AgentConfig> m_agentConfigs;
+
+    void updateModelCombos(LLMProvider provider);
+    void testAgentConnection(const QString &agentId);
+
+    QHash<LLMProvider, QStringList> m_modelCache;
+    QProgressBar *m_testProgressBar = nullptr;
 
     QTabWidget *m_tabWidget = nullptr;
 

@@ -52,13 +52,17 @@ void SimulationGriot::narrate(const QString &actorName, const QJsonObject &inten
 
     LLMRequest req;
     
-    // Griot uses the creative model (default chat)
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    req.model = (req.provider == LLMProvider::OpenAI) 
-        ? settings.value(QStringLiteral("llm/openai/model")).toString()
-        : (req.provider == LLMProvider::Anthropic)
-            ? settings.value(QStringLiteral("llm/anthropic/model")).toString()
-            : settings.value(QStringLiteral("llm/ollama/model")).toString();
+    // Griot uses creative settings
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_griot_provider"), 
+                                                           settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    req.model = settings.value(QStringLiteral("simulation/sim_griot_model")).toString();
+    if (req.model.isEmpty()) {
+        req.model = (req.provider == LLMProvider::OpenAI) 
+            ? settings.value(QStringLiteral("llm/openai/model")).toString()
+            : (req.provider == LLMProvider::Anthropic)
+                ? settings.value(QStringLiteral("llm/anthropic/model")).toString()
+                : settings.value(QStringLiteral("llm/ollama/model")).toString();
+    }
     
     req.messages.append({QStringLiteral("system"), systemPrompt});
     req.messages.append({QStringLiteral("user"), QStringLiteral("Narrate the event.")});

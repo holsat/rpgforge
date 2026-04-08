@@ -174,8 +174,12 @@ void CharacterGenerator::generateCharacter()
         }
 
         LLMRequest req;
-        req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-        req.model = (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")).toString() : settings.value(QStringLiteral("llm/ollama/model")).toString();
+        req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("chargen/chargen_provider"), 
+                                                               settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+        req.model = settings.value(QStringLiteral("chargen/chargen_model")).toString();
+        if (req.model.isEmpty()) {
+            req.model = (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")).toString() : settings.value(QStringLiteral("llm/ollama/model")).toString();
+        }
         
         req.messages.append({QStringLiteral("system"), systemPrompt});
         req.messages.append({QStringLiteral("user"), userPrompt});

@@ -167,7 +167,9 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
 {
     LLMRequest req;
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("synopsis/synopsis_file_provider"), 
+                                                           settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    req.model = settings.value(QStringLiteral("synopsis/synopsis_file_model")).toString();
     req.stream = false;
     
     LLMMessage sys;
@@ -218,7 +220,9 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
 
     LLMRequest req;
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("synopsis/synopsis_folder_provider"), 
+                                                           settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    req.model = settings.value(QStringLiteral("synopsis/synopsis_folder_model")).toString();
     req.stream = false;
     
     LLMMessage sys;

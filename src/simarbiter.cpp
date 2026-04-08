@@ -82,10 +82,17 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
 
     LLMRequest req;
     
-    // Arbiter uses the "Analyzer" model if configured, or default
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("analyzer/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
-    req.model = settings.value(QStringLiteral("analyzer/model"), 
-        (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")) : settings.value(QStringLiteral("llm/ollama/model"))).toString();
+    // 1. Try agent-specific setting
+    // 2. Try legacy analyzer setting
+    // 3. Fallback to global default
+    int defaultProv = settings.value(QStringLiteral("analyzer/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt();
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_arbiter_provider"), defaultProv).toInt());
+    
+    req.model = settings.value(QStringLiteral("simulation/sim_arbiter_model")).toString();
+    if (req.model.isEmpty()) {
+        req.model = settings.value(QStringLiteral("analyzer/model"), 
+            (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")) : settings.value(QStringLiteral("llm/ollama/model"))).toString();
+    }
     
     req.messages.append({QStringLiteral("system"), systemPrompt});
     req.messages.append({QStringLiteral("user"), QStringLiteral("Apply the rules and generate the outcome JSON.")});

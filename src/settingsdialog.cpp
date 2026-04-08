@@ -33,6 +33,9 @@
 #include <QInputDialog>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProgressBar>
+#include <QMessageBox>
+#include <QScrollArea>
 
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent)
@@ -49,12 +52,18 @@ void SettingsDialog::setupUi()
     auto *mainLayout = new QVBoxLayout(this);
     m_tabWidget = new QTabWidget(this);
 
-    m_tabWidget->addTab(createLLMTab(), i18n("LLM Integration"));
-    m_tabWidget->addTab(createPromptsTab(), i18n("Prompt Templates"));
+    m_tabWidget->addTab(createLLMTab(), i18n("LLM Providers"));
+    m_tabWidget->addTab(createAgentsTab(), i18n("AI Agents"));
+    m_tabWidget->addTab(createPromptsTab(), i18n("System Prompts"));
     m_tabWidget->addTab(createAnalyzerTab(), i18n("Game Analyzer"));
     m_tabWidget->addTab(createEditorTab(), i18n("Editor"));
 
     mainLayout->addWidget(m_tabWidget);
+
+    m_testProgressBar = new QProgressBar(this);
+    m_testProgressBar->setRange(0, 0); // Indeterminate
+    m_testProgressBar->hide();
+    mainLayout->addWidget(m_testProgressBar);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
@@ -152,6 +161,109 @@ QWidget* SettingsDialog::createLLMTab()
 
     layout->addStretch();
     return tab;
+}
+
+QWidget* SettingsDialog::createAgentsTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QVBoxLayout(tab);
+
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    auto *container = new QWidget(this);
+    auto *form = new QFormLayout(container);
+
+    auto createAgentRow = [&](const QString &id, const QString &label, const QString &prefix) {
+        auto *prov = new QComboBox(this);
+        prov->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok"), QStringLiteral("Gemini")});
+        
+        auto *model = new QComboBox(this);
+        model->setEditable(true);
+        model->setMinimumWidth(200);
+        
+        auto *rowLayout = new QHBoxLayout();
+        rowLayout->addWidget(prov);
+        rowLayout->addWidget(model);
+        
+        form->addRow(label + QStringLiteral(":"), rowLayout);
+        m_agentConfigs[id] = {prov, model, prefix};
+
+        connect(prov, &QComboBox::currentIndexChanged, this, [this, id](int index) {
+            updateModelCombos(static_cast<LLMProvider>(index));
+        });
+    };
+
+    createAgentRow(QStringLiteral("analyzer"), i18n("Game Analyzer"), QStringLiteral("analyzer"));
+    createAgentRow(QStringLiteral("synopsis_file"), i18n("File Synopsis"), QStringLiteral("synopsis"));
+    createAgentRow(QStringLiteral("synopsis_folder"), i18n("Folder Synopsis"), QStringLiteral("synopsis"));
+    createAgentRow(QStringLiteral("chargen"), i18n("Character Generator"), QStringLiteral("chargen"));
+    createAgentRow(QStringLiteral("sim_arbiter"), i18n("Simulation Arbiter"), QStringLiteral("simulation"));
+    createAgentRow(QStringLiteral("sim_griot"), i18n("Simulation Griot"), QStringLiteral("simulation"));
+    createAgentRow(QStringLiteral("sim_actor"), i18n("Simulation Actor"), QStringLiteral("simulation"));
+
+    scrollArea->setWidget(container);
+    layout->addWidget(scrollArea);
+
+    auto *testBtn = new QPushButton(i18n("Test All Agent Connections"), this);
+    layout->addWidget(testBtn);
+    connect(testBtn, &QPushButton::clicked, this, [this]() {
+        m_testProgressBar->show();
+        QStringList agentIds = m_agentConfigs.keys();
+        auto *completed = new int(0);
+        auto *failed = new int(0);
+        
+        for (const QString &id : agentIds) {
+            LLMRequest req;
+            req.provider = static_cast<LLMProvider>(m_agentConfigs[id].providerCombo->currentIndex());
+            req.model = m_agentConfigs[id].modelCombo->currentText();
+            LLMMessage msg;
+            msg.role = QStringLiteral("user");
+            msg.content = QStringLiteral("Respond with OK");
+            req.messages << msg;
+            req.stream = false;
+
+            LLMService::instance().sendNonStreamingRequest(req, [this, completed, failed, agentIds](const QString &response) {
+                (*completed)++;
+                if (response.isEmpty()) (*failed)++;
+                
+                if (*completed == agentIds.size()) {
+                    m_testProgressBar->hide();
+                    if (*failed > 0) {
+                        QMessageBox::critical(this, i18n("Connection Test Failed"), 
+                            i18n("%1 agent(s) failed to connect. Please verify your API keys and model names.", *failed));
+                    } else {
+                        QMessageBox::information(this, i18n("Connection Test Successful"), 
+                            i18n("All agents connected successfully."));
+                    }
+                    delete completed;
+                    delete failed;
+                }
+            });
+        }
+    });
+
+    return tab;
+}
+
+void SettingsDialog::updateModelCombos(LLMProvider provider)
+{
+    if (m_modelCache.contains(provider)) {
+        for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
+            auto &config = it.value();
+            if (static_cast<LLMProvider>(config.providerCombo->currentIndex()) == provider) {
+                QString current = config.modelCombo->currentText();
+                config.modelCombo->clear();
+                config.modelCombo->addItems(m_modelCache[provider]);
+                config.modelCombo->setEditText(current);
+            }
+        }
+        return;
+    }
+
+    LLMService::instance().fetchModels(provider, [this, provider](const QStringList &models) {
+        m_modelCache[provider] = models;
+        updateModelCombos(provider);
+    });
 }
 
 QWidget* SettingsDialog::createPromptsTab()
@@ -281,6 +393,30 @@ void SettingsDialog::load()
     m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/provider"), 0).toInt());
     m_analyzerModelEdit->setText(settings.value(QStringLiteral("analyzer/model")).toString());
 
+    // Load Agent Configurations
+    for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
+        const QString &id = it.key();
+        auto &config = it.value();
+        
+        int providerIdx = settings.value(config.keyPrefix + QStringLiteral("/") + id + QStringLiteral("_provider"), 
+                                        settings.value(QStringLiteral("llm/provider"), 0)).toInt();
+        config.providerCombo->setCurrentIndex(providerIdx);
+        
+        // Populate model combo for this provider
+        updateModelCombos(static_cast<LLMProvider>(providerIdx));
+        
+        QString defaultModel;
+        switch (static_cast<LLMProvider>(providerIdx)) {
+            case LLMProvider::OpenAI: defaultModel = settings.value(QStringLiteral("llm/openai/model")).toString(); break;
+            case LLMProvider::Anthropic: defaultModel = settings.value(QStringLiteral("llm/anthropic/model")).toString(); break;
+            case LLMProvider::Ollama: defaultModel = settings.value(QStringLiteral("llm/ollama/model")).toString(); break;
+            case LLMProvider::Grok: defaultModel = settings.value(QStringLiteral("llm/grok/model")).toString(); break;
+            case LLMProvider::Gemini: defaultModel = settings.value(QStringLiteral("llm/gemini/model")).toString(); break;
+        }
+
+        config.modelCombo->setEditText(settings.value(config.keyPrefix + QStringLiteral("/") + id + QStringLiteral("_model"), defaultModel).toString());
+    }
+
     // Load Core System Prompts
     m_analyzerPromptEdit->setText(settings.value(QStringLiteral("analyzer/system_prompt"),
         QStringLiteral("You are an expert RPG game design analyzer.\n"
@@ -393,6 +529,14 @@ void SettingsDialog::save()
     settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
     settings.setValue(QStringLiteral("analyzer/provider"), m_analyzerProviderCombo->currentIndex());
     settings.setValue(QStringLiteral("analyzer/model"), m_analyzerModelEdit->text());
+
+    // Save Agent Configurations
+    for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
+        const QString &id = it.key();
+        auto &config = it.value();
+        settings.setValue(config.keyPrefix + QStringLiteral("/") + id + QStringLiteral("_provider"), config.providerCombo->currentIndex());
+        settings.setValue(config.keyPrefix + QStringLiteral("/") + id + QStringLiteral("_model"), config.modelCombo->currentText());
+    }
 
     // Save Core System Prompts
     settings.setValue(QStringLiteral("analyzer/system_prompt"), m_analyzerPromptEdit->text());

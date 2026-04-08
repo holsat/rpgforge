@@ -70,7 +70,8 @@ void AnalyzerService::analyzeDocument(const QString &filePath, const QString &co
 void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QString &content, const QList<SearchResult> &results)
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("analyzer/provider"), settings.value(QStringLiteral("llm/provider"), 0).toInt()).toInt());
+    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("analyzer/analyzer_provider"), 
+                                                                   settings.value(QStringLiteral("llm/provider"), 0)).toInt());
     
     QString systemPrompt = settings.value(QStringLiteral("analyzer/system_prompt"), 
         QStringLiteral("You are an expert RPG game design analyzer.\n"
@@ -94,7 +95,8 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     // Model is resolved by LLMService from settings; setting an empty model here
     // lets sendNonStreamingRequest use the provider's configured default.
     // If analyzer/model is explicitly set, that takes precedence.
-    req.model = settings.value(QStringLiteral("analyzer/model")).toString();
+    req.model = settings.value(QStringLiteral("analyzer/analyzer_model"), 
+                               settings.value(QStringLiteral("analyzer/model"))).toString();
     req.temperature = 0.2; // Low temp for analytical tasks
     req.stream = false;
     

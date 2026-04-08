@@ -85,9 +85,11 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
 
     LLMRequest req;
 
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    // Leave req.model empty so LLMService::validateModelThenDispatch handles resolution,
-    // including Grok/Gemini support and the model-not-found picker.
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_actor_provider"), 
+                                                           settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    req.model = settings.value(QStringLiteral("simulation/sim_actor_model")).toString();
+    // Leave req.model empty if setting is empty so LLMService handles default
+    
     req.messages.append({QStringLiteral("system"), systemPrompt});
     req.messages.append({QStringLiteral("user"), QStringLiteral("What is your next move?")});
     req.stream = false;
