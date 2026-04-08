@@ -27,6 +27,7 @@
 #include <QSettings>
 #include <QTimer>
 #include <QDebug>
+#include <QCoreApplication>
 #include <KLocalizedString>
 
 SynopsisService& SynopsisService::instance()
@@ -148,21 +149,23 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
 
     QString relPath = item->path;
     LLMService::instance().sendNonStreamingRequest(req, [this, relPath](const QString &response) {
-        ProjectTreeItem *target = m_model->findItem(relPath);
-        if (target) {
-            QModelIndex idx = m_model->indexForItem(target);
-            if (idx.isValid()) {
-                m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
-                ProjectManager::instance().saveProject();
-                
-                // Trigger parent update immediately
-                if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
-                    requestUpdate(target->parent->path, true); // Force folder re-eval as child changed
+        QMetaObject::invokeMethod(qApp, [this, relPath, response]() {
+            ProjectTreeItem *target = m_model->findItem(relPath);
+            if (target) {
+                QModelIndex idx = m_model->indexForItem(target);
+                if (idx.isValid()) {
+                    m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
+                    ProjectManager::instance().saveProject();
+                    
+                    // Trigger parent update immediately
+                    if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
+                        requestUpdate(target->parent->path, true); // Force folder re-eval as child changed
+                    }
                 }
             }
-        }
-        m_activeRequests.remove(relPath);
-        processNext();
+            m_activeRequests.remove(relPath);
+            processNext();
+        });
     });
 }
 
@@ -199,20 +202,22 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
 
     QString relPath = item->path;
     LLMService::instance().sendNonStreamingRequest(req, [this, relPath](const QString &response) {
-        ProjectTreeItem *target = m_model->findItem(relPath);
-        if (target) {
-            QModelIndex idx = m_model->indexForItem(target);
-            if (idx.isValid()) {
-                m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
-                ProjectManager::instance().saveProject();
-                
-                // Bubble up to grandparent
-                if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
-                    requestUpdate(target->parent->path, true);
+        QMetaObject::invokeMethod(qApp, [this, relPath, response]() {
+            ProjectTreeItem *target = m_model->findItem(relPath);
+            if (target) {
+                QModelIndex idx = m_model->indexForItem(target);
+                if (idx.isValid()) {
+                    m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
+                    ProjectManager::instance().saveProject();
+                    
+                    // Bubble up to grandparent
+                    if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
+                        requestUpdate(target->parent->path, true);
+                    }
                 }
             }
-        }
-        m_activeRequests.remove(relPath);
-        processNext();
+            m_activeRequests.remove(relPath);
+            processNext();
+        });
     });
 }
