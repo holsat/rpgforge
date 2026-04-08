@@ -50,9 +50,24 @@ public:
     void requestUpdate(const QString &relativePath, bool force = false);
 
     /**
+     * @brief Cancels any pending or active request for the given path.
+     */
+    void cancelRequest(const QString &relativePath);
+
+    /**
      * @brief Scans the entire project and requests updates for all items with missing synopses.
      */
     void scanProject();
+
+    /**
+     * @brief Pauses processing of the synopsis queue.
+     */
+    void pause();
+
+    /**
+     * @brief Resumes processing of the synopsis queue.
+     */
+    void resume();
 
 private Q_SLOTS:
     void processNext();
@@ -68,6 +83,7 @@ private:
     QQueue<QString> m_queue;
     QSet<QString> m_activeRequests;
     bool m_isProcessing = false;
+    bool m_paused = false;
 };
 
 #endif // SYNOPSISSERVICE_H

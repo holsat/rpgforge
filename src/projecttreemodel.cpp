@@ -18,6 +18,7 @@
 
 #include "projecttreemodel.h"
 #include "projectmanager.h"
+#include "synopsisservice.h"
 #include <QMimeData>
 #include <QJsonDocument>
 #include <QFileInfo>
@@ -293,6 +294,7 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     int row = parentItem->children.count();
 
+    SynopsisService::instance().pause();
     if (!m_bulkImporting) beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::Folder;
@@ -301,6 +303,7 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path
     item->parent = parentItem;
     parentItem->children.append(item);
     if (!m_bulkImporting) endInsertRows();
+    SynopsisService::instance().resume();
 
     // During bulk import the view is reset at the end; return a best-effort index.
     return index(row, 0, parent);
@@ -311,6 +314,7 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     int row = parentItem->children.count();
 
+    SynopsisService::instance().pause();
     if (!m_bulkImporting) beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::File;
@@ -319,6 +323,7 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
     item->parent = parentItem;
     parentItem->children.append(item);
     if (!m_bulkImporting) endInsertRows();
+    SynopsisService::instance().resume();
 
     return index(row, 0, parent);
 }
@@ -328,6 +333,7 @@ QModelIndex ProjectTreeModel::addTransientVersionLink(const QString &name, const
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     int row = parentItem->children.count();
     
+    SynopsisService::instance().pause();
     beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::File;
@@ -337,6 +343,7 @@ QModelIndex ProjectTreeModel::addTransientVersionLink(const QString &name, const
     item->parent = parentItem;
     parentItem->children.append(item);
     endInsertRows();
+    SynopsisService::instance().resume();
     
     return index(row, 0, parent);
 }
@@ -422,10 +429,13 @@ bool ProjectTreeModel::removeItem(const QModelIndex &index)
     ProjectTreeItem *parentItem = item->parent;
     int row = index.row();
 
+    SynopsisService::instance().cancelRequest(item->path);
+    SynopsisService::instance().pause();
     beginRemoveRows(index.parent(), row, row);
     parentItem->children.removeAt(row);
     delete item;
     endRemoveRows();
+    SynopsisService::instance().resume();
     return true;
 }
 
@@ -456,15 +466,18 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
     QModelIndex oldParentIndex = indexForItem(oldParent);
     QModelIndex newParentIndex = indexForItem(newParent);
 
+    SynopsisService::instance().pause();
     if (beginMoveRows(oldParentIndex, oldRow, oldRow, newParentIndex, newRow)) {
         oldParent->children.removeAt(oldRow);
         if (oldParent == newParent && newRow > oldRow) newRow--;
         newParent->children.insert(newRow, item);
         item->parent = newParent;
         endMoveRows();
+        SynopsisService::instance().resume();
         return true;
     }
 
+    SynopsisService::instance().resume();
     return false;
 }
 

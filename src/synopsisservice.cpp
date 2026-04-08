@@ -50,7 +50,7 @@ void SynopsisService::setModel(ProjectTreeModel *model)
 
 void SynopsisService::requestUpdate(const QString &relativePath, bool force)
 {
-    if (!m_model) return;
+    if (!m_model || relativePath.isEmpty()) return;
     
     ProjectTreeItem *item = m_model->findItem(relativePath);
     if (!item) return;
@@ -61,15 +61,21 @@ void SynopsisService::requestUpdate(const QString &relativePath, bool force)
         m_queue.enqueue(relativePath);
     }
 
-    if (!m_isProcessing) {
+    if (!m_isProcessing && !m_paused) {
         m_isProcessing = true;
         QTimer::singleShot(1000, this, &SynopsisService::processNext);
     }
 }
 
+void SynopsisService::cancelRequest(const QString &relativePath)
+{
+    m_queue.removeAll(relativePath);
+    m_activeRequests.remove(relativePath);
+}
+
 void SynopsisService::scanProject()
 {
-    if (!m_model || !ProjectManager::instance().isProjectOpen()) return;
+    if (!m_model || !ProjectManager::instance().isProjectOpen() || m_paused) return;
 
     QList<ProjectTreeItem*> items;
     std::function<void(ProjectTreeItem*)> scan = [&](ProjectTreeItem *item) {
@@ -98,8 +104,28 @@ void SynopsisService::scanProject()
     }
 }
 
+void SynopsisService::pause()
+{
+    m_paused = true;
+}
+
+void SynopsisService::resume()
+{
+    if (!m_paused) return;
+    m_paused = false;
+    if (!m_isProcessing && !m_queue.isEmpty()) {
+        m_isProcessing = true;
+        processNext();
+    }
+}
+
 void SynopsisService::processNext()
 {
+    if (m_paused) {
+        m_isProcessing = false;
+        return;
+    }
+
     if (m_queue.isEmpty()) {
         m_isProcessing = false;
         return;
@@ -109,7 +135,8 @@ void SynopsisService::processNext()
     ProjectTreeItem *item = m_model->findItem(relPath);
     
     if (!item) {
-        QTimer::singleShot(100, this, &SynopsisService::processNext);
+        // Item was deleted while in queue, skip to next immediately
+        processNext();
         return;
     }
 
@@ -117,13 +144,19 @@ void SynopsisService::processNext()
 
     if (item->type == ProjectTreeItem::File) {
         QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
+        if (!QFile::exists(fullPath)) {
+            m_activeRequests.remove(relPath);
+            processNext();
+            return;
+        }
+
         QFile file(fullPath);
         if (file.open(QIODevice::ReadOnly)) {
             QString content = VariableManager::stripMetadata(QString::fromUtf8(file.readAll()));
             updateFileSynopsis(item, content);
         } else {
             m_activeRequests.remove(relPath);
-            QTimer::singleShot(100, this, &SynopsisService::processNext);
+            processNext();
         }
     } else {
         updateFolderSynopsis(item);
@@ -134,7 +167,6 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
 {
     LLMRequest req;
     req.provider = static_cast<LLMProvider>(QSettings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge")).value(QStringLiteral("llm/provider"), 0).toInt());
-    // Leave req.model empty — LLMService resolves it from settings for the active provider.
     req.stream = false;
     
     LLMMessage sys;
@@ -149,23 +181,21 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
 
     QString relPath = item->path;
     LLMService::instance().sendNonStreamingRequest(req, [this, relPath](const QString &response) {
-        QMetaObject::invokeMethod(qApp, [this, relPath, response]() {
-            ProjectTreeItem *target = m_model->findItem(relPath);
-            if (target) {
-                QModelIndex idx = m_model->indexForItem(target);
-                if (idx.isValid()) {
-                    m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
-                    ProjectManager::instance().saveProject();
-                    
-                    // Trigger parent update immediately
-                    if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
-                        requestUpdate(target->parent->path, true); // Force folder re-eval as child changed
-                    }
+        ProjectTreeItem *target = m_model->findItem(relPath);
+        if (target) {
+            QModelIndex idx = m_model->indexForItem(target);
+            if (idx.isValid()) {
+                m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
+                ProjectManager::instance().saveProject();
+                
+                // Trigger parent update immediately
+                if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
+                    requestUpdate(target->parent->path, true);
                 }
             }
-            m_activeRequests.remove(relPath);
-            processNext();
-        });
+        }
+        m_activeRequests.remove(relPath);
+        processNext();
     });
 }
 
@@ -178,7 +208,6 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
         }
     }
 
-    // We can update folder if it has child synopses OR if it's completely empty
     if (childSynopses.isEmpty() && !item->children.isEmpty()) {
         m_activeRequests.remove(item->path);
         processNext();
@@ -187,7 +216,6 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
 
     LLMRequest req;
     req.provider = static_cast<LLMProvider>(QSettings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge")).value(QStringLiteral("llm/provider"), 0).toInt());
-    // Leave req.model empty — LLMService resolves it from settings for the active provider.
     req.stream = false;
     
     LLMMessage sys;
@@ -202,22 +230,20 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
 
     QString relPath = item->path;
     LLMService::instance().sendNonStreamingRequest(req, [this, relPath](const QString &response) {
-        QMetaObject::invokeMethod(qApp, [this, relPath, response]() {
-            ProjectTreeItem *target = m_model->findItem(relPath);
-            if (target) {
-                QModelIndex idx = m_model->indexForItem(target);
-                if (idx.isValid()) {
-                    m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
-                    ProjectManager::instance().saveProject();
-                    
-                    // Bubble up to grandparent
-                    if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
-                        requestUpdate(target->parent->path, true);
-                    }
+        ProjectTreeItem *target = m_model->findItem(relPath);
+        if (target) {
+            QModelIndex idx = m_model->indexForItem(target);
+            if (idx.isValid()) {
+                m_model->setData(idx, response.trimmed().replace(QLatin1Char('\n'), QLatin1Char(' ')), ProjectTreeModel::SynopsisRole);
+                ProjectManager::instance().saveProject();
+                
+                // Bubble up to grandparent
+                if (target->parent && target->parent != m_model->itemFromIndex(QModelIndex())) {
+                    requestUpdate(target->parent->path, true);
                 }
             }
-            m_activeRequests.remove(relPath);
-            processNext();
-        });
+        }
+        m_activeRequests.remove(relPath);
+        processNext();
     });
 }
