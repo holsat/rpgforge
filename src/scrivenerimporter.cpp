@@ -92,6 +92,8 @@ void ScrivenerImporter::processBinderItem(const QDomElement &element,
     QString type = element.attribute(QStringLiteral("Type"));
     QString title = element.firstChildElement(QStringLiteral("Title")).text();
     
+    if (title.isEmpty()) title = i18n("Untitled");
+
     m_processedItems++;
     int percentage = (m_processedItems * 100) / qMax(1, m_totalItems);
     Q_EMIT progress(percentage, i18n("Importing: %1", title));
@@ -104,21 +106,47 @@ void ScrivenerImporter::processBinderItem(const QDomElement &element,
         category = ProjectTreeItem::Manuscript;
     } else if (type == QStringLiteral("ResearchFolder")) {
         category = ProjectTreeItem::Research;
-    } else if (type == QStringLiteral("Folder")) {
-        // Inherit category from parent if possible
-        if (parentIndex.isValid()) {
-            ProjectTreeItem *parent = model->itemFromIndex(parentIndex);
-            if (parent->category == ProjectTreeItem::Manuscript || parent->category == ProjectTreeItem::Chapter) {
-                category = ProjectTreeItem::Chapter;
-            } else {
-                category = parent->category;
-            }
+    } else if (type == QStringLiteral("TrashFolder")) {
+        // Skip trash for now or handle specifically
+        return;
+    } else if (parentIndex.isValid()) {
+        ProjectTreeItem *parent = model->itemFromIndex(parentIndex);
+        if (parent->category == ProjectTreeItem::Manuscript || parent->category == ProjectTreeItem::Chapter) {
+            category = (type == QStringLiteral("Folder")) ? ProjectTreeItem::Chapter : ProjectTreeItem::Scene;
+        } else {
+            category = parent->category;
         }
     }
 
+    // Determine target directory structure based on category
+    QString baseDir;
+    switch (category) {
+        case ProjectTreeItem::Manuscript:
+        case ProjectTreeItem::Chapter:
+        case ProjectTreeItem::Scene:
+            baseDir = QStringLiteral("manuscript");
+            break;
+        case ProjectTreeItem::Research:
+            baseDir = QStringLiteral("research");
+            break;
+        default:
+            baseDir = QString(); // Root-level or uncategorized
+    }
+
+    // Calculate relative path for this item
+    QString parentRelPath;
+    if (parentIndex.isValid()) {
+        parentRelPath = model->itemFromIndex(parentIndex)->path;
+    } else if (!baseDir.isEmpty()) {
+        parentRelPath = baseDir;
+    }
+
     if (type == QStringLiteral("Folder") || type == QStringLiteral("DraftFolder") || type == QStringLiteral("ResearchFolder")) {
-        // Create folder
-        currentIndex = model->addFolder(title, QString(), parentIndex);
+        // Create folder with a path to enable drag-and-drop tracking
+        QString safeFolderName = DocumentConverter::sanitizePrefix(title);
+        QString folderPath = parentRelPath.isEmpty() ? safeFolderName : parentRelPath + QDir::separator() + safeFolderName;
+        
+        currentIndex = model->addFolder(title, folderPath, parentIndex);
         if (category != ProjectTreeItem::None) {
             model->setData(currentIndex, static_cast<int>(category), ProjectTreeModel::CategoryRole);
         }
@@ -130,45 +158,96 @@ void ScrivenerImporter::processBinderItem(const QDomElement &element,
             processBinderItem(child, currentIndex, scrivPath, targetProjectDir, model);
             child = child.nextSiblingElement(QStringLiteral("BinderItem"));
         }
-    } else if (type == QStringLiteral("Text")) {
-        // Convert and import text
-        QString rtfPath = scrivPath + QStringLiteral("/Files/Data/") + uuid + QStringLiteral("/content.rtf");
-        if (QFile::exists(rtfPath)) {
-            DocumentConverter converter;
-            QString mediaDir = targetProjectDir + QStringLiteral("/media");
-            
-            // Calculate a relative path based on binder hierarchy for the filename
-            QString relPath;
-            if (parentIndex.isValid()) {
-                ProjectTreeItem *parent = model->itemFromIndex(parentIndex);
-                relPath = parent->path + QDir::separator();
+    } else {
+        // It's a leaf node (Text, PDF, Image, etc.)
+        QString dataDir = scrivPath + QStringLiteral("/Files/Data/") + uuid;
+        QDir dir(dataDir);
+        
+        QString sourceFile;
+        QString extension;
+        
+        if (dir.exists()) {
+            // Find the most relevant content file
+            QStringList entries = dir.entryList(QDir::Files);
+            // Priority: .rtf > .txt > .pdf > .jpg/.png
+            if (entries.contains(QStringLiteral("content.rtf"))) {
+                sourceFile = dir.absoluteFilePath(QStringLiteral("content.rtf"));
+                extension = QStringLiteral("rtf");
+            } else if (entries.contains(QStringLiteral("content.txt"))) {
+                sourceFile = dir.absoluteFilePath(QStringLiteral("content.txt"));
+                extension = QStringLiteral("txt");
+            } else {
+                for (const auto &e : entries) {
+                    if (e.startsWith(QStringLiteral("content."))) {
+                        sourceFile = dir.absoluteFilePath(e);
+                        extension = QFileInfo(e).suffix().toLower();
+                        break;
+                    }
+                }
             }
-            
+        }
+
+        if (!sourceFile.isEmpty()) {
             QString safeName = DocumentConverter::sanitizePrefix(title);
-            QString fileName = safeName + QStringLiteral(".md");
-            QString fullTargetRelPath = relPath + fileName;
+            QString targetExt = (extension == QStringLiteral("rtf") || extension == QStringLiteral("txt")) ? QStringLiteral("md") : extension;
+            QString fileName = safeName + QStringLiteral(".") + targetExt;
+            
+            QString fullTargetRelPath = parentRelPath.isEmpty() ? fileName : parentRelPath + QDir::separator() + fileName;
             QString absoluteTargetPath = QDir(targetProjectDir).absoluteFilePath(fullTargetRelPath);
 
             // Ensure directory exists
             QDir().mkpath(QFileInfo(absoluteTargetPath).absolutePath());
 
-            auto result = converter.convertToMarkdown(rtfPath, safeName, mediaDir);
-            if (result.success) {
-                QFile outFile(absoluteTargetPath);
-                if (outFile.open(QIODevice::WriteOnly)) {
-                    outFile.write(result.markdown.toUtf8());
-                    outFile.close();
-                    
-                    currentIndex = model->addFile(title, fullTargetRelPath, parentIndex);
-                    
-                    // Set category
-                    ProjectTreeItem *parentItem = model->itemFromIndex(parentIndex);
-                    if (parentItem->category == ProjectTreeItem::Manuscript || parentItem->category == ProjectTreeItem::Chapter) {
-                        model->setData(currentIndex, static_cast<int>(ProjectTreeItem::Scene), ProjectTreeModel::CategoryRole);
-                    } else {
-                        model->setData(currentIndex, static_cast<int>(parentItem->category), ProjectTreeModel::CategoryRole);
+            bool success = false;
+            if (extension == QStringLiteral("rtf")) {
+                DocumentConverter converter;
+                QString mediaDir = targetProjectDir + QStringLiteral("/media");
+                auto result = converter.convertToMarkdown(sourceFile, safeName, mediaDir);
+                if (result.success) {
+                    QFile outFile(absoluteTargetPath);
+                    if (outFile.open(QIODevice::WriteOnly)) {
+                        outFile.write(result.markdown.toUtf8());
+                        success = true;
                     }
                 }
+            } else if (extension == QStringLiteral("txt")) {
+                // Direct copy/read for text
+                QFile inFile(sourceFile);
+                if (inFile.open(QIODevice::ReadOnly)) {
+                    QFile outFile(absoluteTargetPath);
+                    if (outFile.open(QIODevice::WriteOnly)) {
+                        outFile.write(inFile.readAll());
+                        success = true;
+                    }
+                }
+            } else {
+                // Binary copy for PDF, Images, etc.
+                success = QFile::copy(sourceFile, absoluteTargetPath);
+            }
+
+            if (success) {
+                currentIndex = model->addFile(title, fullTargetRelPath, parentIndex);
+                if (category != ProjectTreeItem::None) {
+                    model->setData(currentIndex, static_cast<int>(category), ProjectTreeModel::CategoryRole);
+                }
+            }
+        }
+
+        // IMPORTANT: In Scrivener, "Text" items can ALSO have children (acting as both document and folder)
+        QDomElement children = element.firstChildElement(QStringLiteral("Children"));
+        if (!children.isNull()) {
+            // If it has children, it must behave like a folder in our tree
+            if (!currentIndex.isValid()) {
+                // If the file import failed or wasn't attempted, create a folder instead
+                QString safeName = DocumentConverter::sanitizePrefix(title);
+                QString folderPath = parentRelPath.isEmpty() ? safeName : parentRelPath + QDir::separator() + safeName;
+                currentIndex = model->addFolder(title, folderPath, parentIndex);
+            }
+
+            QDomElement child = children.firstChildElement(QStringLiteral("BinderItem"));
+            while (!child.isNull()) {
+                processBinderItem(child, currentIndex, scrivPath, targetProjectDir, model);
+                child = child.nextSiblingElement(QStringLiteral("BinderItem"));
             }
         }
     }
