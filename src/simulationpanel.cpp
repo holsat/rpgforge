@@ -30,6 +30,8 @@
 #include <QLabel>
 #include <QTabWidget>
 #include <QHeaderView>
+#include <QApplication>
+#include <KColorScheme>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QJsonDocument>
@@ -231,16 +233,21 @@ void SimulationPanel::onSimulationStopped()
 
 void SimulationPanel::onLogMessage(const QString &message)
 {
+    KColorScheme scheme(qApp->palette().currentColorGroup(), KColorScheme::View);
+    QString systemColor = scheme.foreground(KColorScheme::InactiveText).color().name();
+    QString arbiterColor = scheme.foreground(KColorScheme::LinkText).color().name();
+    QString decisionColor = scheme.foreground(KColorScheme::NeutralText).color().name();
+
     // Simple HTML styling for the log
     QString formatted = message;
     if (message.startsWith(QLatin1String("---"))) {
-        formatted = QStringLiteral("<b style='color: #555;'>%1</b>").arg(message);
+        formatted = QStringLiteral("<b style='color: %1;'>%2</b>").arg(systemColor, message);
     } else if (message.startsWith(QLatin1String("Arbiter:"))) {
-        formatted = QStringLiteral("<span style='color: #0055aa;'><i>%1</i></span>").arg(message);
+        formatted = QStringLiteral("<span style='color: %1;'><i>%2</i></span>").arg(arbiterColor, message);
     } else if (message.startsWith(QLatin1String("Griot:"))) {
         formatted = QStringLiteral("<span style='font-family: serif; font-size: 14px;'>%1</span>").arg(message.mid(6));
     } else if (message.contains(QLatin1String("decides to:"))) {
-        formatted = QStringLiteral("<b style='color: #aa5500;'>%1</b>").arg(message);
+        formatted = QStringLiteral("<b style='color: %1;'>%2</b>").arg(decisionColor, message);
     }
 
     m_logEdit->append(formatted);

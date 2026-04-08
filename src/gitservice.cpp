@@ -27,6 +27,21 @@
 #include <QMap>
 #include <QMutexLocker>
 #include <QSettings>
+#include <kwallet.h>
+
+// Credential callback payload for HTTPS Git operations using a Personal Access Token.
+struct PushCredPayload {
+    QByteArray username; // "x-access-token" for GitHub PATs
+    QByteArray password; // the token itself
+};
+
+static int pushCredCallback(git_credential **out, const char * /*url*/, const char * /*username_from_url*/,
+                            unsigned int allowed_types, void *payload)
+{
+    if (!(allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT)) return GIT_PASSTHROUGH;
+    auto *creds = static_cast<PushCredPayload *>(payload);
+    return git_credential_userpass_plaintext_new(out, creds->username.constData(), creds->password.constData());
+}
 
 // Creates a git_signature using the repository's configured user.name/user.email.
 // Falls back to reading RPGForge settings, then to a generic identity if nothing is set.
@@ -393,9 +408,25 @@ bool GitService::mergeBranch(const QString &path, const QString &sourceBranch)
 
 QFuture<bool> GitService::cloneRepo(const QString &url, const QString &path)
 {
-    return QtConcurrent::run([url, path]() {
+    // Read the cached token on the calling thread to avoid cross-thread access
+    // to KWallet; the GitHubService cache is populated on the main thread.
+    const QString token = GitHubService::instance().token();
+
+    return QtConcurrent::run([url, path, token]() {
         git_repository *repo = nullptr;
-        int err = git_clone(&repo, url.toUtf8().constData(), path.toUtf8().constData(), nullptr);
+        git_clone_options clone_opts = GIT_CLONE_OPTIONS_INIT;
+
+        PushCredPayload creds{
+            QByteArrayLiteral("x-access-token"),
+            token.toUtf8()
+        };
+
+        if (!token.isEmpty()) {
+            clone_opts.fetch_opts.callbacks.credentials = pushCredCallback;
+            clone_opts.fetch_opts.callbacks.payload = &creds;
+        }
+
+        int err = git_clone(&repo, url.toUtf8().constData(), path.toUtf8().constData(), &clone_opts);
         if (repo) git_repository_free(repo);
         return err == 0;
     });
@@ -621,20 +652,6 @@ bool GitService::hasUncommittedChanges(const QString &path)
 
     git_repository_free(repo);
     return changes;
-}
-
-// Credential callback payload for HTTPS pushes using a PAT.
-struct PushCredPayload {
-    QByteArray username; // "x-access-token" for GitHub PATs
-    QByteArray password; // the token itself
-};
-
-static int pushCredCallback(git_credential **out, const char * /*url*/, const char * /*username_from_url*/,
-                            unsigned int allowed_types, void *payload)
-{
-    if (!(allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT)) return GIT_PASSTHROUGH;
-    auto *creds = static_cast<PushCredPayload *>(payload);
-    return git_credential_userpass_plaintext_new(out, creds->username.constData(), creds->password.constData());
 }
 
 QFuture<bool> GitService::push(const QString &path, const QString &remoteName)

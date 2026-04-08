@@ -42,8 +42,8 @@ public:
     // Must be called once at startup to register cmark-gfm extensions
     static void init();
 
-    MarkdownParser() = default;
-    ~MarkdownParser() = default;
+    MarkdownParser();
+    ~MarkdownParser();
 
     // Parse the given markdown text and return all headings
     QVector<HeadingInfo> parseHeadings(const QString &markdown) const;
@@ -59,6 +59,15 @@ public:
 
     // Get all sibling headings at the same level under the same parent.
     static QVector<HeadingInfo> siblingsOf(const QVector<HeadingInfo> &headings, const HeadingInfo &heading);
+
+private:
+    struct Private;
+    void ensureParsed(const QString &markdown) const;
+    void clearCache() const;
+
+    mutable QString m_lastMarkdown;
+    mutable void* m_document = nullptr; // cmark_node*
+    mutable void* m_parser = nullptr;   // cmark_parser*
 };
 
 #endif // MARKDOWNPARSER_H

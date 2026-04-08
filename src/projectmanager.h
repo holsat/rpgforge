@@ -90,12 +90,14 @@ public:
     void setTree(const QJsonObject &tree);
 
     int calculateTotalWordCount() const;
+    void triggerWordCountUpdate();
 
 Q_SIGNALS:
     void projectOpened();
     void projectClosed();
     void projectSettingsChanged();
     void treeChanged();
+    void totalWordCountUpdated(int count);
 
 private:
     explicit ProjectManager(QObject *parent = nullptr);

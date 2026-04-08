@@ -601,6 +601,11 @@ void MainWindow::setupSidebar()
     connect(m_projectTree->model(), &ProjectTreeModel::rowsInserted, this, &MainWindow::updateProjectStats);
     connect(m_projectTree->model(), &ProjectTreeModel::rowsRemoved, this, &MainWindow::updateProjectStats);
 
+    connect(&ProjectManager::instance(), &ProjectManager::totalWordCountUpdated, this, [this](int count) {
+        m_projectStatsStatus->setText(i18n("Project: %1 words", count));
+        m_projectStatsStatus->show();
+    });
+
     // Reload preview stylesheet when project settings change (e.g., stylesheet path)
     connect(&ProjectManager::instance(), &ProjectManager::projectSettingsChanged, this, [this]() {
         if (m_previewPanel) {
@@ -1810,9 +1815,7 @@ void MainWindow::updateProjectStats()
         return;
     }
 
-    int totalWords = ProjectManager::instance().calculateTotalWordCount();
-    m_projectStatsStatus->setText(i18n("Project: %1 words", totalWords));
-    m_projectStatsStatus->show();
+    ProjectManager::instance().triggerWordCountUpdate();
 }
 
 static void collectProjectMarkdown(ProjectTreeItem *folder, QString &markdown, int &chapterCounter) {

@@ -29,13 +29,41 @@ void MarkdownParser::init()
     cmark_gfm_core_extensions_ensure_registered();
 }
 
-QString MarkdownParser::renderHtml(const QString &markdown) const
+MarkdownParser::MarkdownParser()
 {
-    if (markdown.isEmpty()) return QString();
+}
+
+MarkdownParser::~MarkdownParser()
+{
+    clearCache();
+}
+
+void MarkdownParser::clearCache() const
+{
+    if (m_document) {
+        cmark_node_free(static_cast<cmark_node*>(m_document));
+        m_document = nullptr;
+    }
+    if (m_parser) {
+        cmark_parser_free(static_cast<cmark_parser*>(m_parser));
+        m_parser = nullptr;
+    }
+}
+
+void MarkdownParser::ensureParsed(const QString &markdown) const
+{
+    if (m_document && markdown == m_lastMarkdown) {
+        return;
+    }
+
+    clearCache();
+    m_lastMarkdown = markdown;
+
+    if (markdown.isEmpty()) return;
 
     QByteArray utf8 = markdown.toUtf8();
     cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
-    if (!parser) return QString();
+    if (!parser) return;
 
     // Attach GFM extensions
     const char *exts[] = {"table", "strikethrough", "autolink", "tasklist"};
@@ -49,20 +77,30 @@ QString MarkdownParser::renderHtml(const QString &markdown) const
 
     if (!doc) {
         cmark_parser_free(parser);
-        return QString();
+        return;
     }
+
+    m_document = doc;
+    m_parser = parser;
+}
+
+QString MarkdownParser::renderHtml(const QString &markdown) const
+{
+    if (markdown.isEmpty()) return QString();
+
+    ensureParsed(markdown);
+    if (!m_document) return QString();
 
     // CMARK_OPT_SOURCEPOS adds data-sourcepos="line:col-line:col" to every block
     // CMARK_OPT_HARDBREAKS renders softbreaks as hardbreaks (<br />)
     // CMARK_OPT_UNSAFE allows inline HTML and CSS (needed for some Markdown features)
     int options = CMARK_OPT_SOURCEPOS | CMARK_OPT_HARDBREAKS | CMARK_OPT_UNSAFE;
-    char *rendered = cmark_render_html(doc, options, cmark_parser_get_syntax_extensions(parser));
+    char *rendered = cmark_render_html(static_cast<cmark_node*>(m_document), 
+                                       options, 
+                                       cmark_parser_get_syntax_extensions(static_cast<cmark_parser*>(m_parser)));
     QString html = QString::fromUtf8(rendered);
 
     free(rendered);
-    cmark_node_free(doc);
-    cmark_parser_free(parser);
-
     return html;
 }
 
@@ -71,19 +109,10 @@ QVector<LinkInfo> MarkdownParser::extractLinks(const QString &markdown) const
     QVector<LinkInfo> links;
     if (markdown.isEmpty()) return links;
 
-    QByteArray utf8 = markdown.toUtf8();
-    cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
-    if (!parser) return links;
+    ensureParsed(markdown);
+    if (!m_document) return links;
 
-    cmark_parser_feed(parser, utf8.constData(), utf8.size());
-    cmark_node *doc = cmark_parser_finish(parser);
-
-    if (!doc) {
-        cmark_parser_free(parser);
-        return links;
-    }
-
-    cmark_iter *iter = cmark_iter_new(doc);
+    cmark_iter *iter = cmark_iter_new(static_cast<cmark_node*>(m_document));
     cmark_event_type evType;
     while ((evType = cmark_iter_next(iter)) != CMARK_EVENT_DONE) {
         if (evType != CMARK_EVENT_ENTER) continue;
@@ -116,9 +145,6 @@ QVector<LinkInfo> MarkdownParser::extractLinks(const QString &markdown) const
     }
 
     cmark_iter_free(iter);
-    cmark_node_free(doc);
-    cmark_parser_free(parser);
-
     return links;
 }
 
@@ -127,31 +153,12 @@ QVector<HeadingInfo> MarkdownParser::parseHeadings(const QString &markdown) cons
     QVector<HeadingInfo> headings;
     if (markdown.isEmpty()) return headings;
 
-    QByteArray utf8 = markdown.toUtf8();
-    cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
-    if (!parser) return headings;
-
-    // Attach GFM extensions for better compatibility
-    cmark_syntax_extension *tableExt = cmark_find_syntax_extension("table");
-    if (tableExt) cmark_parser_attach_syntax_extension(parser, tableExt);
-    cmark_syntax_extension *strikeExt = cmark_find_syntax_extension("strikethrough");
-    if (strikeExt) cmark_parser_attach_syntax_extension(parser, strikeExt);
-
-    cmark_parser_feed(parser, utf8.constData(), utf8.size());
-    cmark_node *doc = cmark_parser_finish(parser);
-
-    if (!doc) {
-        cmark_parser_free(parser);
-        return headings;
-    }
+    ensureParsed(markdown);
+    if (!m_document) return headings;
 
     // Walk the AST looking for heading nodes
-    cmark_iter *iter = cmark_iter_new(doc);
-    if (!iter) {
-        cmark_node_free(doc);
-        cmark_parser_free(parser);
-        return headings;
-    }
+    cmark_iter *iter = cmark_iter_new(static_cast<cmark_node*>(m_document));
+    if (!iter) return headings;
 
     cmark_event_type evType;
     while ((evType = cmark_iter_next(iter)) != CMARK_EVENT_DONE) {
@@ -185,9 +192,6 @@ QVector<HeadingInfo> MarkdownParser::parseHeadings(const QString &markdown) cons
     }
 
     cmark_iter_free(iter);
-    cmark_node_free(doc);
-    cmark_parser_free(parser);
-
     return headings;
 }
 

@@ -26,6 +26,9 @@
 #include <QRegularExpression>
 #include <QWebEngineView>
 #include <QVBoxLayout>
+#include <QApplication>
+#include <KColorScheme>
+#include <KLocalizedString>
 
 PreviewPanel::PreviewPanel(QWidget *parent)
     : QWidget(parent)
@@ -250,17 +253,29 @@ QString PreviewPanel::loadProjectStylesheets() const
 
 QString PreviewPanel::wrapHtml(const QString &body) const
 {
-    // Base CSS for preview — provides sensible defaults
-    static const QString baseCss = QStringLiteral(
-        "body { font-family: sans-serif; line-height: 1.6; padding: 2em; max-width: 800px; margin: 0 auto; color: #333; }"
-        "pre { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }"
-        "code { font-family: monospace; background: #f4f4f4; padding: 0.2em 0.4em; border-radius: 3px; }"
+    // Derive theme colors from the application palette
+    QPalette pal = qApp->palette();
+    QString textColor = pal.color(QPalette::Text).name();
+    QString bgColor = pal.color(QPalette::Base).name();
+    QString linkColor = pal.color(QPalette::Link).name();
+    
+    // Use KColorScheme for more specific semantic colors if available
+    KColorScheme scheme(pal.currentColorGroup(), KColorScheme::View);
+    QString codeBgColor = scheme.background(KColorScheme::AlternateBackground).color().name();
+    QString borderColor = scheme.foreground(KColorScheme::InactiveText).color().name();
+
+    // Base CSS for preview — derived from the current theme
+    const QString baseCss = QStringLiteral(
+        "body { font-family: sans-serif; line-height: 1.6; padding: 2em; max-width: 800px; margin: 0 auto; color: %1; background-color: %2; }"
+        "a { color: %3; }"
+        "pre { background: %4; padding: 1em; overflow-x: auto; border-radius: 4px; border: 1px solid %5; }"
+        "code { font-family: monospace; background: %4; padding: 0.2em 0.4em; border-radius: 3px; }"
         "table { border-collapse: collapse; width: 100%; margin: 1em 0; }"
-        "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }"
-        "th { background-color: #f2f2f2; }"
-        "blockquote { border-left: 4px solid #ddd; padding-left: 1em; color: #666; margin-left: 0; }"
+        "th, td { border: 1px solid %5; padding: 8px; text-align: left; }"
+        "th { background-color: %4; }"
+        "blockquote { border-left: 4px solid %5; padding-left: 1em; color: %5; margin-left: 0; }"
         "img { max-width: 100%; height: auto; }"
-    );
+    ).arg(textColor, bgColor, linkColor, codeBgColor, borderColor);
 
     // Load project stylesheets (if any) — applied after base CSS so they can override
     QString projectCss = loadProjectStylesheets();

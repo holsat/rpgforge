@@ -33,6 +33,11 @@
 
 #ifdef QT_DEBUG
 static void logRequest(const QUrl &url, const QJsonObject &body, const QNetworkRequest &netRequest) {
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    if (!settings.value(QStringLiteral("llm/enable_logging"), false).toBool()) {
+        return;
+    }
+
     const QString logPath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
                             + QLatin1String("/llm_debug.log");
     QFile dbg(logPath);

@@ -28,6 +28,7 @@
 #include <QJsonArray>
 #include <QDir>
 #include <QDebug>
+#include <QtConcurrent>
 #include <QRegularExpression>
 
 ProjectManager& ProjectManager::instance()
@@ -447,4 +448,14 @@ int ProjectManager::calculateTotalWordCount() const
 {
     if (!isProjectOpen()) return 0;
     return countWordsInTree(tree(), projectPath());
+}
+
+void ProjectManager::triggerWordCountUpdate()
+{
+    if (!isProjectOpen()) return;
+
+    QtConcurrent::run([this]() {
+        int count = countWordsInTree(tree(), projectPath());
+        Q_EMIT totalWordCountUpdated(count);
+    });
 }

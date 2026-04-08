@@ -28,6 +28,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
+#include <QtConcurrent>
+#include <QUuid>
 #include <QDebug>
 #include <QtMath>
 #include <QByteArray>
@@ -245,55 +247,66 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             return;
         }
 
-        QSqlDatabase db = QSqlDatabase::database(QStringLiteral("rpgforge_vectors"));
-        if (!db.isOpen()) {
-            if (callback) callback({});
-            return;
-        }
-
-        QList<SearchResult> results;
-        QString excludeRel = excludeFile.isEmpty() ? QString() : QDir(m_projectPath).relativeFilePath(excludeFile);
-
-        QSqlQuery query(db);
-        if (excludeRel.isEmpty()) {
-            query.exec(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks"));
-        } else {
-            query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
-            query.addBindValue(excludeRel);
-            query.exec();
-        }
-
-        while (query.next()) {
-            QString path = query.value(0).toString();
-            QString head = query.value(1).toString();
-            QString cont = query.value(2).toString();
-            QByteArray blob = query.value(3).toByteArray();
-
-            QVector<float> vec;
-            QDataStream stream(&blob, QIODevice::ReadOnly);
-            stream.setVersion(QDataStream::Qt_6_0);
-            stream >> vec;
-
-            float sim = cosineSimilarity(queryVector, vec);
+        // Run the heavy similarity search in a background thread
+        QtConcurrent::run([this, queryVector, topK, excludeFile, callback]() {
+            QList<SearchResult> results;
+            QString connectionName = QStringLiteral("kb_search_") + QUuid::createUuid().toString();
             
-            // Basic filtering threshold could be added here
-            if (sim > 0.5f) { 
-                results.append({path, head, cont, sim});
+            {
+                QSqlDatabase db = QSqlDatabase::cloneDatabase(QSqlDatabase::database(QStringLiteral("rpgforge_vectors")), connectionName);
+                if (!db.open()) {
+                    if (callback) callback({});
+                    return;
+                }
+
+                QString excludeRel = excludeFile.isEmpty() ? QString() : QDir(m_projectPath).relativeFilePath(excludeFile);
+
+                QSqlQuery query(db);
+                if (excludeRel.isEmpty()) {
+                    query.exec(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks"));
+                } else {
+                    query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
+                    query.addBindValue(excludeRel);
+                    query.exec();
+                }
+
+                while (query.next()) {
+                    QString path = query.value(0).toString();
+                    QString head = query.value(1).toString();
+                    QString cont = query.value(2).toString();
+                    QByteArray blob = query.value(3).toByteArray();
+
+                    QVector<float> vec;
+                    QDataStream stream(&blob, QIODevice::ReadOnly);
+                    stream.setVersion(QDataStream::Qt_6_0);
+                    stream >> vec;
+
+                    float sim = cosineSimilarity(queryVector, vec);
+                    
+                    if (sim > 0.45f) { // Slightly lower threshold for initial filtering
+                        results.append({path, head, cont, sim});
+                    }
+                }
+                db.close();
             }
-        }
+            QSqlDatabase::removeDatabase(connectionName);
 
-        // Sort descending
-        std::sort(results.begin(), results.end(), [](const SearchResult &a, const SearchResult &b) {
-            return a.score > b.score;
+            // Sort descending
+            std::sort(results.begin(), results.end(), [](const SearchResult &a, const SearchResult &b) {
+                return a.score > b.score;
+            });
+
+            // Top K
+            if (results.size() > topK) {
+                results = results.mid(0, topK);
+            }
+
+            // Return results on the original thread if needed, but since it's a callback,
+            // we just invoke it. If the caller needs it on main thread, they should handle it.
+            // For safety with most UI-bound callbacks, we'll invoke it.
+            if (callback) {
+                callback(results);
+            }
         });
-
-        // Top K
-        if (results.size() > topK) {
-            results = results.mid(0, topK);
-        }
-
-        if (callback) {
-            callback(results);
-        }
     });
 }

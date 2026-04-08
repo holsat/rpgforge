@@ -94,14 +94,16 @@ void CorkboardCard::setupUi()
 
     if (!m_status.isEmpty()) {
         auto *statusLabel = new QLabel(m_status, this);
-        statusLabel->setStyleSheet(QStringLiteral("color: #7f8c8d; font-size: 10px; font-style: italic;"));
+        QString statusColor = qApp->palette().color(QPalette::Inactive, QPalette::WindowText).name();
+        statusLabel->setStyleSheet(QString(QStringLiteral("color: %1; font-size: 10px; font-style: italic;")).arg(statusColor));
         layout->addWidget(statusLabel);
     }
 
     auto *synopsisLabel = new QLabel(m_synopsis, this);
     synopsisLabel->setWordWrap(true);
     synopsisLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    synopsisLabel->setStyleSheet(QStringLiteral("color: #2c3e50; font-size: 11px;"));
+    QString synopsisColor = qApp->palette().color(QPalette::WindowText).name();
+    synopsisLabel->setStyleSheet(QString(QStringLiteral("color: %1; font-size: 11px;")).arg(synopsisColor));
     layout->addWidget(synopsisLabel, 1);
 }
 
