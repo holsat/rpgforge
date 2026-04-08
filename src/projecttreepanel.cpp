@@ -26,6 +26,7 @@
 #include "githubonboardingdialog.h"
 #include "historydialog.h"
 #include "markdownparser.h"
+#include "synopsisservice.h"
 #include <QComboBox>
 #include <QLabel>
 
@@ -180,7 +181,11 @@ void ProjectTreePanel::onProjectOpened()
     m_activeFolderIndex = QPersistentModelIndex();
     m_emptyWidget->hide();
     m_treeView->show();
+    
+    SynopsisService::instance().pause();
     m_model->setProjectData(ProjectManager::instance().tree());
+    SynopsisService::instance().resume();
+
     m_treeView->expandAll();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
@@ -197,7 +202,11 @@ void ProjectTreePanel::onProjectClosed()
     m_activeFolderIndex = QPersistentModelIndex();
     m_treeView->hide();
     m_emptyWidget->show();
+    
+    SynopsisService::instance().pause();
     m_model->setProjectData(QJsonObject());
+    SynopsisService::instance().resume();
+
     m_addFolderBtn->setEnabled(false);
     m_addFileBtn->setEnabled(false);
     m_syncBtn->setEnabled(false);
@@ -336,7 +345,9 @@ void ProjectTreePanel::syncProject()
 
     // 5. Final Save
     saveTree();
+    SynopsisService::instance().pause();
     m_model->setProjectData(m_model->projectData()); // Refresh view
+    SynopsisService::instance().resume();
     m_treeView->expandAll();
 
     // Check if there are any uncommitted changes before committing
@@ -425,7 +436,9 @@ void ProjectTreePanel::createExploration()
             // In hidden Git, we should ensure project state is saved.
             ProjectManager::instance().saveProject();
             // Trigger a refresh of the tree
+            SynopsisService::instance().pause();
             m_model->setProjectData(ProjectManager::instance().tree());
+            SynopsisService::instance().resume();
         } else {
             QMessageBox::critical(this, i18n("Error"), i18n("Failed to create exploration branch."));
         }
@@ -460,7 +473,9 @@ void ProjectTreePanel::switchExploration(const QString &name)
     if (GitService::instance().checkoutBranch(projectPath, name)) {
         // Refresh project data from disk
         ProjectManager::instance().openProject(ProjectManager::instance().projectFilePath());
+        SynopsisService::instance().pause();
         m_model->setProjectData(ProjectManager::instance().tree());
+        SynopsisService::instance().resume();
         m_treeView->expandAll();
     } else {
         QMessageBox::critical(this, i18n("Error"), i18n("Failed to switch to exploration branch."));

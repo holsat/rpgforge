@@ -1729,9 +1729,12 @@ void MainWindow::importScrivener()
         progressDialog->setLabelText(message);
     });
 
+    SynopsisService::instance().pause();
     importer.import(scrivPath, ProjectManager::instance().projectPath(), m_projectTree->model());
-    
+    SynopsisService::instance().resume();
+
     ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+
     ProjectManager::instance().saveProject();
     
     progressDialog->close();
@@ -1756,8 +1759,10 @@ void MainWindow::importWord()
     QString mediaDir = projectDir + QStringLiteral("/media");
     
     ProjectTreeModel *model = m_projectTree->model();
-    
+    SynopsisService::instance().pause();
+
     // 1. Find Manuscript folder
+
     QModelIndex manuscriptIdx;
     ProjectTreeItem *rootItem = model->itemFromIndex(QModelIndex());
     for (int i = 0; i < rootItem->children.count(); ++i) {
@@ -1804,9 +1809,11 @@ void MainWindow::importWord()
     
     ProjectManager::instance().setTree(model->projectData());
     ProjectManager::instance().saveProject();
-    
-    QMessageBox::information(this, i18n("Import Complete"), i18n("%1 documents imported successfully.", files.count()));
-}
+    SynopsisService::instance().resume();
+
+    QMessageBox::information(this, i18n("Import Complete"), i18n("Documents imported successfully."));
+    }
+
 
 void MainWindow::updateProjectStats()
 {
