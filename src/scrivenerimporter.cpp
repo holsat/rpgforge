@@ -66,8 +66,6 @@ bool ScrivenerImporter::import(const QString &scrivPath,
 
     Q_EMIT progress(0, i18n("Starting import..."));
 
-    // Suppress per-row signals during the recursive tree build to avoid
-    // rowsInserted → rowCount re-entrancy on partially-constructed items.
     model->beginBulkImport();
 
     // Process top-level binder items
@@ -103,61 +101,65 @@ void ScrivenerImporter::processBinderItem(const QDomElement &element,
     ProjectTreeItem::Category category = ProjectTreeItem::None;
     QModelIndex effectiveParent = parentIndex;
 
-    // Smart Folder Mapping: 
-    // If it's a top-level folder in Scrivener that exists in our Research structure,
-    // we should merge into our existing Research hierarchy.
-    if (!parentIndex.isValid()) {
-        bool isResearchType = (title == i18n("Characters") || title == i18n("Places") || title == i18n("Cultures") || type == QStringLiteral("ResearchFolder"));
-        
-        if (isResearchType || type == QStringLiteral("DraftFolder")) {
-            ProjectTreeItem *root = model->itemFromIndex(QModelIndex());
-            for (int i = 0; i < root->children.count(); ++i) {
-                ProjectTreeItem *child = root->children[i];
-                bool match = false;
-                if (type == QStringLiteral("DraftFolder") && child->category == ProjectTreeItem::Manuscript) match = true;
-                else if (type == QStringLiteral("ResearchFolder") && child->category == ProjectTreeItem::Research) match = true;
-                else if (title == i18n("Characters") && child->category == ProjectTreeItem::Research) {
-                    // Look deeper inside Research for Characters
-                    for (int j = 0; j < child->children.count(); ++j) {
-                        if (child->children[j]->category == ProjectTreeItem::Characters || child->children[j]->name == title) {
-                            effectiveParent = model->index(j, 0, model->index(i, 0, QModelIndex()));
-                            match = true; break;
-                        }
-                    }
-                } else if (title == i18n("Places") && child->category == ProjectTreeItem::Research) {
-                    for (int j = 0; j < child->children.count(); ++j) {
-                        if (child->children[j]->category == ProjectTreeItem::Places || child->children[j]->name == title) {
-                            effectiveParent = model->index(j, 0, model->index(i, 0, QModelIndex()));
-                            match = true; break;
-                        }
-                    }
-                }
+    // Helper to find standard folders anywhere in the tree
+    auto findCategoryFolder = [&](ProjectTreeItem::Category cat, const QString &name) -> QModelIndex {
+        std::function<QModelIndex(const QModelIndex&)> search;
+        search = [&](const QModelIndex &parent) -> QModelIndex {
+            int rows = model->rowCount(parent);
+            for (int i = 0; i < rows; ++i) {
+                QModelIndex idx = model->index(i, 0, parent);
+                ProjectTreeItem *it = model->itemFromIndex(idx);
+                if (it->category == cat || (cat == ProjectTreeItem::None && it->name == name)) return idx;
+                QModelIndex found = search(idx);
+                if (found.isValid()) return found;
+            }
+            return QModelIndex();
+        };
+        return search(QModelIndex());
+    };
 
-                if (match && !effectiveParent.isValid()) {
-                    effectiveParent = model->index(i, 0, QModelIndex());
-                }
-                if (effectiveParent.isValid()) break;
+    // Smart Folder Mapping for top-level Scrivener items
+    if (!parentIndex.isValid()) {
+        if (type == QStringLiteral("DraftFolder")) {
+            currentIndex = findCategoryFolder(ProjectTreeItem::Manuscript, i18n("Manuscript"));
+        } else if (type == QStringLiteral("ResearchFolder")) {
+            currentIndex = findCategoryFolder(ProjectTreeItem::Research, i18n("Research"));
+        } else if (title == i18n("Characters")) {
+            currentIndex = findCategoryFolder(ProjectTreeItem::Characters, title);
+        } else if (title == i18n("Places")) {
+            currentIndex = findCategoryFolder(ProjectTreeItem::Places, title);
+        } else if (title == i18n("Cultures")) {
+            currentIndex = findCategoryFolder(ProjectTreeItem::Cultures, title);
+        }
+        
+        // If we found a destination folder, it means we are "merging" this Scrivener folder
+        // into our existing one. We set currentIndex so we don't create a new folder,
+        // and we will process its children under this index.
+        if (currentIndex.isValid()) {
+            effectiveParent = model->parent(currentIndex);
+            category = model->itemFromIndex(currentIndex)->category;
+        }
+    }
+
+    // Determine category if not already set by merge
+    if (!currentIndex.isValid()) {
+        if (type == QStringLiteral("DraftFolder")) {
+            category = ProjectTreeItem::Manuscript;
+        } else if (type == QStringLiteral("ResearchFolder")) {
+            category = ProjectTreeItem::Research;
+        } else if (type == QStringLiteral("TrashFolder")) {
+            return;
+        } else if (effectiveParent.isValid()) {
+            ProjectTreeItem *parent = model->itemFromIndex(effectiveParent);
+            if (parent->category == ProjectTreeItem::Manuscript || parent->category == ProjectTreeItem::Chapter) {
+                category = (type == QStringLiteral("Folder")) ? ProjectTreeItem::Chapter : ProjectTreeItem::Scene;
+            } else {
+                category = parent->category;
             }
         }
     }
 
-    // Map Scrivener types to RPG Forge categories
-    if (type == QStringLiteral("DraftFolder")) {
-        category = ProjectTreeItem::Manuscript;
-    } else if (type == QStringLiteral("ResearchFolder")) {
-        category = ProjectTreeItem::Research;
-    } else if (type == QStringLiteral("TrashFolder")) {
-        return;
-    } else if (effectiveParent.isValid()) {
-        ProjectTreeItem *parent = model->itemFromIndex(effectiveParent);
-        if (parent->category == ProjectTreeItem::Manuscript || parent->category == ProjectTreeItem::Chapter) {
-            category = (type == QStringLiteral("Folder")) ? ProjectTreeItem::Chapter : ProjectTreeItem::Scene;
-        } else if (category == ProjectTreeItem::None) {
-            category = parent->category;
-        }
-    }
-
-    // Determine target directory structure
+    // Determine base directory for file storage
     QString baseDir;
     switch (category) {
         case ProjectTreeItem::Manuscript: case ProjectTreeItem::Chapter: case ProjectTreeItem::Scene:
@@ -175,24 +177,27 @@ void ScrivenerImporter::processBinderItem(const QDomElement &element,
     }
 
     if (type == QStringLiteral("Folder") || type == QStringLiteral("DraftFolder") || type == QStringLiteral("ResearchFolder")) {
-        // Reuse existing folder if it has the same name
-        ProjectTreeItem *parentItem = model->itemFromIndex(effectiveParent);
-        for (int i = 0; i < parentItem->children.count(); ++i) {
-            if (parentItem->children[i]->name == title && parentItem->children[i]->type == ProjectTreeItem::Folder) {
-                currentIndex = model->index(i, 0, effectiveParent);
-                break;
-            }
-        }
-
         if (!currentIndex.isValid()) {
-            QString safeFolderName = DocumentConverter::sanitizePrefix(title);
-            QString folderPath = parentRelPath.isEmpty() ? safeFolderName : parentRelPath + QDir::separator() + safeFolderName;
-            currentIndex = model->addFolder(title, folderPath, effectiveParent);
-            if (category != ProjectTreeItem::None) {
-                model->setData(currentIndex, static_cast<int>(category), ProjectTreeModel::CategoryRole);
+            // Check for existing folder with same name under parent (general reuse)
+            ProjectTreeItem *parentItem = model->itemFromIndex(effectiveParent);
+            for (int i = 0; i < parentItem->children.count(); ++i) {
+                if (parentItem->children[i]->name == title && parentItem->children[i]->type == ProjectTreeItem::Folder) {
+                    currentIndex = model->index(i, 0, effectiveParent);
+                    break;
+                }
+            }
+
+            if (!currentIndex.isValid()) {
+                QString safeFolderName = DocumentConverter::sanitizePrefix(title);
+                QString folderPath = parentRelPath.isEmpty() ? safeFolderName : parentRelPath + QDir::separator() + safeFolderName;
+                currentIndex = model->addFolder(title, folderPath, effectiveParent);
+                if (category != ProjectTreeItem::None) {
+                    model->setData(currentIndex, static_cast<int>(category), ProjectTreeModel::CategoryRole);
+                }
             }
         }
 
+        // Recursively process children
         QDomElement children = element.firstChildElement(QStringLiteral("Children"));
         QDomElement child = children.firstChildElement(QStringLiteral("BinderItem"));
         while (!child.isNull()) {
@@ -200,7 +205,7 @@ void ScrivenerImporter::processBinderItem(const QDomElement &element,
             child = child.nextSiblingElement(QStringLiteral("BinderItem"));
         }
     } else {
-        // Leaf Node processing (RTF, TXT, etc.)
+        // Leaf Node processing
         QString dataDir = scrivPath + QStringLiteral("/Files/Data/") + uuid;
         QDir dir(dataDir);
         QString sourceFile;
