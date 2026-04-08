@@ -174,7 +174,6 @@ void CharacterGenerator::generateCharacter()
         }
 
         LLMRequest req;
-        QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
         req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
         req.model = (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")).toString() : settings.value(QStringLiteral("llm/ollama/model")).toString();
         
