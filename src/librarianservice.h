@@ -1,0 +1,68 @@
+#ifndef LIBRARIANSERVICE_H
+#define LIBRARIANSERVICE_H
+
+#include <QObject>
+#include <QThread>
+#include <QMutex>
+#include <QTimer>
+#include <QFileSystemWatcher>
+#include "librariandatabase.h"
+
+class LLMService;
+
+/**
+ * @brief The LibrarianService class handles background project scanning, 
+ * data extraction (heuristic and semantic), and database synchronization.
+ */
+class LibrarianService : public QObject
+{
+    Q_OBJECT
+public:
+    explicit LibrarianService(LLMService *llmService, QObject *parent = nullptr);
+    ~LibrarianService();
+
+    void setProjectPath(const QString &path);
+    bool isPaused() const { return m_paused; }
+
+public slots:
+    void pause();
+    void resume();
+    void scanAll();
+    void scanFile(const QString &filePath);
+    void triggerSemanticReindex();
+
+signals:
+    void entityUpdated(qint64 entityId);
+    void scanningStarted();
+    void scanningFinished();
+    void errorOccurred(const QString &message);
+
+private slots:
+    void onFileChanged(const QString &path);
+    void processQueue();
+    void runSemanticBatch();
+
+private:
+    void extractHeuristic(const QString &filePath);
+    void extractSemantic(const QString &filePath);
+    
+    // Heuristic helpers
+    void parseMarkdownTables(const QString &content, const QString &sourceFile);
+    void parseMarkdownLists(const QString &content, const QString &sourceFile);
+
+    LLMService *m_llmService;
+    LibrarianDatabase *m_db;
+    QFileSystemWatcher *m_watcher;
+    QString m_projectPath;
+    
+    QMutex m_mutex;
+    bool m_paused = false;
+    QStringList m_pendingFiles;
+    
+    QTimer *m_processTimer;
+    QTimer *m_semanticTimer;
+    
+    bool m_isScanning = false;
+};
+
+#endif // LIBRARIANSERVICE_H

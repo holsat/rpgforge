@@ -89,6 +89,8 @@ add_executable(rpgforge
     src/llmservice.h
     src/librariandatabase.cpp
     src/librariandatabase.h
+    src/librarianservice.cpp
+    src/librarianservice.h
     src/knowledgebase.cpp
     src/knowledgebase.h
     src/analyzerservice.cpp
