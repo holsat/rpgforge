@@ -87,6 +87,8 @@ add_executable(rpgforge
     src/scrivenerimporter.h
     src/llmservice.cpp
     src/llmservice.h
+    src/librariandatabase.cpp
+    src/librariandatabase.h
     src/knowledgebase.cpp
     src/knowledgebase.h
     src/analyzerservice.cpp
