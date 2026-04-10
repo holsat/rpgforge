@@ -1719,7 +1719,7 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
     KTextEditor::Cursor cursor = view->cursorPosition();
     KTextEditor::MovingRange *librarianRange = nullptr;
     for (auto *range : m_librarianRanges) {
-        if (range->contains(cursor) && range->attribute() && range->attribute()->underlineColor() == Qt::red) {
+        if (range && range->contains(cursor) && range->attribute() && range->attribute()->underlineColor() == Qt::red) {
             librarianRange = range;
             break;
         }
@@ -2058,7 +2058,7 @@ static KTextEditor::Cursor offsetToCursor(KTextEditor::Document *doc, int offset
 void MainWindow::updateLibrarianHighlights()
 {
     auto *doc = activeDocument();
-    if (!doc || !m_librarianService) return;
+    if (!doc || !m_librarianService || !m_librarianService->database()->database().isOpen()) return;
 
     // Clear old highlights
     qDeleteAll(m_librarianRanges);

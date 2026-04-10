@@ -114,7 +114,7 @@ void LibrarianService::onFileChanged(const QString &path)
 void LibrarianService::processQueue()
 {
     QMutexLocker locker(&m_mutex);
-    if (m_paused || m_pendingFiles.isEmpty()) return;
+    if (m_paused || m_pendingFiles.isEmpty() || !m_db->database().isOpen()) return;
 
     Q_EMIT scanningStarted();
     
@@ -167,7 +167,7 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
         if (lines[i].startsWith(QLatin1Char('|'))) {
             // Found a potential table
             QStringList headers = lines[i].split(QLatin1Char('|'), Qt::SkipEmptyParts);
-            if (i + 1 < lines.size() && separatorRegex.match(lines[i+1]).hasMatch()) {
+            if (!headers.isEmpty() && i + 1 < lines.size() && separatorRegex.match(lines[i+1]).hasMatch()) {
                 // It's a table with headers
                 QString tableName = headers[0].trimmed().toLower().replace(QStringLiteral(" "), QString());
                 

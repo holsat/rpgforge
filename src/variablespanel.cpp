@@ -397,7 +397,7 @@ void VariablesPanel::triggerReindex()
 
 void VariablesPanel::refreshLibrary()
 {
-    if (!m_librarianService || !m_libraryRoot) return;
+    if (!m_librarianService || !m_libraryRoot || !m_librarianService->database()->database().isOpen()) return;
 
     m_treeWidget->blockSignals(true);
     
