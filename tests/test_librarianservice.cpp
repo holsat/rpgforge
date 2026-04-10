@@ -5,6 +5,11 @@
 
 // MOCK LibrarianService that doesn't depend on LLMService
 #include "../src/librarianservice.h"
+#include "../src/llmservice.h"
+
+// Provide implementation for missing LLMService methods in test context
+void LLMService::sendNonStreamingRequest(const LLMRequest&, std::function<void(const QString&)>) {}
+LLMService& LLMService::instance() { static auto* inst = reinterpret_cast<LLMService*>(new QObject()); return *inst; }
 
 class TestLibrarianService : public QObject
 {
@@ -14,8 +19,7 @@ private Q_SLOTS:
     void initTestCase()
     {
         m_testDir.mkdir(QStringLiteral("test_project_service"));
-        // PASS NULL FOR LLMService AS WE DON'T TEST SEMANTIC HERE
-        m_service = new LibrarianService(nullptr, this);
+        m_service = new LibrarianService(&LLMService::instance(), this);
         m_service->setProjectPath(QDir::current().filePath(QStringLiteral("test_project_service")));
     }
 

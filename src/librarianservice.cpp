@@ -8,6 +8,9 @@
 #include <QThread>
 #include <QRegularExpression>
 #include <QMutexLocker>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 
 LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     : QObject(parent), m_llmService(llmService)
@@ -206,8 +209,79 @@ void LibrarianService::parseMarkdownLists(const QString &content, const QString 
 
 void LibrarianService::runSemanticBatch()
 {
-    if (m_paused) return;
-    qDebug() << "Running Async Semantic Batch...";
+    if (m_paused || m_projectPath.isEmpty() || !m_llmService) return;
+
+    // Find a file that needs semantic indexing
+    // For now, we pick the first .md file we find that hasn't been scanned recently
+    QDir dir(m_projectPath);
+    QStringList filters;
+    filters << QStringLiteral("*.md");
+    QDirIterator it(m_projectPath, filters, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    
+    if (it.hasNext()) {
+        QString filePath = it.next();
+        extractSemantic(filePath);
+    }
+}
+
+void LibrarianService::extractSemantic(const QString &filePath)
+{
+    if (!m_llmService) return;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    QTextStream in(&file);
+    QString content = in.readAll();
+    file.close();
+
+    // Prepare prompt for the Librarian Agent
+    QString prompt = QStringLiteral(
+        "You are the Librarian Agent for RPG Forge. Your task is to extract structured game design data from the following text.\n"
+        "Identify Entities (Monsters, Items, Classes, Spells, etc.) and their Attributes (Stats, costs, descriptions).\n"
+        "Return the data in a strict JSON array of objects format: \n"
+        "[{\"entity\": \"Name\", \"type\": \"Category\", \"attributes\": {\"key\": \"value\"}}]\n\n"
+        "Text to analyze:\n"
+    ) + content;
+
+    LLMRequest request;
+    request.provider = LLMProvider::Ollama; // Default or from settings
+    request.model = QStringLiteral("llama3"); // Default or from settings
+    request.messages << LLMMessage{QStringLiteral("system"), QStringLiteral("You extract structured RPG data as JSON.")};
+    request.messages << LLMMessage{QStringLiteral("user"), prompt};
+    request.stream = false;
+
+    m_llmService->sendNonStreamingRequest(request, [this, filePath](const QString &response) {
+        // Parse the JSON response and update the DB
+        QJsonDocument doc = QJsonDocument::fromJson(response.toUtf8());
+        if (!doc.isArray()) {
+            // Try to find JSON in the response if the LLM added chatter
+            int start = response.indexOf(QLatin1Char('['));
+            int end = response.lastIndexOf(QLatin1Char(']'));
+            if (start != -1 && end != -1) {
+                doc = QJsonDocument::fromJson(response.mid(start, end - start + 1).toUtf8());
+            }
+        }
+
+        if (doc.isArray()) {
+            QJsonArray entities = doc.array();
+            for (const QJsonValue &val : entities) {
+                QJsonObject obj = val.toObject();
+                QString name = obj.value(QStringLiteral("entity")).toString();
+                QString type = obj.value(QStringLiteral("type")).toString();
+                QJsonObject attrs = obj.value(QStringLiteral("attributes")).toObject();
+
+                if (!name.isEmpty()) {
+                    qint64 id = m_db->addEntity(name, type, filePath);
+                    for (auto it = attrs.begin(); it != attrs.end(); ++it) {
+                        m_db->setAttribute(id, it.key(), it.value().toVariant());
+                    }
+                    Q_EMIT entityUpdated(id);
+                }
+            }
+            // Trigger a refresh of the library variables
+            scanFile(filePath); 
+        }
+    });
 }
 
 void LibrarianService::triggerSemanticReindex()
@@ -215,4 +289,3 @@ void LibrarianService::triggerSemanticReindex()
     qDebug() << "Manually triggered full semantic reindex.";
     runSemanticBatch();
 }
-void LibrarianService::extractSemantic(const QString &filePath) { (void)filePath; }
