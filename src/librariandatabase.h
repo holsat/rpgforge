@@ -40,6 +40,7 @@ public:
     QList<qint64> findEntitiesByType(const QString &type) const;
     QList<qint64> findEntitiesByAttribute(const QString &key, const QVariant &value) const;
 
+    QSqlDatabase database() const { return m_db; }
     QString lastError() const { return m_lastError; }
 
 private:

@@ -174,3 +174,24 @@ install(FILES icons/rpgforge_48x48.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolo
 install(FILES icons/rpgforge_64x64.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/64x64/apps RENAME rpgforge.png)
 install(FILES icons/rpgforge_128x128.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/128x128/apps RENAME rpgforge.png)
 install(FILES icons/rpgforge_256x256.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/256x256/apps RENAME rpgforge.png)
+
+# Testing
+enable_testing()
+find_package(Qt6 REQUIRED COMPONENTS Test)
+
+add_executable(test_librariandatabase tests/test_librariandatabase.cpp src/librariandatabase.cpp)
+target_link_libraries(test_librariandatabase Qt6::Test Qt6::Sql Qt6::Core)
+add_test(NAME librarian_database_test COMMAND test_librariandatabase)
+
+add_executable(test_librarianservice 
+    tests/test_librarianservice.cpp 
+    src/librarianservice.cpp 
+    src/librariandatabase.cpp
+)
+target_link_libraries(test_librarianservice 
+    Qt6::Test 
+    Qt6::Sql 
+    Qt6::Core 
+    Qt6::Concurrent
+)
+add_test(NAME librarian_service_test COMMAND test_librarianservice)

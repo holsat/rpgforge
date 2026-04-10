@@ -42,6 +42,7 @@ class ChatPanel;
 class ProblemsPanel;
 class SimulationPanel;
 class Sidebar;
+class LibrarianService;
 class QWebEngineView;
 class QPushButton;
 class QTimer;
@@ -105,6 +106,7 @@ private Q_SLOTS:
     void togglePreview();
     void syncScroll();
     void updateErrorHighlighting();
+    void updateLibrarianHighlights();
     void performSearch(const QString &text);
 
     // AI Actions
@@ -183,8 +185,10 @@ private:
 
     QList<KTextEditor::MovingRange*> m_errorRanges;
     QList<KTextEditor::MovingRange*> m_diagnosticRanges;
+    QList<KTextEditor::MovingRange*> m_librarianRanges;
 
     QUrl m_currentUrl;
+    LibrarianService *m_librarianService = nullptr;
 };
 
 #endif // MAINWINDOW_H

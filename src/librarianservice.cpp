@@ -1,10 +1,13 @@
 #include "librarianservice.h"
 #include "llmservice.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QTextStream>
 #include <QDebug>
 #include <QThread>
+#include <QRegularExpression>
+#include <QMutexLocker>
 
 LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     : QObject(parent), m_llmService(llmService)
@@ -41,11 +44,11 @@ void LibrarianService::setProjectPath(const QString &path)
         m_watcher->removePaths(watched);
     }
     
-    QString dbPath = QDir(path).filePath(".rpgforge.db");
+    QString dbPath = QDir(path).filePath(QStringLiteral(".rpgforge.db"));
     if (m_db->open(dbPath)) {
         scanAll();
     } else {
-        emit errorOccurred(m_db->lastError());
+        Q_EMIT errorOccurred(m_db->lastError());
     }
 }
 
@@ -73,7 +76,7 @@ void LibrarianService::scanAll()
     
     QDir dir(m_projectPath);
     QStringList filters;
-    filters << "*.md" << "*.markdown";
+    filters << QStringLiteral("*.md") << QStringLiteral("*.markdown");
     
     QDirIterator it(m_projectPath, filters, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
     
@@ -110,7 +113,7 @@ void LibrarianService::processQueue()
     QMutexLocker locker(&m_mutex);
     if (m_paused || m_pendingFiles.isEmpty()) return;
 
-    emit scanningStarted();
+    Q_EMIT scanningStarted();
     
     while (!m_pendingFiles.isEmpty()) {
         QString filePath = m_pendingFiles.takeFirst();
@@ -119,7 +122,23 @@ void LibrarianService::processQueue()
         locker.relock();
     }
     
-    emit scanningFinished();
+    // Collect all variables from DB for the VariableManager
+    QMap<QString, QString> libVars;
+    QSqlQuery query(m_db->database());
+    query.exec(QStringLiteral("SELECT e.type, e.name, a.key, a.value FROM entities e "
+                              "JOIN attributes a ON e.id = a.entity_id"));
+    while (query.next()) {
+        QString type = query.value(0).toString().replace(QStringLiteral(" "), QString());
+        QString name = query.value(1).toString().replace(QStringLiteral(" "), QString());
+        QString key = query.value(2).toString().replace(QStringLiteral(" "), QString());
+        QString val = query.value(3).toString();
+        
+        // Format: type.name.key
+        libVars.insert(QStringLiteral("%1.%2.%3").arg(type, name, key), val);
+    }
+    Q_EMIT libraryVariablesChanged(libVars);
+
+    Q_EMIT scanningFinished();
 }
 
 void LibrarianService::extractHeuristic(const QString &filePath)
@@ -138,23 +157,20 @@ void LibrarianService::extractHeuristic(const QString &filePath)
 
 void LibrarianService::parseMarkdownTables(const QString &content, const QString &sourceFile)
 {
-    // For Phase 1, we use basic regex to find Markdown tables.
-    // In Phase 2, we should use the cmark-gfm AST for better robustness.
-    QRegularExpression tableRegex("^\\|(.+)\\|\\s*$", QRegularExpression::MultilineOption);
-    QRegularExpression separatorRegex("^\\|([:\\s-]+\\|)+\\s*$", QRegularExpression::MultilineOption);
+    QRegularExpression separatorRegex(QStringLiteral("^\\|([:\\s-]+\\|)+\\s*$"), QRegularExpression::MultilineOption);
     
-    QStringList lines = content.split('\n');
+    QStringList lines = content.split(QLatin1Char('\n'));
     for (int i = 0; i < lines.size(); ++i) {
-        if (lines[i].startsWith('|')) {
+        if (lines[i].startsWith(QLatin1Char('|'))) {
             // Found a potential table
-            QStringList headers = lines[i].split('|', Qt::SkipEmptyParts);
+            QStringList headers = lines[i].split(QLatin1Char('|'), Qt::SkipEmptyParts);
             if (i + 1 < lines.size() && separatorRegex.match(lines[i+1]).hasMatch()) {
                 // It's a table with headers
-                QString tableName = headers[0].trimmed().toLower().replace(" ", "");
+                QString tableName = headers[0].trimmed().toLower().replace(QStringLiteral(" "), QString());
                 
                 // Extract rows
-                for (int j = i + 2; j < lines.size() && lines[j].startsWith('|'); ++j) {
-                    QStringList cells = lines[j].split('|', Qt::SkipEmptyParts);
+                for (int j = i + 2; j < lines.size() && lines[j].startsWith(QLatin1Char('|')); ++j) {
+                    QStringList cells = lines[j].split(QLatin1Char('|'), Qt::SkipEmptyParts);
                     if (cells.size() >= 2) {
                         QString entityName = cells[0].trimmed();
                         qint64 entityId = m_db->addEntity(entityName, tableName, sourceFile);
@@ -164,7 +180,7 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
                             QString val = cells[k].trimmed();
                             m_db->setAttribute(entityId, key, val);
                         }
-                        emit entityUpdated(entityId);
+                        Q_EMIT entityUpdated(entityId);
                     }
                 }
             }
@@ -174,30 +190,23 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
 
 void LibrarianService::parseMarkdownLists(const QString &content, const QString &sourceFile)
 {
-    // Basic key:value list extraction (e.g., "- Strength: 15")
-    QRegularExpression kvRegex("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$", QRegularExpression::MultilineOption);
-    QRegularExpressionIterator it = kvRegex.globalMatch(content);
+    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
+    QRegularExpressionMatchIterator it = kvRegex.globalMatch(content);
     
     while (it.hasNext()) {
         QRegularExpressionMatch match = it.next();
         QString key = match.captured(1).trimmed();
         QString value = match.captured(2).trimmed();
         
-        // Simple heuristic: if key is short, it's an attribute
-        // In Phase 2, we link this to the nearest heading as an Entity.
-        // For now, we store them as generic 'Global' entities.
-        qint64 globalId = m_db->addEntity("Global", "property", sourceFile);
+        qint64 globalId = m_db->addEntity(QStringLiteral("Global"), QStringLiteral("property"), sourceFile);
         m_db->setAttribute(globalId, key.toLower(), value);
-        emit entityUpdated(globalId);
+        Q_EMIT entityUpdated(globalId);
     }
 }
 
 void LibrarianService::runSemanticBatch()
 {
     if (m_paused) return;
-    
-    // In Phase 13, this would trigger LLMService to deep-scan a random file 
-    // or a recently modified one that heuristic failed to fully capture.
     qDebug() << "Running Async Semantic Batch...";
 }
 
@@ -206,3 +215,4 @@ void LibrarianService::triggerSemanticReindex()
     qDebug() << "Manually triggered full semantic reindex.";
     runSemanticBatch();
 }
+void LibrarianService::extractSemantic(const QString &filePath) { (void)filePath; }

@@ -24,20 +24,23 @@ public:
     void setProjectPath(const QString &path);
     bool isPaused() const { return m_paused; }
 
-public slots:
+public Q_SLOTS:
     void pause();
     void resume();
     void scanAll();
     void scanFile(const QString &filePath);
     void triggerSemanticReindex();
 
-signals:
+    LibrarianDatabase* database() const { return m_db; }
+
+Q_SIGNALS:
     void entityUpdated(qint64 entityId);
+    void libraryVariablesChanged(const QMap<QString, QString> &vars);
     void scanningStarted();
     void scanningFinished();
     void errorOccurred(const QString &message);
 
-private slots:
+private Q_SLOTS:
     void onFileChanged(const QString &path);
     void processQueue();
     void runSemanticBatch();

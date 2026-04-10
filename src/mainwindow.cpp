@@ -44,6 +44,7 @@
 #include "problemspanel.h"
 #include "analyzerservice.h"
 #include "llmservice.h"
+#include "librarianservice.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -98,7 +99,17 @@ MainWindow::MainWindow(QWidget *parent)
     : KXmlGuiWindow(parent)
 {
     setupEditor();
+
+    m_librarianService = new LibrarianService(&LLMService::instance(), this);
+    connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
+    connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
+        VariableManager::instance().setLibraryVariables(vars);
+    });
+
     setupSidebar();
+    if (m_variablesPanel) {
+        m_variablesPanel->setLibrarianService(m_librarianService);
+    }
     setupActions();
 
     setupGUI(Default, QStringLiteral(":/rpgforgeui.rc"));
@@ -865,6 +876,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             else m_document->setHighlightingMode(QStringLiteral("Markdown"));
         }
         updateTitle();
+        if (m_librarianService) m_librarianService->scanFile(path);
         onTextChanged();
         saveSession();
     }
@@ -906,6 +918,7 @@ void MainWindow::newProject()
         
         if (!dir.isEmpty() && !name.isEmpty()) {
             if (ProjectManager::instance().createProject(dir, name)) {
+                if (m_librarianService) m_librarianService->setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
@@ -927,7 +940,9 @@ void MainWindow::openProject()
     
     if (!filePath.isEmpty()) {
         if (ProjectManager::instance().openProject(filePath)) {
-            m_fileExplorer->setRootPath(ProjectManager::instance().projectPath());
+            QString projectDir = ProjectManager::instance().projectPath();
+            if (m_librarianService) m_librarianService->setProjectPath(projectDir);
+            m_fileExplorer->setRootPath(projectDir);
             updateTitle();
         }
     }
@@ -1113,6 +1128,11 @@ void MainWindow::updateErrorHighlighting()
                 m_errorRanges.append(mr);
             }
         }
+    }
+
+    if (m_librarianService) {
+        m_librarianService->scanFile(doc->url().toLocalFile());
+        updateLibrarianHighlights();
     }
 }
 
@@ -1694,9 +1714,50 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
 
     menu->addSeparator();
     auto *aiMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("chat-conversation")), i18n("AI Assistant"));
-    
-    auto *expand = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Expand Selection"));
-    connect(expand, &QAction::triggered, this, &MainWindow::aiExpand);
+
+    // Check for Librarian inconsistencies at cursor
+    KTextEditor::Cursor cursor = view->cursorPosition();
+    KTextEditor::MovingRange *librarianRange = nullptr;
+    for (auto *range : m_librarianRanges) {
+        if (range->contains(cursor) && range->attribute() && range->attribute()->underlineColor() == Qt::red) {
+            librarianRange = range;
+            break;
+        }
+    }
+
+    if (librarianRange) {
+        auto *guardMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("security-high")), i18n("Consistency Guardian"));
+
+        QString key;
+        // Basic heuristic to get key from text (e.g. "Strength: 15")
+        QString lineText = view->document()->line(librarianRange->start().line());
+        QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):"));
+        auto match = kvRegex.match(lineText);
+        if (match.hasMatch()) key = match.captured(1).trimmed().toLower();
+
+        if (!key.isEmpty()) {
+            QString rangeText = view->document()->text(librarianRange->toRange());
+            auto *updateLib = guardMenu->addAction(i18n("Update Library to match '%1'", rangeText));
+            connect(updateLib, &QAction::triggered, this, [this, key, rangeText]() {
+                QList<qint64> entities = m_librarianService->database()->findEntitiesByAttribute(key, QVariant());
+                for (qint64 id : entities) {
+                    m_librarianService->database()->setAttribute(id, key, rangeText);
+                }
+                m_librarianService->scanAll(); // Refresh
+            });
+
+            auto *updateText = guardMenu->addAction(i18n("Revert text to Library value"));
+            connect(updateText, &QAction::triggered, this, [this, key, librarianRange]() {
+                QList<qint64> entities = m_librarianService->database()->findEntitiesByAttribute(key, QVariant());
+                if (!entities.isEmpty()) {
+                    QString masterVal = m_librarianService->database()->getAttribute(entities.first(), key).toString();
+                    librarianRange->document()->replaceText(librarianRange->toRange(), masterVal);
+                }
+            });
+        }
+    }
+
+    auto *expand = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Expand Selection"));    connect(expand, &QAction::triggered, this, &MainWindow::aiExpand);
     
     auto *rewrite = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Rewrite Selection"));
     connect(rewrite, &QAction::triggered, this, &MainWindow::aiRewrite);
@@ -1980,3 +2041,86 @@ void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidMod
 
 
 
+
+static KTextEditor::Cursor offsetToCursor(KTextEditor::Document *doc, int offset)
+{
+    int currentOffset = 0;
+    for (int line = 0; line < doc->lines(); ++line) {
+        int lineLength = doc->lineLength(line);
+        if (offset <= currentOffset + lineLength) {
+            return KTextEditor::Cursor(line, offset - currentOffset);
+        }
+        currentOffset += lineLength + 1; // +1 for newline
+    }
+    return KTextEditor::Cursor::invalid();
+}
+
+void MainWindow::updateLibrarianHighlights()
+{
+    auto *doc = activeDocument();
+    if (!doc || !m_librarianService) return;
+
+    // Clear old highlights
+    qDeleteAll(m_librarianRanges);
+    m_librarianRanges.clear();
+
+    QString text = doc->text();
+
+    // 1. Check for inconsistencies (Red Squiggles)
+    // We scan for key:value patterns and check them against the DB
+    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
+    QRegularExpressionMatchIterator it = kvRegex.globalMatch(text);
+
+    KTextEditor::Attribute::Ptr errorAttr(new KTextEditor::Attribute());
+    errorAttr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+    errorAttr->setUnderlineColor(Qt::red);
+
+    while (it.hasNext()) {
+        QRegularExpressionMatch match = it.next();
+        QString key = match.captured(1).trimmed().toLower();
+        QString value = match.captured(2).trimmed();
+
+        // Query DB for this key
+        QList<qint64> entities = m_librarianService->database()->findEntitiesByAttribute(key, QVariant());
+        for (qint64 id : entities) {
+            QVariant masterVal = m_librarianService->database()->getAttribute(id, key);
+            if (masterVal.isValid() && masterVal.toString() != value) {
+                // Inconsistency found!
+                int startOffset = match.capturedStart(2);
+                int endOffset = match.capturedEnd(2);
+                
+                KTextEditor::Cursor start = offsetToCursor(doc, startOffset);
+                KTextEditor::Cursor end = offsetToCursor(doc, endOffset);
+                
+                if (!start.isValid() || !end.isValid()) continue;
+
+                KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
+                range->setAttribute(errorAttr);
+                range->setZDepth(100.0);
+                m_librarianRanges.append(range);
+            }
+        }
+    }
+
+    // 2. Highlight auto-bound variables (Green Underline)
+    KTextEditor::Attribute::Ptr boundAttr(new KTextEditor::Attribute());
+    boundAttr->setUnderlineStyle(QTextCharFormat::DashUnderline);
+    boundAttr->setUnderlineColor(Qt::green);
+
+    QRegularExpression varRegex(QStringLiteral("\\{\\{(.+?)\\}\\}"));
+    it = varRegex.globalMatch(text);
+    while (it.hasNext()) {
+        QRegularExpressionMatch match = it.next();
+        int startOffset = match.capturedStart();
+        int endOffset = match.capturedEnd();
+        
+        KTextEditor::Cursor start = offsetToCursor(doc, startOffset);
+        KTextEditor::Cursor end = offsetToCursor(doc, endOffset);
+        
+        if (start.isValid() && end.isValid()) {
+            KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
+            range->setAttribute(boundAttr);
+            m_librarianRanges.append(range);
+        }
+    }
+}
