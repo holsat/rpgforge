@@ -130,6 +130,8 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
 
     LLMRequest req;
     req.provider = provider;
+    req.serviceName = i18n("Game Analyzer");
+    req.settingsKey = QStringLiteral("analyzer/model");
     
     req.model = settings.value(QStringLiteral("analyzer/analyzer_model"), 
                                settings.value(QStringLiteral("analyzer/model"))).toString();

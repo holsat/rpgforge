@@ -1630,7 +1630,7 @@ void MainWindow::aiExpand()
     }
 
     m_sidebar->showPanel(m_chatId);
-    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Expand"));
 }
 
 void MainWindow::aiRewrite()
@@ -1649,7 +1649,7 @@ void MainWindow::aiRewrite()
     }
 
     m_sidebar->showPanel(m_chatId);
-    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Rewrite"));
 }
 
 void MainWindow::aiSummarize()
@@ -1668,7 +1668,7 @@ void MainWindow::aiSummarize()
     }
 
     m_sidebar->showPanel(m_chatId);
-    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Summarize"));
 }
 
 void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
@@ -2059,16 +2059,24 @@ void MainWindow::compareSimulations()
     }
 }
 
-void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available)
+void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName)
 {
     auto *dlg = new QDialog(this);
     dlg->setWindowTitle(i18n("Model Unavailable"));
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     auto *layout = new QVBoxLayout(dlg);
-    auto *label = new QLabel(i18n(
-        "The model <b>%1</b> is no longer available from this provider.<br/>"
-        "Select a replacement model to use instead:", invalidModel), dlg);
+    
+    QString details;
+    if (!serviceName.isEmpty()) {
+        details = i18n("The service <b>%1</b> is attempting to use model <b>%2</b> via <b>%3</b>, but it is no longer available.",
+                       serviceName, invalidModel, LLMService::providerName(provider));
+    } else {
+        details = i18n("The model <b>%1</b> is no longer available from provider <b>%2</b>.",
+                       invalidModel, LLMService::providerName(provider));
+    }
+
+    auto *label = new QLabel(details + QStringLiteral("<br/><br/>") + i18n("Select a replacement model to use instead:"), dlg);
     label->setWordWrap(true);
     layout->addWidget(label);
 
@@ -2088,7 +2096,6 @@ void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidMod
     });
 
     dlg->open();
-    Q_UNUSED(provider)
 }
 
 
@@ -2149,7 +2156,7 @@ void MainWindow::updateLibrarianHighlights()
                     range->setZDepth(100.0);
                     
                     // ADD TOOLTIP
-                    QString source = m_librarianService->database()->getReferences(id).join(", ");
+                    QString source = m_librarianService->database()->getReferences(id).join(QStringLiteral(", "));
                     range->setAttribute(errorAttr);
                     errorAttr->setToolTip(i18n("Consistency Error: Library value for '%1' is '%2'\nSource: %3", 
                                                key, masterVal.toString(), source));

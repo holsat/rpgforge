@@ -18,6 +18,7 @@
 
 #include "simgriot.h"
 #include "llmservice.h"
+#include <KLocalizedString>
 #include <QJsonDocument>
 #include <QSettings>
 #include <QPointer>
@@ -52,6 +53,7 @@ void SimulationGriot::narrate(const QString &actorName, const QJsonObject &inten
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
+    req.serviceName = i18n("Simulation Griot");
     
     // Griot uses creative settings
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_griot_provider"), 

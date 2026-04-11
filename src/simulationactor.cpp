@@ -19,6 +19,7 @@
 #include "simulationactor.h"
 #include "llmservice.h"
 #include "textutils.h"
+#include <KLocalizedString>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QSettings>
@@ -85,6 +86,7 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
+    req.serviceName = i18n("Simulation Actor");
 
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_actor_provider"), 
                                                            settings.value(QStringLiteral("llm/provider"), 0)).toInt());

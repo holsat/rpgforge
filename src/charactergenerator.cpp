@@ -178,6 +178,7 @@ void CharacterGenerator::generateCharacter()
         req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("chargen/chargen_provider"), 
                                                                settings.value(QStringLiteral("llm/provider"), 0)).toInt());
         req.model = settings.value(QStringLiteral("chargen/chargen_model")).toString();
+        req.serviceName = i18n("Character Generator");
         if (req.model.isEmpty()) {
             req.model = (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")).toString() : settings.value(QStringLiteral("llm/ollama/model")).toString();
         }

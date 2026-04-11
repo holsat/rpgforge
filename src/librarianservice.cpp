@@ -283,10 +283,15 @@ void LibrarianService::extractSemantic(const QString &filePath)
         "Text to analyze:\n"
     ) + content;
 
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("librarian/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    QString model = settings.value(QStringLiteral("librarian/model"), (provider == LLMProvider::Ollama ? QStringLiteral("llama3") : QString())).toString();
+
     LLMRequest request;
-    request.provider = LLMProvider::Ollama;
-    request.model = QStringLiteral("llama3");
+    request.provider = provider;
+    request.model = model;
     request.serviceName = i18n("Librarian Agent");
+    request.settingsKey = QStringLiteral("librarian/model");
     request.messages << LLMMessage{QStringLiteral("system"), QStringLiteral("You extract structured RPG data as JSON.")};
     request.messages << LLMMessage{QStringLiteral("user"), prompt};
     request.stream = false;

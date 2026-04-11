@@ -82,6 +82,7 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
+    req.serviceName = i18n("Simulation Arbiter");
     
     // 1. Try agent-specific setting
     // 2. Try legacy analyzer setting
