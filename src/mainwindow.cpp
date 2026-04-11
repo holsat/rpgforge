@@ -72,6 +72,8 @@
 #include <KTextEditor/Editor>
 #include <KTextEditor/View>
 #include <QApplication>
+#include <QToolTip>
+#include <QHelpEvent>
 #include <QDropEvent>
 #include <QEvent>
 #include <QDir>
