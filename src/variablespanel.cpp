@@ -402,10 +402,14 @@ void VariablesPanel::refreshLibrary()
     m_treeWidget->blockSignals(true);
     qDeleteAll(m_libraryRoot->takeChildren());
 
-    // Fetch all entities
+    // Use the main connection from the service
     QSqlDatabase db = m_librarianService->database()->database();
     QSqlQuery query(db);
-    query.exec(QStringLiteral("SELECT id, name, type FROM entities"));
+    if (!query.exec(QStringLiteral("SELECT id, name, type FROM entities"))) {
+        qWarning() << "Librarian Refresh failed:" << query.lastError().text();
+        m_treeWidget->blockSignals(false);
+        return;
+    }
 
     QMap<QString, QTreeWidgetItem*> typeGroups;
 
@@ -440,4 +444,5 @@ void VariablesPanel::refreshLibrary()
     }
 
     m_treeWidget->blockSignals(false);
+    qDebug() << "VariablesPanel: Library refreshed with" << m_libraryRoot->childCount() << "types.";
 }

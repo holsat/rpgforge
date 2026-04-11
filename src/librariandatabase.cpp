@@ -43,6 +43,16 @@ void LibrarianDatabase::close()
     }
 }
 
+bool LibrarianDatabase::beginTransaction()
+{
+    return m_db.transaction();
+}
+
+bool LibrarianDatabase::commit()
+{
+    return m_db.commit();
+}
+
 bool LibrarianDatabase::initSchema()
 {
     QSqlQuery query(m_db);

@@ -202,8 +202,10 @@ void LibrarianService::extractHeuristic(const QString &filePath)
     QString content = in.readAll();
     file.close();
 
+    m_db->beginTransaction();
     parseMarkdownTables(content, filePath);
     parseMarkdownLists(content, filePath);
+    m_db->commit();
 }
 
 void LibrarianService::parseMarkdownTables(const QString &content, const QString &sourceFile)

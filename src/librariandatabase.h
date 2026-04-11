@@ -22,6 +22,9 @@ public:
     bool open(const QString &path);
     void close();
 
+    bool beginTransaction();
+    bool commit();
+
     // Entity Management
     qint64 addEntity(const QString &name, const QString &type, const QString &sourceFile);
     bool updateEntity(qint64 id, const QString &name, const QString &type);

@@ -196,6 +196,7 @@ void ProblemsPanel::onItemClicked(int row, int column)
     if (fileItem && lineItem) {
         QString path = fileItem->data(Qt::UserRole).toString();
         int line = lineItem->data(Qt::UserRole).toInt();
-        Q_EMIT issueActivated(path, line);
+        // Convert from 1-based AI line to 0-based Editor line
+        Q_EMIT issueActivated(path, qMax(0, line - 1));
     }
 }

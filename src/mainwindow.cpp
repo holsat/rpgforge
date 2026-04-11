@@ -1705,13 +1705,15 @@ void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagn
     m_diagnosticRanges.clear();
 
     for (const Diagnostic &d : diagnostics) {
-        if (d.line < 0 || d.line >= doc->lines()) continue;
+        // AI returns 1-based indexing, convert to 0-based
+        int line = qMax(0, d.line - 1);
+        if (line >= doc->lines()) continue;
 
-        QString lineText = doc->line(d.line);
+        QString lineText = doc->line(line);
         int startCol = lineText.length() - lineText.trimmed().length(); // Skip leading whitespace
         int endCol = lineText.length();
 
-        KTextEditor::Range range(d.line, startCol, d.line, endCol);
+        KTextEditor::Range range(line, startCol, line, endCol);
         auto *mr = doc->newMovingRange(range);
         
         KTextEditor::Attribute::Ptr attr(new KTextEditor::Attribute());
@@ -1726,6 +1728,7 @@ void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagn
             attr->setUnderlineColor(Qt::blue);
         }
         
+        attr->setToolTip(d.message);
         mr->setAttribute(attr);
         mr->setAttributeOnlyForViews(true);
         

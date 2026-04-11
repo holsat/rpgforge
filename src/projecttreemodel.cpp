@@ -499,7 +499,13 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
     int oldRow = oldParent->children.indexOf(item);
     if (oldRow == -1) return false;
 
-    beginMoveRows(indexForItem(oldParent), oldRow, oldRow, indexForItem(newParent), newRow);
+    QModelIndex sourceParent = indexForItem(oldParent);
+    QModelIndex destParent = indexForItem(newParent);
+
+    if (!beginMoveRows(sourceParent, oldRow, oldRow, destParent, newRow)) {
+        return false;
+    }
+
     {
         QMutexLocker locker(&m_treeMutex);
         oldParent->children.removeAt(oldRow);
@@ -507,6 +513,7 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
         if (newRow > newParent->children.size()) newRow = newParent->children.size();
         newParent->children.insert(newRow, item);
     }
+    
     endMoveRows();
     return true;
 }
