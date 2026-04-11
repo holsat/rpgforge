@@ -18,6 +18,7 @@
 */
 
 #include "settingsdialog.h"
+#include "prompteditordialog.h"
 #include <KLocalizedString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -37,6 +38,7 @@
 #include <QProgressBar>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QLabel>
 
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent)
@@ -74,7 +76,7 @@ void SettingsDialog::setupUi()
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);
 
-    setMinimumSize(450, 550);
+    setMinimumSize(600, 650);
 }
 
 QWidget* SettingsDialog::createLLMTab()
@@ -267,6 +269,14 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
                 config.modelCombo->setEditText(current);
             }
         }
+        
+        // Handle Analyzer Model Combo
+        if (static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()) == provider) {
+            QString current = m_analyzerModelCombo->currentText();
+            m_analyzerModelCombo->clear();
+            m_analyzerModelCombo->addItems(m_modelCache[provider]);
+            m_analyzerModelCombo->setEditText(current);
+        }
         return;
     }
 
@@ -290,8 +300,12 @@ QWidget* SettingsDialog::createPromptsTab()
 
     auto *btnLayout = new QHBoxLayout();
     auto *addBtn = new QPushButton(i18n("Add Template..."), this);
+    auto *viewTemplateBtn = new QPushButton(i18n("View"), this);
+    auto *editTemplateBtn = new QPushButton(i18n("Edit"), this);
     auto *removeBtn = new QPushButton(i18n("Remove"), this);
     btnLayout->addWidget(addBtn);
+    btnLayout->addWidget(viewTemplateBtn);
+    btnLayout->addWidget(editTemplateBtn);
     btnLayout->addWidget(removeBtn);
     templatesLayout->addLayout(btnLayout);
     layout->addWidget(templatesGroup);
@@ -300,21 +314,13 @@ QWidget* SettingsDialog::createPromptsTab()
     auto *coreGroup = new QGroupBox(i18n("Core Engine System Prompts"), this);
     auto *coreLayout = new QFormLayout(coreGroup);
 
-    m_analyzerPromptEdit = new QLineEdit(this);
-    m_synopsisFilePromptEdit = new QLineEdit(this);
-    m_synopsisFolderPromptEdit = new QLineEdit(this);
-    m_charGenPromptEdit = new QLineEdit(this);
-    m_simArbiterPromptEdit = new QLineEdit(this);
-    m_simGriotPromptEdit = new QLineEdit(this);
-    m_simActorPromptEdit = new QLineEdit(this);
-
-    coreLayout->addRow(i18n("Game Analyzer:"), m_analyzerPromptEdit);
-    coreLayout->addRow(i18n("File Synopsis:"), m_synopsisFilePromptEdit);
-    coreLayout->addRow(i18n("Folder Synopsis:"), m_synopsisFolderPromptEdit);
-    coreLayout->addRow(i18n("Character Generator:"), m_charGenPromptEdit);
-    coreLayout->addRow(i18n("Simulation Arbiter:"), m_simArbiterPromptEdit);
-    coreLayout->addRow(i18n("Simulation Griot:"), m_simGriotPromptEdit);
-    coreLayout->addRow(i18n("Simulation Actor:"), m_simActorPromptEdit);
+    setupEnginePromptRow(coreLayout, QStringLiteral("analyzer"), i18n("Game Analyzer"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("synopsis_file"), i18n("File Synopsis"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("synopsis_folder"), i18n("Folder Synopsis"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("chargen"), i18n("Character Generator"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("sim_arbiter"), i18n("Simulation Arbiter"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("sim_griot"), i18n("Simulation Griot"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("sim_actor"), i18n("Simulation Actor"));
 
     layout->addWidget(coreGroup);
 
@@ -322,10 +328,27 @@ QWidget* SettingsDialog::createPromptsTab()
         bool ok;
         QString name = QInputDialog::getText(this, i18n("Add Template"), i18n("Template Name:"), QLineEdit::Normal, QString(), &ok);
         if (ok && !name.isEmpty()) {
-            QString content = QInputDialog::getMultiLineText(this, i18n("Add Template"), i18n("Prompt Content:"), QString(), &ok);
-            if (ok) {
+            PromptEditorDialog dialog(name, QString(), this);
+            if (dialog.exec() == QDialog::Accepted) {
                 auto *item = new QListWidgetItem(name, m_promptsList);
-                item->setData(Qt::UserRole, content);
+                item->setData(Qt::UserRole, dialog.content());
+            }
+        }
+    });
+
+    connect(viewTemplateBtn, &QPushButton::clicked, this, [this]() {
+        auto *item = m_promptsList->currentItem();
+        if (item) {
+            QMessageBox::information(this, item->text(), item->data(Qt::UserRole).toString());
+        }
+    });
+
+    connect(editTemplateBtn, &QPushButton::clicked, this, [this]() {
+        auto *item = m_promptsList->currentItem();
+        if (item) {
+            PromptEditorDialog dialog(item->text(), item->data(Qt::UserRole).toString(), this);
+            if (dialog.exec() == QDialog::Accepted) {
+                item->setData(Qt::UserRole, dialog.content());
             }
         }
     });
@@ -351,9 +374,14 @@ QWidget* SettingsDialog::createAnalyzerTab()
     m_analyzerProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama")});
     layout->addRow(i18n("Analyzer Provider:"), m_analyzerProviderCombo);
 
-    m_analyzerModelEdit = new QLineEdit(this);
-    m_analyzerModelEdit->setPlaceholderText(i18n("Leave blank to use provider default model"));
-    layout->addRow(i18n("Analyzer Model:"), m_analyzerModelEdit);
+    m_analyzerModelCombo = new QComboBox(this);
+    m_analyzerModelCombo->setEditable(true);
+    m_analyzerModelCombo->setMinimumWidth(250);
+    layout->addRow(i18n("Analyzer Model:"), m_analyzerModelCombo);
+
+    connect(m_analyzerProviderCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        updateModelCombos(static_cast<LLMProvider>(index));
+    });
 
     return tab;
 }
@@ -401,7 +429,8 @@ void SettingsDialog::load()
 
     m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
     m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/provider"), 0).toInt());
-    m_analyzerModelEdit->setText(settings.value(QStringLiteral("analyzer/model")).toString());
+    m_analyzerModelCombo->setEditText(settings.value(QStringLiteral("analyzer/model")).toString());
+    updateModelCombos(static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()));
 
     // Load Agent Configurations
     for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
@@ -428,26 +457,26 @@ void SettingsDialog::load()
     }
 
     // Load Core System Prompts
-    m_analyzerPromptEdit->setText(settings.value(QStringLiteral("analyzer/system_prompt"),
+    m_enginePrompts[QStringLiteral("analyzer")].content = settings.value(QStringLiteral("analyzer/system_prompt"),
         QStringLiteral("You are an expert RPG game design analyzer.\n"
                        "Analyze the provided document for rule conflicts, ambiguities, and completeness gaps.\n"
                        "You must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\n"
-                       "Format: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]")).toString());
+                       "Format: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]")).toString();
 
-    m_synopsisFilePromptEdit->setText(settings.value(QStringLiteral("synopsis/file_prompt"),
-        QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString());
+    m_enginePrompts[QStringLiteral("synopsis_file")].content = settings.value(QStringLiteral("synopsis/file_prompt"),
+        QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString();
 
-    m_synopsisFolderPromptEdit->setText(settings.value(QStringLiteral("synopsis/folder_prompt"),
-        QStringLiteral("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').")).toString());
+    m_enginePrompts[QStringLiteral("synopsis_folder")].content = settings.value(QStringLiteral("synopsis/folder_prompt"),
+        QStringLiteral("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').")).toString();
 
-    m_charGenPromptEdit->setText(settings.value(QStringLiteral("chargen/system_prompt"),
+    m_enginePrompts[QStringLiteral("chargen")].content = settings.value(QStringLiteral("chargen/system_prompt"),
         QStringLiteral("You are an expert RPG character generator. Your goal is to create a character sheet that strictly follows the PROJECT RULES provided below.\n\n"
                        "PROJECT RULES:\n%1\n\n"
                        "TASK:\n"
                        "1. Output a valid JSON object representing the character sheet.\n"
-                       "2. The JSON must include 'name', 'concept', 'stats', 'skills', 'equipment', and 'biography'.")).toString());
+                       "2. The JSON must include 'name', 'concept', 'stats', 'skills', 'equipment', and 'biography'.")).toString();
 
-    m_simArbiterPromptEdit->setText(settings.value(QStringLiteral("simulation/arbiter_prompt"),
+    m_enginePrompts[QStringLiteral("sim_arbiter")].content = settings.value(QStringLiteral("simulation/arbiter_prompt"),
         QStringLiteral("You are the Arbiter of a tabletop RPG simulation. Your job is to enforce the rules and update the world state.\n\n"
                        "SCENARIO CONTEXT:\n%1\n\n"
                        "RELEVANT RULES:\n%2\n\n"
@@ -459,9 +488,9 @@ void SettingsDialog::load()
                        "1. Evaluate the intent based on rules and context.\n"
                        "2. Generate a 'logical_patch' (JSON) to update the world state.\n"
                        "3. Write a 'mechanical_log' explaining the result.\n"
-                       "4. Return ONLY a JSON object with 'logical_patch' and 'mechanical_log'.")).toString());
+                       "4. Return ONLY a JSON object with 'logical_patch' and 'mechanical_log'.")).toString();
 
-    m_simGriotPromptEdit->setText(settings.value(QStringLiteral("simulation/griot_prompt"),
+    m_enginePrompts[QStringLiteral("sim_griot")].content = settings.value(QStringLiteral("simulation/griot_prompt"),
         QStringLiteral("You are the Griot, an immersive storyteller for an RPG simulation.\n"
                        "Your task is to take dry mechanical results and turn them into cinematic prose.\n\n"
                        "INPUTS:\n"
@@ -473,9 +502,9 @@ void SettingsDialog::load()
                        "STYLE:\n"
                        "- Evocative but concise.\n"
                        "- Second-person perspective if appropriate, or third-person cinematic.\n"
-                       "- No mechanical jargon.")).toString());
+                       "- No mechanical jargon.")).toString();
 
-    m_simActorPromptEdit->setText(settings.value(QStringLiteral("simulation/actor_prompt"),
+    m_enginePrompts[QStringLiteral("sim_actor")].content = settings.value(QStringLiteral("simulation/actor_prompt"),
         QStringLiteral("You are an autonomous agent in a tabletop RPG simulation.\n"
                        "Name: %1\n"
                        "Motive: %2\n"
@@ -485,7 +514,7 @@ void SettingsDialog::load()
                        "RULES CONTEXT:\n%7\n\n"
                        "TASK:\n"
                        "Decide your next action based on your motive and the current state.\n"
-                       "Return ONLY a JSON object: {\"intent\": \"...\", \"reasoning\": \"...\"}")).toString());
+                       "Return ONLY a JSON object: {\"intent\": \"...\", \"reasoning\": \"...\"}")).toString();
 
     // Load Prompts
     QString promptsJson = settings.value(QStringLiteral("llm/prompts")).toString();
@@ -538,7 +567,7 @@ void SettingsDialog::save()
 
     settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
     settings.setValue(QStringLiteral("analyzer/provider"), m_analyzerProviderCombo->currentIndex());
-    settings.setValue(QStringLiteral("analyzer/model"), m_analyzerModelEdit->text());
+    settings.setValue(QStringLiteral("analyzer/model"), m_analyzerModelCombo->currentText());
 
     // Save Agent Configurations
     for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
@@ -549,13 +578,13 @@ void SettingsDialog::save()
     }
 
     // Save Core System Prompts
-    settings.setValue(QStringLiteral("analyzer/system_prompt"), m_analyzerPromptEdit->text());
-    settings.setValue(QStringLiteral("synopsis/file_prompt"), m_synopsisFilePromptEdit->text());
-    settings.setValue(QStringLiteral("synopsis/folder_prompt"), m_synopsisFolderPromptEdit->text());
-    settings.setValue(QStringLiteral("chargen/system_prompt"), m_charGenPromptEdit->text());
-    settings.setValue(QStringLiteral("simulation/arbiter_prompt"), m_simArbiterPromptEdit->text());
-    settings.setValue(QStringLiteral("simulation/griot_prompt"), m_simGriotPromptEdit->text());
-    settings.setValue(QStringLiteral("simulation/actor_prompt"), m_simActorPromptEdit->text());
+    settings.setValue(QStringLiteral("analyzer/system_prompt"), m_enginePrompts[QStringLiteral("analyzer")].content);
+    settings.setValue(QStringLiteral("synopsis/file_prompt"), m_enginePrompts[QStringLiteral("synopsis_file")].content);
+    settings.setValue(QStringLiteral("synopsis/folder_prompt"), m_enginePrompts[QStringLiteral("synopsis_folder")].content);
+    settings.setValue(QStringLiteral("chargen/system_prompt"), m_enginePrompts[QStringLiteral("chargen")].content);
+    settings.setValue(QStringLiteral("simulation/arbiter_prompt"), m_enginePrompts[QStringLiteral("sim_arbiter")].content);
+    settings.setValue(QStringLiteral("simulation/griot_prompt"), m_enginePrompts[QStringLiteral("sim_griot")].content);
+    settings.setValue(QStringLiteral("simulation/actor_prompt"), m_enginePrompts[QStringLiteral("sim_actor")].content);
 
     // Save Prompts
     QJsonObject obj;
@@ -564,4 +593,44 @@ void SettingsDialog::save()
         obj[item->text()] = item->data(Qt::UserRole).toString();
     }
     settings.setValue(QStringLiteral("llm/prompts"), QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+}
+
+void SettingsDialog::setupEnginePromptRow(QFormLayout *layout, const QString &id, const QString &label)
+{
+    auto *rowLayout = new QHBoxLayout();
+    
+    auto *viewBtn = new QPushButton(i18n("View"), this);
+    auto *editBtn = new QPushButton(i18n("Edit"), this);
+    
+    auto *status = new QLabel(this);
+    status->setText(i18n("(Configured)"));
+    status->setStyleSheet(QStringLiteral("font-size: 9px; color: gray;"));
+    
+    rowLayout->addWidget(viewBtn);
+    rowLayout->addWidget(editBtn);
+    rowLayout->addWidget(status);
+    rowLayout->addStretch();
+    
+    layout->addRow(label + QStringLiteral(":"), rowLayout);
+    
+    EnginePrompt ep;
+    ep.content = QString();
+    ep.statusLabel = status;
+    m_enginePrompts[id] = ep;
+    
+    connect(viewBtn, &QPushButton::clicked, this, [this, id, label]() {
+        QMessageBox::information(this, label, m_enginePrompts[id].content);
+    });
+    
+    connect(editBtn, &QPushButton::clicked, this, [this, id, label]() {
+        openPromptEditor(id);
+    });
+}
+
+void SettingsDialog::openPromptEditor(const QString &id)
+{
+    PromptEditorDialog dialog(id, m_enginePrompts[id].content, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        m_enginePrompts[id].content = dialog.content();
+    }
 }

@@ -122,6 +122,8 @@ add_executable(rpgforge
     src/diceengine.h
     src/settingsdialog.cpp
     src/settingsdialog.h
+    src/prompteditordialog.cpp
+    src/prompteditordialog.h
     src/chatpanel.cpp
     src/chatpanel.h
     src/compiledialog.cpp
@@ -196,4 +198,55 @@ target_link_libraries(test_librarianservice
     Qt6::Core 
     Qt6::Concurrent
 )
-add_test(NAME librarian_service_test COMMAND test_librarianservice)
+add_executable(test_projectmanager 
+    tests/test_projectmanager.cpp 
+    src/projectmanager.cpp
+    src/projecttreemodel.cpp
+    src/variablemanager.cpp
+    src/synopsisservice.cpp
+    src/librarianservice.cpp
+    src/librariandatabase.cpp
+    src/knowledgebase.cpp
+    src/llmservice.cpp
+    src/mcpservice.cpp
+    src/agentgatekeeper.cpp
+    src/analyzerservice.cpp
+    src/diceengine.cpp
+    src/simulationmanager.cpp
+    src/simulationstate.cpp
+    src/simarbiter.cpp
+    src/simgriot.cpp
+    src/simulationactor.cpp
+)
+target_link_libraries(test_projectmanager 
+    Qt6::Test 
+    Qt6::Sql 
+    Qt6::Core 
+    Qt6::Concurrent
+    Qt6::Xml
+    Qt6::Network
+    Qt6::Gui
+    KF6::CoreAddons
+    KF6::I18n
+    KF6::TextEditor
+    KF6::Wallet
+)
+add_test(NAME project_manager_test COMMAND test_projectmanager)
+
+add_executable(test_projecttreemodel
+    tests/test_projecttreemodel.cpp
+    src/projecttreemodel.cpp
+    src/synopsisservice.cpp
+    src/projectmanager.cpp
+    src/variablemanager.cpp
+)
+target_link_libraries(test_projecttreemodel
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Network
+    Qt6::Concurrent
+    KF6::I18n
+)
+add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
+
