@@ -55,10 +55,12 @@ KnowledgeBase::~KnowledgeBase()
 
 void KnowledgeBase::initForProject(const QString &projectPath)
 {
+    if (projectPath.isEmpty()) return;
     close();
 
     m_projectPath = projectPath;
     m_dbPath = QDir(projectPath).absoluteFilePath(QStringLiteral(".rpgforge-vectors.db"));
+    m_pendingFiles.clear(); // Ensure no stale queue
 
     setupDatabase();
 }

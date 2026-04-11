@@ -35,6 +35,6 @@ void AgentGatekeeper::resumeAll()
     qDebug() << "AgentGatekeeper: Resuming all background agents...";
     SynopsisService::instance().resume();
     KnowledgeBase::instance().resume();
-    AnalyzerService::instance().resume();
+    AnalyzerService::instance().resume(); // Fixed: was pause()
     if (m_librarianService) m_librarianService->resume();
 }

@@ -144,12 +144,14 @@ MainWindow::MainWindow(QWidget *parent)
         if (wizard.exec() == QDialog::Accepted) {
             // After successful onboarding, if a project was created, open the README
             if (ProjectManager::instance().isProjectOpen()) {
+                AgentGatekeeper::instance().resumeAll();
                 QString readmePath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(QStringLiteral("research/README.md"));
                 if (QFile::exists(readmePath)) {
                     openFileFromUrl(QUrl::fromLocalFile(readmePath));
                 }
             }
         }
+        settings.setValue(QStringLiteral("firstRunComplete"), true);
     }
 
     // Restore previous session after everything is set up

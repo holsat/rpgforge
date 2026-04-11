@@ -85,9 +85,9 @@ int OnboardingWizard::nextId() const
     }
 }
 
-QWizardPage* OnboardingWizard::createWelcomePage()
+OnboardingPage* OnboardingWizard::createWelcomePage()
 {
-    auto *page = new QWizardPage(this);
+    auto *page = new OnboardingPage(this);
     page->setTitle(i18n("Welcome to RPG Forge"));
 
     auto *layout = new QVBoxLayout(page);
@@ -99,7 +99,7 @@ QWizardPage* OnboardingWizard::createWelcomePage()
     return page;
 }
 
-QWizardPage* OnboardingWizard::createProjectPage()
+OnboardingPage* OnboardingWizard::createProjectPage()
 {
     auto *page = new OnboardingPage(this);
     page->setTitle(i18n("Create or Import Project"));
@@ -143,7 +143,7 @@ QWizardPage* OnboardingWizard::createProjectPage()
     return page;
 }
 
-QWizardPage* OnboardingWizard::createScrivenerPage()
+OnboardingPage* OnboardingWizard::createScrivenerPage()
 {
     auto *page = new OnboardingPage(this);
     page->setTitle(i18n("Import Scrivener Project"));
@@ -172,7 +172,7 @@ QWizardPage* OnboardingWizard::createScrivenerPage()
     return page;
 }
 
-QWizardPage* OnboardingWizard::createGitImportPage()
+OnboardingPage* OnboardingWizard::createGitImportPage()
 {
     auto *page = new OnboardingPage(this);
     page->setTitle(i18n("Clone Git Repository"));
@@ -191,9 +191,9 @@ QWizardPage* OnboardingWizard::createGitImportPage()
     return page;
 }
 
-QWizardPage* OnboardingWizard::createAiPage()
+OnboardingPage* OnboardingWizard::createAiPage()
 {
-    auto *page = new QWizardPage(this);
+    auto *page = new OnboardingPage(this);
     page->setTitle(i18n("Connect AI Assistant"));
 
     auto *layout = new QVBoxLayout(page);
@@ -248,9 +248,9 @@ QWizardPage* OnboardingWizard::createAiPage()
     return page;
 }
 
-QWizardPage* OnboardingWizard::createGithubPage()
+OnboardingPage* OnboardingWizard::createGithubPage()
 {
-    auto *page = new QWizardPage(this);
+    auto *page = new OnboardingPage(this);
     page->setTitle(i18n("GitHub Integration (Optional)"));
 
     auto *layout = new QVBoxLayout(page);
@@ -268,9 +268,9 @@ QWizardPage* OnboardingWizard::createGithubPage()
     return page;
 }
 
-QWizardPage* OnboardingWizard::createFinishPage()
+OnboardingPage* OnboardingWizard::createFinishPage()
 {
-    auto *page = new QWizardPage(this);
+    auto *page = new OnboardingPage(this);
     page->setTitle(i18n("All Set!"));
 
     auto *layout = new QVBoxLayout(page);

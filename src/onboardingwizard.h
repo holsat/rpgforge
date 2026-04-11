@@ -53,13 +53,13 @@ public:
     void accept() override;
 
 private:
-    QWizardPage* createWelcomePage();
-    QWizardPage* createProjectPage();
-    QWizardPage* createScrivenerPage();
-    QWizardPage* createGitImportPage();
-    QWizardPage* createAiPage();
-    QWizardPage* createGithubPage();
-    QWizardPage* createFinishPage();
+    OnboardingPage* createWelcomePage();
+    OnboardingPage* createProjectPage();
+    OnboardingPage* createScrivenerPage();
+    OnboardingPage* createGitImportPage();
+    OnboardingPage* createAiPage();
+    OnboardingPage* createGithubPage();
+    OnboardingPage* createFinishPage();
 
     void checkOllama();
     void testAiConnection();

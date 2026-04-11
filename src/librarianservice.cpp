@@ -58,8 +58,10 @@ LibrarianService::~LibrarianService()
 
 void LibrarianService::setProjectPath(const QString &path)
 {
+    if (path.isEmpty()) return;
     QMutexLocker locker(&m_mutex);
     m_projectPath = path;
+    m_pendingFiles.clear(); // Clear any queue from previous project
     
     // Clear old watches
     QStringList watched = m_watcher->files();
