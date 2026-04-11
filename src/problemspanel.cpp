@@ -68,6 +68,8 @@ void ProblemsPanel::setupUi()
     m_table->setWordWrap(true);
     m_table->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     
+    connect(m_table, &QTableWidget::cellClicked, this, &ProblemsPanel::onItemClicked);
+    connect(m_table, &QTableWidget::cellActivated, this, &ProblemsPanel::onItemClicked);
     connect(m_table, &QTableWidget::cellDoubleClicked, this, &ProblemsPanel::onItemDoubleClicked);
 
     layout->addWidget(m_table);
@@ -184,4 +186,16 @@ void ProblemsPanel::onItemDoubleClicked(int row, int /*column*/)
 
     // Default action: jump to line
     Q_EMIT issueActivated(path, line);
+}
+
+void ProblemsPanel::onItemClicked(int row, int column)
+{
+    Q_UNUSED(column);
+    auto *fileItem = m_table->item(row, 2);
+    auto *lineItem = m_table->item(row, 3);
+    if (fileItem && lineItem) {
+        QString path = fileItem->data(Qt::UserRole).toString();
+        int line = lineItem->data(Qt::UserRole).toInt();
+        Q_EMIT issueActivated(path, line);
+    }
 }

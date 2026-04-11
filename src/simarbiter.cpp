@@ -83,6 +83,7 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
 
     LLMRequest req;
     req.serviceName = i18n("Simulation Arbiter");
+    req.settingsKey = QStringLiteral("simulation/sim_arbiter_model");
     
     // 1. Try agent-specific setting
     // 2. Try legacy analyzer setting

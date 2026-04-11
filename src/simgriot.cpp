@@ -54,6 +54,7 @@ void SimulationGriot::narrate(const QString &actorName, const QJsonObject &inten
 
     LLMRequest req;
     req.serviceName = i18n("Simulation Griot");
+    req.settingsKey = QStringLiteral("simulation/sim_griot_model");
     
     // Griot uses creative settings
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_griot_provider"), 

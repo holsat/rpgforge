@@ -87,6 +87,7 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
 
     LLMRequest req;
     req.serviceName = i18n("Simulation Actor");
+    req.settingsKey = QStringLiteral("simulation/sim_actor_model");
 
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_actor_provider"), 
                                                            settings.value(QStringLiteral("llm/provider"), 0)).toInt());

@@ -157,7 +157,7 @@ static QUrl normalizeOllamaUrl(const QString &rawEndpoint, const QString &target
 // ---------------------------------------------------------------------------
 // Helper: map provider → settings key prefix
 // ---------------------------------------------------------------------------
-static QString providerSettingsKey(LLMProvider p)
+QString LLMService::providerSettingsKey(LLMProvider p)
 {
     switch (p) {
         case LLMProvider::OpenAI:    return QStringLiteral("llm/openai");
@@ -176,7 +176,7 @@ QString LLMService::resolvedModel(const LLMRequest &request) const
 {
     if (!request.model.isEmpty()) return request.model;
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    return settings.value(providerSettingsKey(request.provider) + QStringLiteral("/model")).toString();
+    return settings.value(LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model")).toString();
 }
 
 // ---------------------------------------------------------------------------
@@ -214,9 +214,10 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
         if (cached.isEmpty() || cached.contains(model)) {
             // Empty cache = fetch failed previously; give the request a chance.
             dispatchRequest(request, model, nonStreamCallback);
-        } else {
+        } else if (!m_isShowingModelDialog) {
             m_hasPendingRequest = true;
             m_pendingRequest = {request, nonStreamCallback};
+            m_isShowingModelDialog = true;
             Q_EMIT modelNotFound(provider, model, cached, request.serviceName);
         }
         return;
@@ -228,9 +229,10 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
 
         if (available.isEmpty() || available.contains(model)) {
             dispatchRequest(request, model, nonStreamCallback);
-        } else {
+        } else if (!m_isShowingModelDialog) {
             m_hasPendingRequest = true;
             m_pendingRequest = {request, nonStreamCallback};
+            m_isShowingModelDialog = true;
             Q_EMIT modelNotFound(request.provider, model, available, request.serviceName);
         }
     });
@@ -254,7 +256,7 @@ void LLMService::retryWithModel(const QString &newModel)
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     QString key = pending.request.settingsKey;
     if (key.isEmpty()) {
-        key = providerSettingsKey(pending.request.provider) + QStringLiteral("/model");
+        key = LLMService::providerSettingsKey(pending.request.provider) + QStringLiteral("/model");
     }
     settings.setValue(key, newModel);
     settings.sync();
@@ -299,7 +301,7 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
     if (request.provider == LLMProvider::OpenAI
         || request.provider == LLMProvider::Grok
         || request.provider == LLMProvider::Gemini) {
-        const QString sk = providerSettingsKey(request.provider);
+        const QString sk = LLMService::providerSettingsKey(request.provider);
         const QString defaultEndpoint =
             (request.provider == LLMProvider::Grok)
                 ? QStringLiteral("https://api.x.ai/v1/chat/completions")

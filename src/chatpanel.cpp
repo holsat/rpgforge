@@ -393,6 +393,7 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
                 request.provider = currentProvider();
                 request.model = m_modelCombo->currentText();
                 request.serviceName = actualServiceName;
+                request.settingsKey = LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model");
                 request.messages = m_history;
                 LLMService::instance().sendRequest(request);
                 return;
@@ -415,6 +416,7 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
                     request.provider = currentProvider();
                     request.model = m_modelCombo->currentText().trimmed();
                     request.serviceName = actualServiceName;
+                    request.settingsKey = LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model");
                     request.messages = m_history;
                     request.stream = true;
                     LLMService::instance().sendRequest(request);
@@ -430,6 +432,7 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
     request.provider = currentProvider();
     request.model = m_modelCombo->currentText().trimmed();
     request.serviceName = actualServiceName;
+    request.settingsKey = LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model");
     request.messages = m_history;
     request.stream = true;
     

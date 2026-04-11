@@ -189,6 +189,7 @@ private:
 
     QUrl m_currentUrl;
     LibrarianService *m_librarianService = nullptr;
+    QString m_lastSearchText;
 };
 
 #endif // MAINWINDOW_H

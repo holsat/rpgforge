@@ -128,6 +128,14 @@ public:
      */
     static QString providerName(LLMProvider provider);
 
+    bool isShowingModelDialog() const { return m_isShowingModelDialog; }
+    void setShowingModelDialog(bool showing) { m_isShowingModelDialog = showing; }
+
+    /**
+     * @brief Returns the settings key prefix for the given provider (e.g. "llm/openai").
+     */
+    static QString providerSettingsKey(LLMProvider provider);
+
 Q_SIGNALS:
     /// Emitted when a new streaming request begins. requestId is a UUID that
     /// callers can store and use to filter responseChunk/responseFinished.
@@ -201,6 +209,7 @@ private:
     // API key cache: populated on first KWallet read, avoids synchronous wallet
     // opens on every request. Invalidated when setApiKey() is called.
     mutable QHash<LLMProvider, QString> m_apiKeyCache;
+    bool m_isShowingModelDialog = false;
 };
 
 #endif // LLMSERVICE_H

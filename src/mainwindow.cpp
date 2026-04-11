@@ -1279,11 +1279,15 @@ void MainWindow::performSearch(const QString &text)
     auto *doc = activeDocument();
 
     if (view && doc && !doc->url().isEmpty()) {
-        // Document Search: Use KTextEditor's search functionality
         KTextEditor::SearchOptions options = KTextEditor::Default;
         KTextEditor::Cursor start = view->cursorPosition();
-        
-        // Find next occurrence
+
+        // Find NEXT if text is same
+        if (text == m_lastSearchText && view->selection()) {
+            start = view->selectionRange().end();
+        }
+        m_lastSearchText = text;
+
         QList<KTextEditor::Range> results = doc->searchText(KTextEditor::Range(start, doc->documentEnd()), text, options);
         KTextEditor::Range range = results.isEmpty() ? KTextEditor::Range::invalid() : results.first();
         
@@ -1297,16 +1301,24 @@ void MainWindow::performSearch(const QString &text)
             view->setSelection(range);
             view->setCursorPosition(range.start());
         } else {
-            // Not found in current document, fall back to global search if project is open
+            // Not found in current document, ask if user wants global AI search
             if (ProjectManager::instance().isProjectOpen()) {
-                m_sidebar->showPanel(m_chatId);
-                m_chatPanel->askAI(i18n("Search project for: %1", text));
+                auto res = QMessageBox::question(this, i18n("Not Found"), 
+                    i18n("'%1' was not found in this document. Search entire project using AI?", text),
+                    QMessageBox::Yes | QMessageBox::No);
+                
+                if (res == QMessageBox::Yes) {
+                    m_sidebar->showPanel(m_chatId);
+                    m_chatPanel->askAI(i18n("Search project for: %1", text), i18n("AI Project Search"));
+                }
+            } else {
+                QMessageBox::information(this, i18n("Not Found"), i18n("'%1' was not found in this document.", text));
             }
         }
     } else if (ProjectManager::instance().isProjectOpen()) {
         // Global Search: Ask AI / KnowledgeBase via Chat Panel
         m_sidebar->showPanel(m_chatId);
-        m_chatPanel->askAI(i18n("Search project for: %1", text));
+        m_chatPanel->askAI(i18n("Search project for: %1", text), i18n("AI Project Search"));
     }
 }
 
@@ -2094,6 +2106,10 @@ void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidMod
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+
+    connect(dlg, &QDialog::finished, this, []() {
+        LLMService::instance().setShowingModelDialog(false);
+    });
 
     connect(dlg, &QDialog::accepted, this, [combo]() {
         const QString selected = combo->currentText();

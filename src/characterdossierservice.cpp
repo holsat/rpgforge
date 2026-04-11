@@ -81,11 +81,16 @@ void CharacterDossierService::scanManuscript()
 
     if (combinedText.isEmpty()) return;
 
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("dossier/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    QString model = settings.value(QStringLiteral("dossier/model"), (provider == LLMProvider::Ollama ? QStringLiteral("llama3") : QString())).toString();
+
     // Ask LLM to list characters found in the text
     LLMRequest req;
     req.serviceName = i18n("Character Dossier Scanner");
-    req.provider = LLMProvider::Ollama; // Fallback or from settings
-    req.model = QStringLiteral("llama3"); 
+    req.provider = provider;
+    req.model = model;
+    req.settingsKey = QStringLiteral("dossier/model");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are a literary analyst. Extract a list of character names mentioned in the following RPG manuscript.")};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("List ONLY the names of significant characters found in this text, as a JSON array of strings:\n\n%1").arg(combinedText.left(5000))};
     req.stream = false;
@@ -125,10 +130,15 @@ void CharacterDossierService::updateDossier(const QString &characterName, const 
         file.close();
     }
 
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("dossier/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    QString model = settings.value(QStringLiteral("dossier/model"), (provider == LLMProvider::Ollama ? QStringLiteral("llama3") : QString())).toString();
+
     LLMRequest req;
     req.serviceName = i18n("Character Dossier Generator");
-    req.provider = LLMProvider::Ollama;
-    req.model = QStringLiteral("llama3");
+    req.provider = provider;
+    req.model = model;
+    req.settingsKey = QStringLiteral("dossier/model");
     
     QString systemPrompt = i18n(
         "You are an expert RPG writer. Maintain a comprehensive Character Dossier for '%1'.\n"
