@@ -91,6 +91,8 @@ add_executable(rpgforge
     src/librariandatabase.h
     src/librarianservice.cpp
     src/librarianservice.h
+    src/characterdossierservice.cpp
+    src/characterdossierservice.h
     src/knowledgebase.cpp
     src/knowledgebase.h
     src/agentgatekeeper.cpp
@@ -214,6 +216,7 @@ add_executable(test_projectmanager
     src/mcpservice.cpp
     src/agentgatekeeper.cpp
     src/analyzerservice.cpp
+    src/characterdossierservice.cpp
     src/diceengine.cpp
     src/simulationmanager.cpp
     src/simulationstate.cpp

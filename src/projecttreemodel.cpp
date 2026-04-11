@@ -68,6 +68,7 @@ static QString categoryToString(ProjectTreeItem::Category category) {
     switch (category) {
         case ProjectTreeItem::Manuscript: return QStringLiteral("manuscript");
         case ProjectTreeItem::Research: return QStringLiteral("research");
+        case ProjectTreeItem::Library: return QStringLiteral("library");
         case ProjectTreeItem::Chapter: return QStringLiteral("chapter");
         case ProjectTreeItem::Scene: return QStringLiteral("scene");
         case ProjectTreeItem::Characters: return QStringLiteral("characters");
@@ -82,6 +83,7 @@ static QString categoryToString(ProjectTreeItem::Category category) {
 static ProjectTreeItem::Category stringToCategory(const QString &str) {
     if (str == QStringLiteral("manuscript")) return ProjectTreeItem::Manuscript;
     if (str == QStringLiteral("research")) return ProjectTreeItem::Research;
+    if (str == QStringLiteral("library")) return ProjectTreeItem::Library;
     if (str == QStringLiteral("chapter")) return ProjectTreeItem::Chapter;
     if (str == QStringLiteral("scene")) return ProjectTreeItem::Scene;
     if (str == QStringLiteral("characters")) return ProjectTreeItem::Characters;
@@ -196,6 +198,7 @@ QVariant ProjectTreeModel::data(const QModelIndex &index, int role) const
             switch (item->category) {
                 case ProjectTreeItem::Manuscript: return QIcon::fromTheme(QStringLiteral("document-edit"));
                 case ProjectTreeItem::Research: return QIcon::fromTheme(QStringLiteral("search"));
+                case ProjectTreeItem::Library: return QIcon::fromTheme(QStringLiteral("library"));
                 case ProjectTreeItem::Chapter: return QIcon::fromTheme(QStringLiteral("book-contents"));
                 case ProjectTreeItem::Characters: return QIcon::fromTheme(QStringLiteral("user-identity"));
                 case ProjectTreeItem::Places: return QIcon::fromTheme(QStringLiteral("applications-graphics"));

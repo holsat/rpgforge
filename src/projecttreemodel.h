@@ -28,7 +28,7 @@
 
 struct ProjectTreeItem {
     enum Type { Folder, File };
-    enum Category { None, Manuscript, Research, Chapter, Scene, Characters, Places, Cultures, Stylesheet, Notes };
+    enum Category { None, Manuscript, Research, Library, Chapter, Scene, Characters, Places, Cultures, Stylesheet, Notes };
     Type type;
     Category category = None;
     QString name;

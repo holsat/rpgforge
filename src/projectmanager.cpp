@@ -197,6 +197,14 @@ void ProjectManager::setupDefaultProject(const QString &dir, const QString &name
     projectDir.mkpath(QStringLiteral("research"));
     QModelIndex researchIdx = model.addFolder(i18n("Research"), QStringLiteral("research"), rootIdx);
     model.setData(researchIdx, static_cast<int>(ProjectTreeItem::Research), ProjectTreeModel::CategoryRole);
+
+    // 3. Library (Auto-generated dossiers)
+    projectDir.mkpath(QStringLiteral("library/Characters"));
+    QModelIndex libraryIdx = model.addFolder(i18n("Library"), QStringLiteral("library"), rootIdx);
+    model.setData(libraryIdx, static_cast<int>(ProjectTreeItem::Library), ProjectTreeModel::CategoryRole);
+    
+    QModelIndex libCharsIdx = model.addFolder(i18n("Characters"), QStringLiteral("library/Characters"), libraryIdx);
+    model.setData(libCharsIdx, static_cast<int>(ProjectTreeItem::Characters), ProjectTreeModel::CategoryRole);
     
     QString readmePath = QStringLiteral("research/README.md");
     QFile readmeFile(projectDir.absoluteFilePath(readmePath));

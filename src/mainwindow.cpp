@@ -46,6 +46,7 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
+#include "characterdossierservice.h"
 #include "agentgatekeeper.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -104,6 +105,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_librarianService = new LibrarianService(&LLMService::instance(), this);
     AgentGatekeeper::instance().setLibrarianService(m_librarianService);
+    CharacterDossierService::instance().init(&LLMService::instance(), m_librarianService);
 
     connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
     connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
@@ -579,7 +581,9 @@ void MainWindow::setupSidebar()
 
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
         if (m_corkboardView) m_corkboardView->setFolder(QString());
-        KnowledgeBase::instance().initForProject(ProjectManager::instance().projectPath());
+        QString projectDir = ProjectManager::instance().projectPath();
+        KnowledgeBase::instance().initForProject(projectDir);
+        CharacterDossierService::instance().setProjectPath(projectDir);
         
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();
@@ -932,6 +936,7 @@ void MainWindow::newProject()
             AgentGatekeeper::instance().pauseAll();
             if (ProjectManager::instance().createProject(dir, name)) {
                 if (m_librarianService) m_librarianService->setProjectPath(dir);
+                CharacterDossierService::instance().setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
@@ -956,6 +961,7 @@ void MainWindow::openProject()
         if (ProjectManager::instance().openProject(filePath)) {
             QString projectDir = ProjectManager::instance().projectPath();
             if (m_librarianService) m_librarianService->setProjectPath(projectDir);
+            CharacterDossierService::instance().setProjectPath(projectDir);
             m_fileExplorer->setRootPath(projectDir);
             updateTitle();
         }
