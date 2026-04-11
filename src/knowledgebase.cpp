@@ -118,6 +118,11 @@ void KnowledgeBase::indexFile(const QString &filePath)
 {
     if (m_projectPath.isEmpty()) return;
     
+    if (m_paused) {
+        if (!m_pendingFiles.contains(filePath)) m_pendingFiles.append(filePath);
+        return;
+    }
+
     // Make sure it's being watched
     if (!m_watcher->files().contains(filePath)) {
         m_watcher->addPath(filePath);
@@ -128,6 +133,22 @@ void KnowledgeBase::indexFile(const QString &filePath)
 
     QString content = QString::fromUtf8(file.readAll());
     chunkAndEmbed(filePath, content);
+}
+
+void KnowledgeBase::pause()
+{
+    m_paused = true;
+}
+
+void KnowledgeBase::resume()
+{
+    if (!m_paused) return;
+    m_paused = false;
+    
+    // Process queued files
+    while (!m_pendingFiles.isEmpty()) {
+        indexFile(m_pendingFiles.takeFirst());
+    }
 }
 
 void KnowledgeBase::onFileChanged(const QString &path)

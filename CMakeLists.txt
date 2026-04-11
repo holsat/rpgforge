@@ -93,6 +93,8 @@ add_executable(rpgforge
     src/librarianservice.h
     src/knowledgebase.cpp
     src/knowledgebase.h
+    src/agentgatekeeper.cpp
+    src/agentgatekeeper.h
     src/analyzerservice.cpp
     src/analyzerservice.h
     src/textutils.h

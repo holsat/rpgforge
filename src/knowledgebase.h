@@ -52,6 +52,9 @@ public:
     void indexFile(const QString &filePath);
     void search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback);
 
+    void pause();
+    void resume();
+
 Q_SIGNALS:
     void indexingProgress(int current, int total);
     void indexingFinished();
@@ -75,6 +78,8 @@ private:
     QFileSystemWatcher *m_watcher = nullptr;
     int m_pendingEmbeddings = 0;
     QMutex m_dbMutex;
+    bool m_paused = false;
+    QStringList m_pendingFiles;
 };
 
 #endif // KNOWLEDGEBASE_H

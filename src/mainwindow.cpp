@@ -46,6 +46,7 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
+#include "agentgatekeeper.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -102,6 +103,8 @@ MainWindow::MainWindow(QWidget *parent)
     setupEditor();
 
     m_librarianService = new LibrarianService(&LLMService::instance(), this);
+    AgentGatekeeper::instance().setLibrarianService(m_librarianService);
+
     connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
     connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
         VariableManager::instance().setLibraryVariables(vars);
@@ -575,11 +578,18 @@ void MainWindow::setupSidebar()
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
         if (m_corkboardView) m_corkboardView->setFolder(QString());
         KnowledgeBase::instance().initForProject(ProjectManager::instance().projectPath());
+        
+        // RESUME ALL AGENTS
+        AgentGatekeeper::instance().resumeAll();
+
         m_projectStatsStatus->show();
         updateProjectStats();
         SynopsisService::instance().scanProject();
     });
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
+        // PAUSE ALL AGENTS
+        AgentGatekeeper::instance().pauseAll();
+
         if (m_corkboardView) {
             m_corkboardView->setFolder(QString());
             showCentralView(m_editorView);
@@ -917,6 +927,7 @@ void MainWindow::newProject()
         QString name = dialog.projectName();
         
         if (!dir.isEmpty() && !name.isEmpty()) {
+            AgentGatekeeper::instance().pauseAll();
             if (ProjectManager::instance().createProject(dir, name)) {
                 if (m_librarianService) m_librarianService->setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
@@ -929,6 +940,7 @@ void MainWindow::newProject()
                     openFileFromUrl(QUrl::fromLocalFile(readmePath));
                 }
             }
+            AgentGatekeeper::instance().resumeAll();
         }
     }
 }
@@ -1818,8 +1830,7 @@ void MainWindow::importScrivener()
         progressDialog->setLabelText(msg);
     }, Qt::QueuedConnection);
 
-    SynopsisService::instance().pause();
-    if (m_librarianService) m_librarianService->pause();
+    AgentGatekeeper::instance().pauseAll();
 
     // Run the import in a background thread to prevent UI hang
     QtConcurrent::run([importer, scrivPath, projectPath, this]() {
@@ -1830,11 +1841,7 @@ void MainWindow::importScrivener()
         
         // Update UI/State back on main thread
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
-            SynopsisService::instance().resume();
-            if (m_librarianService) {
-                m_librarianService->resume();
-                m_librarianService->scanAll();
-            }
+            AgentGatekeeper::instance().resumeAll();
 
             if (success) {
                 m_projectTree->model()->setProjectData(resultData);
