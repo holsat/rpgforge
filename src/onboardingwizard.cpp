@@ -1,3 +1,4 @@
+#include <QtConcurrent/QtConcurrent>
 #include <QPointer>
 /*
     RPG Forge
@@ -528,11 +529,39 @@ void OnboardingWizard::accept()
         fullDir = QDir(baseDir).absoluteFilePath(name);
 
         if (ProjectManager::instance().createProject(fullDir, name)) {
+            auto *progress = new QProgressDialog(i18n("Importing Scrivener Project..."), i18n("Cancel"), 0, 100, this);
+            progress->setWindowModality(Qt::WindowModal);
+            progress->show();
+
+            QEventLoop loop;
+            auto importer = std::make_shared<ScrivenerImporter>();
             ProjectTreeModel model;
-            ScrivenerImporter importer;
-            importer.import(scrivPath, fullDir, &model);
-            ProjectManager::instance().setTree(model.projectData());
-            ProjectManager::instance().saveProject();
+            
+            connect(importer.get(), &ScrivenerImporter::progress, progress, &QProgressDialog::setValue);
+            connect(importer.get(), &ScrivenerImporter::progress, progress, [progress](int, const QString &msg) {
+                progress->setLabelText(msg);
+            });
+
+            bool success = false;
+            QJsonObject resultData;
+            QtConcurrent::run([importer, scrivPath, fullDir]() {
+                ProjectTreeModel backgroundModel;
+                bool ok = importer->import(scrivPath, fullDir, &backgroundModel);
+                return qMakePair(ok, backgroundModel.projectData());
+            }).then([&loop, &success, &resultData](QPair<bool, QJsonObject> result) {
+                success = result.first;
+                resultData = result.second;
+                loop.quit();
+            });
+
+            loop.exec();
+            
+            if (success) {
+                ProjectManager::instance().setTree(resultData);
+                ProjectManager::instance().saveProject();
+            }
+            progress->close();
+            delete progress;
         }
     } else if (m_importGitRadio->isChecked()) {
         QString gitUrl = m_gitUrlEdit->text();

@@ -1,3 +1,4 @@
+#include <QtConcurrent/QtConcurrent>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -1776,32 +1777,75 @@ void MainWindow::importScrivener()
     QString scrivPath = QFileDialog::getExistingDirectory(this, i18n("Select Scrivener Project (.scriv)"), QDir::homePath());
     if (scrivPath.isEmpty()) return;
 
+    // 1. Auto-create project if none open
     if (!ProjectManager::instance().isProjectOpen()) {
-        QMessageBox::warning(this, i18n("No Project Open"), i18n("Please open or create an RPG Forge project before importing."));
-        return;
+        QFileInfo fi(scrivPath);
+        QString projectName = fi.baseName();
+        // Create in the same parent directory as the .scriv project
+        QString targetDir = fi.absolutePath() + QDir::separator() + projectName + QStringLiteral("_forge");
+        
+        if (QDir(targetDir).exists()) {
+            auto result = QMessageBox::question(this, i18n("Project Directory Exists"),
+                i18n("The directory '%1' already exists. Use it for the new project?", targetDir));
+            if (result != QMessageBox::Yes) return;
+        }
+
+        if (!ProjectManager::instance().createProject(targetDir, projectName)) {
+            QMessageBox::critical(this, i18n("Error"), i18n("Failed to create project at %1", targetDir));
+            return;
+        }
+        
+        // Setup default UI state for the new project
+        if (m_librarianService) m_librarianService->setProjectPath(targetDir);
+        m_fileExplorer->setRootPath(targetDir);
+        ProjectManager::instance().setupDefaultProject(targetDir, projectName);
+        updateTitle();
     }
 
-    ScrivenerImporter importer;
+    QString projectPath = ProjectManager::instance().projectPath();
+    auto *model = m_projectTree->model();
+
+    // Use a shared pointer for the importer to keep it alive during async run
+    auto importer = std::make_shared<ScrivenerImporter>();
+    
     auto *progressDialog = new QProgressDialog(i18n("Importing Scrivener Project..."), i18n("Cancel"), 0, 100, this);
     progressDialog->setWindowModality(Qt::WindowModal);
+    progressDialog->setAutoClose(true);
+    progressDialog->show();
     
-    connect(&importer, &ScrivenerImporter::progress, progressDialog, &QProgressDialog::setValue);
-    connect(&importer, &ScrivenerImporter::progress, progressDialog, [progressDialog](int, const QString &message) {
-        progressDialog->setLabelText(message);
-    });
+    connect(importer.get(), &ScrivenerImporter::progress, this, [progressDialog](int val, const QString &msg) {
+        progressDialog->setValue(val);
+        progressDialog->setLabelText(msg);
+    }, Qt::QueuedConnection);
 
     SynopsisService::instance().pause();
-    importer.import(scrivPath, ProjectManager::instance().projectPath(), m_projectTree->model());
-    SynopsisService::instance().resume();
+    if (m_librarianService) m_librarianService->pause();
 
-    ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+    // Run the import in a background thread to prevent UI hang
+    QtConcurrent::run([importer, scrivPath, projectPath, this]() {
+        // Use a local model for the background work to avoid thread-safety issues with the UI model
+        ProjectTreeModel backgroundModel;
+        bool success = importer->import(scrivPath, projectPath, &backgroundModel);
+        auto resultData = backgroundModel.projectData();
+        
+        // Update UI/State back on main thread
+        QMetaObject::invokeMethod(this, [this, success, resultData]() {
+            SynopsisService::instance().resume();
+            if (m_librarianService) {
+                m_librarianService->resume();
+                m_librarianService->scanAll();
+            }
 
-    ProjectManager::instance().saveProject();
-    
-    progressDialog->close();
-    delete progressDialog;
-    
-    QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
+            if (success) {
+                m_projectTree->model()->setProjectData(resultData);
+                ProjectManager::instance().setTree(resultData);
+                ProjectManager::instance().saveProject();
+                QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
+            } else {
+                QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::importWord()
