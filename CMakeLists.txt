@@ -124,6 +124,8 @@ add_executable(rpgforge
     src/settingsdialog.h
     src/prompteditordialog.cpp
     src/prompteditordialog.h
+    src/diagnosticdetaildialog.cpp
+    src/diagnosticdetaildialog.h
     src/chatpanel.cpp
     src/chatpanel.h
     src/compiledialog.cpp

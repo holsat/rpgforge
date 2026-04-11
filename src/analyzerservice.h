@@ -22,6 +22,7 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include <QStringList>
 #include "knowledgebase.h"
 
 struct DiagnosticReference {
@@ -55,6 +56,12 @@ public:
      */
     void analyzeDocument(const QString &filePath, const QString &content);
 
+    void pause();
+    void resume();
+
+    void suppressDiagnostic(const QString &message);
+    bool isSuppressed(const QString &message) const;
+
     /**
      * @brief Parses a JSON array response into a list of diagnostics.
      */
@@ -76,6 +83,13 @@ private:
     AnalyzerService& operator=(const AnalyzerService&) = delete;
 
     QString m_activeAnalysisFile;
+    bool m_paused = false;
+    struct PendingAnalysis {
+        QString filePath;
+        QString content;
+    };
+    QList<PendingAnalysis> m_queue;
+    QStringList m_suppressionList;
 };
 
 #endif // ANALYZERSERVICE_H

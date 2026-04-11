@@ -94,6 +94,18 @@ void AnalyzerService::resume()
     }
 }
 
+void AnalyzerService::suppressDiagnostic(const QString &message)
+{
+    if (!m_suppressionList.contains(message)) {
+        m_suppressionList.append(message);
+    }
+}
+
+bool AnalyzerService::isSuppressed(const QString &message) const
+{
+    return m_suppressionList.contains(message);
+}
+
 void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QString &content, const QList<SearchResult> &results)
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
@@ -164,6 +176,11 @@ QList<Diagnostic> AnalyzerService::parseDiagnostics(const QString &jsonResponse)
     QJsonArray arr = doc.array();
     for (const auto &v : arr) {
         QJsonObject obj = v.toObject();
+        QString message = obj.value(QStringLiteral("message")).toString();
+        
+        // Skip if suppressed
+        if (instance().isSuppressed(message)) continue;
+
         Diagnostic d;
         d.line = obj.value(QStringLiteral("line")).toInt();
         QString sev = obj.value(QStringLiteral("severity")).toString().toLower();

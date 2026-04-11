@@ -115,7 +115,20 @@ void SynopsisService::scanProject()
     // Prioritize files to build leaf-level data first
     for (auto *item : items) {
         if (item->type == ProjectTreeItem::File) {
-            if (item->synopsis.isEmpty() && !item->path.isEmpty()) requestUpdate(item->path);
+            // ONLY index items under the Manuscript folder
+            bool isManuscript = false;
+            ProjectTreeItem *p = item;
+            while (p) {
+                if (p->category == ProjectTreeItem::Manuscript) {
+                    isManuscript = true;
+                    break;
+                }
+                p = p->parent;
+            }
+
+            if (isManuscript && item->synopsis.isEmpty() && !item->path.isEmpty()) {
+                requestUpdate(item->path);
+            }
         }
     }
     
