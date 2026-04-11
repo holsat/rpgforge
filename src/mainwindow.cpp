@@ -1791,25 +1791,31 @@ void MainWindow::importScrivener()
     QString scrivPath = QFileDialog::getExistingDirectory(this, i18n("Select Scrivener Project (.scriv)"), QDir::homePath());
     if (scrivPath.isEmpty()) return;
 
+    // Ensure everything is paused before we even touch the project manager
+    AgentGatekeeper::instance().pauseAll();
+
     // 1. Auto-create project if none open
     if (!ProjectManager::instance().isProjectOpen()) {
         QFileInfo fi(scrivPath);
         QString projectName = fi.baseName();
-        // Create in the same parent directory as the .scriv project
         QString targetDir = fi.absolutePath() + QDir::separator() + projectName + QStringLiteral("_forge");
         
         if (QDir(targetDir).exists()) {
             auto result = QMessageBox::question(this, i18n("Project Directory Exists"),
                 i18n("The directory '%1' already exists. Use it for the new project?", targetDir));
-            if (result != QMessageBox::Yes) return;
+            if (result != QMessageBox::Yes) {
+                AgentGatekeeper::instance().resumeAll();
+                return;
+            }
         }
 
+        // We temporarily block the resumeAll() that is normally triggered by projectOpened
         if (!ProjectManager::instance().createProject(targetDir, projectName)) {
             QMessageBox::critical(this, i18n("Error"), i18n("Failed to create project at %1", targetDir));
+            AgentGatekeeper::instance().resumeAll();
             return;
         }
         
-        // Setup default UI state for the new project
         if (m_librarianService) m_librarianService->setProjectPath(targetDir);
         m_fileExplorer->setRootPath(targetDir);
         ProjectManager::instance().setupDefaultProject(targetDir, projectName);
@@ -1817,14 +1823,10 @@ void MainWindow::importScrivener()
     }
 
     QString projectPath = ProjectManager::instance().projectPath();
-    auto *model = m_projectTree->model();
-
-    // Use a shared pointer for the importer to keep it alive during async run
     auto importer = std::make_shared<ScrivenerImporter>();
     
     auto *progressDialog = new QProgressDialog(i18n("Importing Scrivener Project..."), i18n("Cancel"), 0, 100, this);
     progressDialog->setWindowModality(Qt::WindowModal);
-    progressDialog->setAutoClose(true);
     progressDialog->show();
     
     connect(importer.get(), &ScrivenerImporter::progress, this, [progressDialog](int val, const QString &msg) {
@@ -1832,19 +1834,15 @@ void MainWindow::importScrivener()
         progressDialog->setLabelText(msg);
     }, Qt::QueuedConnection);
 
+    // Explicitly keep them paused
     AgentGatekeeper::instance().pauseAll();
 
-    // Run the import in a background thread to prevent UI hang
     QtConcurrent::run([importer, scrivPath, projectPath, this]() {
-        // Use a local model for the background work to avoid thread-safety issues with the UI model
         ProjectTreeModel backgroundModel;
         bool success = importer->import(scrivPath, projectPath, &backgroundModel);
         auto resultData = backgroundModel.projectData();
         
-        // Update UI/State back on main thread
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
-            AgentGatekeeper::instance().resumeAll();
-
             if (success) {
                 m_projectTree->model()->setProjectData(resultData);
                 ProjectManager::instance().setTree(resultData);
@@ -1853,6 +1851,9 @@ void MainWindow::importScrivener()
             } else {
                 QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
             }
+
+            // ONLY resume agents now that EVERYTHING is finished
+            AgentGatekeeper::instance().resumeAll();
         }, Qt::QueuedConnection);
     });
 }
@@ -2139,18 +2140,22 @@ void MainWindow::updateLibrarianHighlights()
             QVariant masterVal = m_librarianService->database()->getAttribute(id, key);
             if (masterVal.isValid() && masterVal.toString() != value) {
                 // Inconsistency found!
-                int startOffset = match.capturedStart(2);
-                int endOffset = match.capturedEnd(2);
+                KTextEditor::Cursor start = offsetToCursor(doc, match.capturedStart(2));
+                KTextEditor::Cursor end = offsetToCursor(doc, match.capturedEnd(2));
                 
-                KTextEditor::Cursor start = offsetToCursor(doc, startOffset);
-                KTextEditor::Cursor end = offsetToCursor(doc, endOffset);
-                
-                if (!start.isValid() || !end.isValid()) continue;
-
-                KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
-                range->setAttribute(errorAttr);
-                range->setZDepth(100.0);
-                m_librarianRanges.append(range);
+                if (start.isValid() && end.isValid()) {
+                    KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
+                    range->setAttribute(errorAttr);
+                    range->setZDepth(100.0);
+                    
+                    // ADD TOOLTIP
+                    QString source = m_librarianService->database()->getReferences(id).join(", ");
+                    range->setAttribute(errorAttr);
+                    errorAttr->setToolTip(i18n("Consistency Error: Library value for '%1' is '%2'\nSource: %3", 
+                                               key, masterVal.toString(), source));
+                    
+                    m_librarianRanges.append(range);
+                }
             }
         }
     }
@@ -2164,15 +2169,19 @@ void MainWindow::updateLibrarianHighlights()
     it = varRegex.globalMatch(text);
     while (it.hasNext()) {
         QRegularExpressionMatch match = it.next();
-        int startOffset = match.capturedStart();
-        int endOffset = match.capturedEnd();
-        
-        KTextEditor::Cursor start = offsetToCursor(doc, startOffset);
-        KTextEditor::Cursor end = offsetToCursor(doc, endOffset);
+        KTextEditor::Cursor start = offsetToCursor(doc, match.capturedStart());
+        KTextEditor::Cursor end = offsetToCursor(doc, match.capturedEnd());
         
         if (start.isValid() && end.isValid()) {
             KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
             range->setAttribute(boundAttr);
+            
+            // ADD TOOLTIP
+            QString varName = match.captured(1);
+            KTextEditor::Attribute::Ptr specificAttr(new KTextEditor::Attribute(*boundAttr));
+            specificAttr->setToolTip(i18n("Auto-bound Variable: Linked to Librarian '%1'", varName));
+            range->setAttribute(specificAttr);
+            
             m_librarianRanges.append(range);
         }
     }

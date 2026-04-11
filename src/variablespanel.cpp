@@ -400,13 +400,11 @@ void VariablesPanel::refreshLibrary()
     if (!m_librarianService || !m_libraryRoot || !m_librarianService->database()->database().isOpen()) return;
 
     m_treeWidget->blockSignals(true);
-    
-    // Clear old library items
     qDeleteAll(m_libraryRoot->takeChildren());
 
-    // Fetch all entities from DB (shortcut: we query types)
-    // In a real EAV we might want a 'listAllEntities' method
-    QSqlQuery query(m_librarianService->database()->database());
+    // Fetch all entities
+    QSqlDatabase db = m_librarianService->database()->database();
+    QSqlQuery query(db);
     query.exec(QStringLiteral("SELECT id, name, type FROM entities"));
 
     QMap<QString, QTreeWidgetItem*> typeGroups;
@@ -415,6 +413,8 @@ void VariablesPanel::refreshLibrary()
         qint64 id = query.value(0).toLongLong();
         QString name = query.value(1).toString();
         QString type = query.value(2).toString();
+
+        if (type.isEmpty()) type = i18n("General");
 
         if (!typeGroups.contains(type)) {
             auto *group = new QTreeWidgetItem(m_libraryRoot);
@@ -429,9 +429,9 @@ void VariablesPanel::refreshLibrary()
         entityItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         entityItem->setData(0, Qt::UserRole, id);
 
-        // Fetch attributes for this entity
+        // Fetch attributes
         QVariantMap attrs = m_librarianService->database()->getAttributes(id);
-        for (auto it = attrs.begin(); it != attrs.end(); ++it) {
+        for (auto it = attrs.constBegin(); it != attrs.constEnd(); ++it) {
             auto *attrItem = new QTreeWidgetItem(entityItem);
             attrItem->setText(0, it.key());
             attrItem->setText(1, it.value().toString());
