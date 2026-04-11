@@ -562,7 +562,7 @@ void MainWindow::setupSidebar()
     });
 
     connect(&VariableManager::instance(), &VariableManager::variablesChanged, this, [this]() {
-        if (m_previewPanel) {
+        if (m_previewPanel && m_document) {
             m_previewPanel->setMarkdown(m_document->text());
         }
     });
@@ -1190,9 +1190,10 @@ void MainWindow::togglePreview()
 void MainWindow::syncScroll()
 {
     auto *view = activeView();
-    if (!view || !m_previewPanel || !m_previewPanel->isVisible()) return;
+    if (!view || !m_previewPanel || !m_previewPanel->isVisible() || !m_previewPanel->window()) return;
 
     // Use scrollToLine with smooth=false for real-time synchronization
+    // Ensure the view is valid and has a Kate view interface
     int currentLine = view->firstDisplayedLine();
     m_previewPanel->scrollToLine(currentLine, false);
 }
