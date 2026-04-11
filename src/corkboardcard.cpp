@@ -32,8 +32,9 @@
 #include <QDir>
 
 CorkboardCard::CorkboardCard(ProjectTreeItem *item, QWidget *parent)
-    : QFrame(parent), m_item(item)
+    : QFrame(parent)
 {
+    m_itemPath = item->path;
     m_title = item->name;
     m_status = item->status;
     m_synopsis = item->synopsis;
@@ -55,13 +56,10 @@ CorkboardCard::CorkboardCard(ProjectTreeItem *item, QWidget *parent)
     setFixedSize(200, 150);
     setFrameShape(QFrame::StyledPanel);
     setFrameShadow(QFrame::Raised);
-    // Use palette roles so the card adapts to dark/light KDE themes.
-    // The warm tint is derived from the active highlight colour to stay on-theme
-    // rather than forcing a hard-coded yellow that clashes on dark palettes.
+    
     const QPalette &pal = palette();
     const QColor base = pal.color(QPalette::Base);
     const QColor highlight = pal.color(QPalette::Highlight);
-    // Blend base with a touch of highlight for a subtle warm tint
     const QColor cardBg(
         (base.red()   * 3 + highlight.red())   / 4,
         (base.green() * 3 + highlight.green()) / 4,
@@ -126,10 +124,8 @@ void CorkboardCard::mouseMoveEvent(QMouseEvent *event)
     QDrag *drag = new QDrag(this);
     QMimeData *mimeData = new QMimeData();
 
-    QByteArray data;
-    auto *ptr = m_item;
-    data.append(reinterpret_cast<const char*>(&ptr), sizeof(ptr));
-    mimeData->setData(QStringLiteral("application/x-rpgforge-corkboard-card"), data);
+    // Use path instead of raw pointer for drag data
+    mimeData->setData(QStringLiteral("application/x-rpgforge-corkboard-card-path"), m_itemPath.toUtf8());
     
     drag->setMimeData(mimeData);
     drag->setPixmap(grab());

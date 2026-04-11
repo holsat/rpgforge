@@ -54,7 +54,7 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
         // Use persistent index — automatically invalid after model reset or item removal
         if (m_activeFolderIndex.isValid()) {
             ProjectTreeItem *item = m_model->itemFromIndex(m_activeFolderIndex);
-            if (item) Q_EMIT folderActivated(item);
+            if (item) Q_EMIT folderActivated(item->path);
         }
     });
 
@@ -166,7 +166,7 @@ void ProjectTreePanel::setupUi()
         ProjectTreeItem *item = m_model->itemFromIndex(index);
         if (item->type == ProjectTreeItem::Folder) {
             m_activeFolderIndex = QPersistentModelIndex(index);
-            Q_EMIT folderActivated(item);
+            Q_EMIT folderActivated(item->path);
         }
     });
 

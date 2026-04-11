@@ -50,10 +50,13 @@ CorkboardView::CorkboardView(QWidget *parent)
 
 CorkboardView::~CorkboardView() = default;
 
-void CorkboardView::setFolder(ProjectTreeItem *folderItem)
+void CorkboardView::setFolder(const QString &folderPath)
 {
-    m_currentFolder = folderItem;
+    m_currentFolderPath = folderPath;
     clear();
+    
+    if (!m_model) return;
+    ProjectTreeItem *folderItem = m_model->findItem(folderPath);
     if (!folderItem) return;
 
     for (auto *child : folderItem->children) {
@@ -97,14 +100,14 @@ void CorkboardView::addCard(ProjectTreeItem *item)
 
 void CorkboardView::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (event->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-corkboard-card"))) {
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-corkboard-card-path"))) {
         event->acceptProposedAction();
     }
 }
 
 void CorkboardView::dragMoveEvent(QDragMoveEvent *event)
 {
-    if (event->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-corkboard-card"))) {
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-rpgforge-corkboard-card-path"))) {
         updateDropIndicator(event->position().toPoint());
         event->acceptProposedAction();
     }
@@ -147,29 +150,29 @@ void CorkboardView::updateDropIndicator(const QPoint &pos)
 void CorkboardView::dropEvent(QDropEvent *event)
 {
     m_dropIndicator->hide();
-    if (!m_currentFolder) return;
+    if (m_currentFolderPath.isEmpty() || !m_model) return;
 
-    QByteArray data = event->mimeData()->data(QStringLiteral("application/x-rpgforge-corkboard-card"));
+    QByteArray data = event->mimeData()->data(QStringLiteral("application/x-rpgforge-corkboard-card-path"));
     if (data.isEmpty()) return;
 
-    ProjectTreeItem *draggedItem = *reinterpret_cast<ProjectTreeItem**>(data.data());
+    QString draggedPath = QString::fromUtf8(data);
     
     // Find the drop target card
     QPoint pos = event->position().toPoint();
-    ProjectTreeItem *targetItem = nullptr;
+    QString targetPath;
     
     for (int i = 0; i < m_layout->count(); ++i) {
         auto *widget = m_layout->itemAt(i)->widget();
         if (widget && widget != m_dropIndicator && widget->geometry().contains(pos)) {
             if (auto *targetCard = qobject_cast<CorkboardCard*>(widget)) {
-                targetItem = targetCard->item();
+                targetPath = targetCard->itemPath();
                 break;
             }
         }
     }
 
-    if (draggedItem && draggedItem != targetItem) {
-        Q_EMIT itemsReordered(m_currentFolder, draggedItem, targetItem);
+    if (!draggedPath.isEmpty() && draggedPath != targetPath) {
+        Q_EMIT itemsReordered(m_currentFolderPath, draggedPath, targetPath);
     }
 
     event->acceptProposedAction();

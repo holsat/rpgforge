@@ -45,7 +45,7 @@ public:
 
 Q_SIGNALS:
     void fileActivated(const QString &relativePath);
-    void folderActivated(ProjectTreeItem *folderItem);
+    void folderActivated(const QString &relativeFolderPath);
     void diffRequested(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
     void syncStarted();
     void syncProgress(int value, const QString &message);

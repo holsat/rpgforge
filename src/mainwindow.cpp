@@ -423,7 +423,7 @@ void MainWindow::setupSidebar()
             // If the corkboard is showing a folder that contains one of these items, refresh it
             // Simple approach: if corkboard is visible, just refresh it.
             if (m_corkboardView->isVisible()) {
-                m_corkboardView->setFolder(m_corkboardView->currentFolder());
+                m_corkboardView->setFolder(m_corkboardView->currentFolderPath());
             }
         }
     });
@@ -514,13 +514,14 @@ void MainWindow::setupSidebar()
             // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
-    connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](ProjectTreeItem *folder) {
-        if (!folder) return;
-        const QString nameLower = folder->name.toLower();
+    m_corkboardView->setModel(m_projectTree->model());
+    connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](const QString &folderPath) {
+        if (folderPath.isEmpty()) return;
+        const QString nameLower = folderPath.section(QDir::separator(), -1).toLower();
         if (nameLower == QStringLiteral("media") || nameLower == QStringLiteral("stylesheets")) {
             return;
         }
-        m_corkboardView->setFolder(folder);
+        m_corkboardView->setFolder(folderPath);
         showCentralView(m_corkboardView);
     });
     connect(m_projectTree, &ProjectTreePanel::diffRequested, this, &MainWindow::showDiff);
@@ -528,21 +529,19 @@ void MainWindow::setupSidebar()
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            showCentralView(m_editorView);
         }
     });
-    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](ProjectTreeItem *folder, ProjectTreeItem *draggedItem, ProjectTreeItem *targetItem) {
-        int toIdx = -1;
-        if (targetItem) {
-            toIdx = folder->children.indexOf(targetItem);
-        } else {
-            toIdx = folder->children.size();
-        }
-
-        if (m_projectTree->model()->moveItem(draggedItem, folder, toIdx)) {
-            ProjectManager::instance().setTree(m_projectTree->model()->projectData());
-            ProjectManager::instance().saveProject();
-            // Debounced refresh will be triggered by model signals via ProjectTreePanel
+    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
+        ProjectTreeItem *folder = m_projectTree->model()->findItem(folderPath);
+        ProjectTreeItem *dragged = m_projectTree->model()->findItem(draggedPath);
+        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : m_projectTree->model()->findItem(targetPath);
+        
+        if (folder && dragged) {
+            int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
+            if (m_projectTree->model()->moveItem(dragged, folder, toIdx)) {
+                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+                ProjectManager::instance().saveProject();
+            }
         }
     });
     connect(m_outlinePanel, &OutlinePanel::headingsUpdated,
@@ -573,7 +572,7 @@ void MainWindow::setupSidebar()
     });
 
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
-        if (m_corkboardView) m_corkboardView->setFolder(nullptr);
+        if (m_corkboardView) m_corkboardView->setFolder(QString());
         KnowledgeBase::instance().initForProject(ProjectManager::instance().projectPath());
         m_projectStatsStatus->show();
         updateProjectStats();
@@ -581,7 +580,7 @@ void MainWindow::setupSidebar()
     });
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
         if (m_corkboardView) {
-            m_corkboardView->setFolder(nullptr);
+            m_corkboardView->setFolder(QString());
             showCentralView(m_editorView);
         }
         m_projectStatsStatus->hide();
