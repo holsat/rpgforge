@@ -89,15 +89,24 @@ QString MarkdownParser::renderHtml(const QString &markdown) const
     if (markdown.isEmpty()) return QString();
 
     ensureParsed(markdown);
-    if (!m_document) return QString();
+    if (!m_document || !m_parser) return QString();
 
     // CMARK_OPT_SOURCEPOS adds data-sourcepos="line:col-line:col" to every block
     // CMARK_OPT_HARDBREAKS renders softbreaks as hardbreaks (<br />)
     // CMARK_OPT_UNSAFE allows inline HTML and CSS (needed for some Markdown features)
     int options = CMARK_OPT_SOURCEPOS | CMARK_OPT_HARDBREAKS | CMARK_OPT_UNSAFE;
-    char *rendered = cmark_render_html(static_cast<cmark_node*>(m_document), 
+    
+    cmark_node* docNode = static_cast<cmark_node*>(m_document);
+    cmark_parser* parserObj = static_cast<cmark_parser*>(m_parser);
+    
+    if (!docNode || !parserObj) return QString();
+
+    char *rendered = cmark_render_html(docNode, 
                                        options, 
-                                       cmark_parser_get_syntax_extensions(static_cast<cmark_parser*>(m_parser)));
+                                       cmark_parser_get_syntax_extensions(parserObj));
+    
+    if (!rendered) return QString();
+
     QString html = QString::fromUtf8(rendered);
 
     free(rendered);

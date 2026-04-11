@@ -87,8 +87,14 @@ add_executable(rpgforge
     src/scrivenerimporter.h
     src/llmservice.cpp
     src/llmservice.h
+    src/librariandatabase.cpp
+    src/librariandatabase.h
+    src/librarianservice.cpp
+    src/librarianservice.h
     src/knowledgebase.cpp
     src/knowledgebase.h
+    src/agentgatekeeper.cpp
+    src/agentgatekeeper.h
     src/analyzerservice.cpp
     src/analyzerservice.h
     src/textutils.h
@@ -116,6 +122,10 @@ add_executable(rpgforge
     src/diceengine.h
     src/settingsdialog.cpp
     src/settingsdialog.h
+    src/prompteditordialog.cpp
+    src/prompteditordialog.h
+    src/diagnosticdetaildialog.cpp
+    src/diagnosticdetaildialog.h
     src/chatpanel.cpp
     src/chatpanel.h
     src/compiledialog.cpp
@@ -170,3 +180,76 @@ install(FILES icons/rpgforge_48x48.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolo
 install(FILES icons/rpgforge_64x64.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/64x64/apps RENAME rpgforge.png)
 install(FILES icons/rpgforge_128x128.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/128x128/apps RENAME rpgforge.png)
 install(FILES icons/rpgforge_256x256.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/256x256/apps RENAME rpgforge.png)
+
+# Testing
+enable_testing()
+find_package(Qt6 REQUIRED COMPONENTS Test)
+
+add_executable(test_librariandatabase tests/test_librariandatabase.cpp src/librariandatabase.cpp)
+target_link_libraries(test_librariandatabase Qt6::Test Qt6::Sql Qt6::Core)
+add_test(NAME librarian_database_test COMMAND test_librariandatabase)
+
+add_executable(test_librarianservice 
+    tests/test_librarianservice.cpp 
+    src/librarianservice.cpp 
+    src/librariandatabase.cpp
+)
+target_link_libraries(test_librarianservice 
+    Qt6::Test 
+    Qt6::Sql 
+    Qt6::Core 
+    Qt6::Concurrent
+    KF6::I18n
+)
+add_executable(test_projectmanager 
+    tests/test_projectmanager.cpp 
+    src/projectmanager.cpp
+    src/projecttreemodel.cpp
+    src/variablemanager.cpp
+    src/synopsisservice.cpp
+    src/librarianservice.cpp
+    src/librariandatabase.cpp
+    src/knowledgebase.cpp
+    src/llmservice.cpp
+    src/mcpservice.cpp
+    src/agentgatekeeper.cpp
+    src/analyzerservice.cpp
+    src/diceengine.cpp
+    src/simulationmanager.cpp
+    src/simulationstate.cpp
+    src/simarbiter.cpp
+    src/simgriot.cpp
+    src/simulationactor.cpp
+)
+target_link_libraries(test_projectmanager 
+    Qt6::Test 
+    Qt6::Sql 
+    Qt6::Core 
+    Qt6::Concurrent
+    Qt6::Xml
+    Qt6::Network
+    Qt6::Gui
+    KF6::CoreAddons
+    KF6::I18n
+    KF6::TextEditor
+    KF6::Wallet
+)
+add_test(NAME project_manager_test COMMAND test_projectmanager)
+
+add_executable(test_projecttreemodel
+    tests/test_projecttreemodel.cpp
+    src/projecttreemodel.cpp
+    src/synopsisservice.cpp
+    src/projectmanager.cpp
+    src/variablemanager.cpp
+)
+target_link_libraries(test_projecttreemodel
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Network
+    Qt6::Concurrent
+    KF6::I18n
+)
+add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
+

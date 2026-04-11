@@ -23,6 +23,11 @@
 #include <QString>
 #include <QVector>
 #include <QList>
+#include <QSqlDatabase>
+#include <QMutex>
+#include <functional>
+
+class QFileSystemWatcher;
 
 struct SearchResult {
     QString filePath;
@@ -31,11 +36,8 @@ struct SearchResult {
     float score;
 };
 
-class QSqlDatabase;
-class QFileSystemWatcher;
-
 /**
- * @brief Manages local project knowledge base with vector embeddings.
+ * @brief Manages a local SQLite-based vector index for semantic search.
  */
 class KnowledgeBase : public QObject
 {
@@ -44,28 +46,14 @@ class KnowledgeBase : public QObject
 public:
     static KnowledgeBase& instance();
 
-    /**
-     * @brief Initializes the database for the current project.
-     */
     void initForProject(const QString &projectPath);
-
-    /**
-     * @brief Closes the database.
-     */
     void close();
 
-    /**
-     * @brief Re-indexes a specific file.
-     */
     void indexFile(const QString &filePath);
+    void search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback);
 
-    /**
-     * @brief Searches the knowledge base for similar chunks.
-     * @param query The text to search for.
-     * @param topK The maximum number of results to return.
-     * @param excludeFile Optional file path to exclude from results.
-     */
-    void search(const QString &query, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback);
+    void pause();
+    void resume();
 
 Q_SIGNALS:
     void indexingProgress(int current, int total);
@@ -76,20 +64,22 @@ private Q_SLOTS:
 
 private:
     explicit KnowledgeBase(QObject *parent = nullptr);
-    ~KnowledgeBase() override;
-
-    KnowledgeBase(const KnowledgeBase&) = delete;
-    KnowledgeBase& operator=(const KnowledgeBase&) = delete;
+    ~KnowledgeBase();
 
     void setupDatabase();
     void chunkAndEmbed(const QString &filePath, const QString &content);
     void storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding, const QByteArray &fileHash);
     float cosineSimilarity(const QVector<float> &a, const QVector<float> &b);
+    
+    QSqlDatabase getDatabase() const;
 
     QString m_projectPath;
     QString m_dbPath;
     QFileSystemWatcher *m_watcher = nullptr;
     int m_pendingEmbeddings = 0;
+    QMutex m_dbMutex;
+    bool m_paused = false;
+    QStringList m_pendingFiles;
 };
 
 #endif // KNOWLEDGEBASE_H

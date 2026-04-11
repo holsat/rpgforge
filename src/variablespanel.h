@@ -51,6 +51,8 @@ struct Variable {
     QString description;
 };
 
+class LibrarianService;
+
 class VariablesPanel : public QWidget
 {
     Q_OBJECT
@@ -58,6 +60,8 @@ class VariablesPanel : public QWidget
 public:
     explicit VariablesPanel(QWidget *parent = nullptr);
     ~VariablesPanel() override = default;
+
+    void setLibrarianService(LibrarianService *service);
 
     // Get all defined variables
     QMap<QString, QString> variables() const;
@@ -71,12 +75,19 @@ private Q_SLOTS:
     void removeVariable();
     void onItemChanged(QTreeWidgetItem *item, int column);
     void onCustomContextMenu(const QPoint &pos);
+    void refreshLibrary();
+    void triggerReindex();
 
 private:
     DraggableVariableTree *m_treeWidget;
     QToolButton *m_addButton;
     QToolButton *m_addVariantButton;
     QToolButton *m_removeButton;
+    QToolButton *m_reindexButton;
+
+    LibrarianService *m_librarianService = nullptr;
+    QTreeWidgetItem *m_customVarsRoot = nullptr;
+    QTreeWidgetItem *m_libraryRoot = nullptr;
 
     void setupUi();
     void recalculateAll();

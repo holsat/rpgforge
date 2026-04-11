@@ -18,8 +18,10 @@
 
 #include "simgriot.h"
 #include "llmservice.h"
+#include <KLocalizedString>
 #include <QJsonDocument>
 #include <QSettings>
+#include <QPointer>
 
 SimulationGriot::SimulationGriot(QObject *parent)
     : QObject(parent)
@@ -51,6 +53,7 @@ void SimulationGriot::narrate(const QString &actorName, const QJsonObject &inten
           QString::fromUtf8(QJsonDocument(worldState).toJson(QJsonDocument::Compact)));
 
     LLMRequest req;
+    req.serviceName = i18n("Simulation Griot");
     
     // Griot uses creative settings
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_griot_provider"), 
@@ -69,11 +72,13 @@ void SimulationGriot::narrate(const QString &actorName, const QJsonObject &inten
     req.stream = false;
     req.temperature = 0.8; // High creativity
 
-    LLMService::instance().sendNonStreamingRequest(req, [this](const QString &response) {
+    QPointer<SimulationGriot> weakThis(this);
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis](const QString &response) {
+        if (!weakThis) return;
         if (response.isEmpty()) {
-            Q_EMIT errorOccurred(QStringLiteral("Empty response from Griot."));
+            Q_EMIT weakThis->errorOccurred(QStringLiteral("Empty response from Griot."));
             return;
         }
-        Q_EMIT narrativeDecided(response.trimmed());
+        Q_EMIT weakThis->narrativeDecided(response.trimmed());
     });
 }
