@@ -18,7 +18,6 @@
 
 #include "projecttreemodel.h"
 #include "projectmanager.h"
-#include "synopsisservice.h"
 #include <QMimeData>
 #include <QJsonDocument>
 #include <QFileInfo>
@@ -275,8 +274,11 @@ bool ProjectTreeModel::setData(const QModelIndex &index, const QVariant &value, 
 static bool isItemInTree(ProjectTreeItem *item, ProjectTreeItem *root) {
     if (!item || !root) return false;
     if (item == root) return true;
-    for (auto *child : root->children) {
-        if (isItemInTree(item, child)) return true;
+    // Walk up from item to check if it reaches root
+    ProjectTreeItem *p = item->parent;
+    while (p) {
+        if (p == root) return true;
+        p = p->parent;
     }
     return false;
 }
@@ -341,7 +343,6 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path
     QMutexLocker locker(&m_treeMutex);
     int row = parentItem->children.count();
 
-    SynopsisService::instance().pause();
     if (!m_bulkImporting) beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::Folder;
@@ -350,7 +351,6 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path
     item->parent = parentItem;
     parentItem->children.append(item);
     if (!m_bulkImporting) endInsertRows();
-    SynopsisService::instance().resume();
 
     return index(row, 0, parent);
 }
@@ -363,7 +363,6 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
     QMutexLocker locker(&m_treeMutex);
     int row = parentItem->children.count();
 
-    SynopsisService::instance().pause();
     if (!m_bulkImporting) beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::File;
@@ -372,7 +371,6 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
     item->parent = parentItem;
     parentItem->children.append(item);
     if (!m_bulkImporting) endInsertRows();
-    SynopsisService::instance().resume();
 
     return index(row, 0, parent);
 }
@@ -385,7 +383,6 @@ QModelIndex ProjectTreeModel::addTransientVersionLink(const QString &name, const
     QMutexLocker locker(&m_treeMutex);
     int row = parentItem->children.count();
 
-    SynopsisService::instance().pause();
     beginInsertRows(parent, row, row);
     auto *item = new ProjectTreeItem();
     item->type = ProjectTreeItem::File;
@@ -395,7 +392,6 @@ QModelIndex ProjectTreeModel::addTransientVersionLink(const QString &name, const
     item->parent = parentItem;
     parentItem->children.append(item);
     endInsertRows();
-    SynopsisService::instance().resume();
 
     return index(row, 0, parent);
 }
@@ -479,8 +475,6 @@ bool ProjectTreeModel::removeItem(const QModelIndex &index)
     ProjectTreeItem *parentItem = item->parent;
     int row = index.row();
 
-    SynopsisService::instance().cancelRequest(item->path);
-    SynopsisService::instance().pause();
     beginRemoveRows(index.parent(), row, row);
     {
         QMutexLocker locker(&m_treeMutex);
@@ -488,7 +482,6 @@ bool ProjectTreeModel::removeItem(const QModelIndex &index)
         delete item;
     }
     endRemoveRows();
-    SynopsisService::instance().resume();
     return true;
 }
 

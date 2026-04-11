@@ -23,7 +23,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QIcon>
-#include <QMutex>
+#include <QRecursiveMutex>
+#include <QStringList>
 
 struct ProjectTreeItem {
     enum Type { Folder, File };
@@ -31,58 +32,58 @@ struct ProjectTreeItem {
     Type type;
     Category category = None;
     QString name;
-    QString path; // Relative to project root
+    QString path;
     QString synopsis;
     QString status;
     bool transient = false;
-    QList<ProjectTreeItem*> children;
     ProjectTreeItem *parent = nullptr;
+    QList<ProjectTreeItem*> children;
 
     ~ProjectTreeItem() {
         qDeleteAll(children);
     }
 };
 
+/**
+ * @brief The ProjectTreeModel class provides a hierarchical model for the project structure.
+ */
 class ProjectTreeModel : public QAbstractItemModel
 {
     Q_OBJECT
 
 public:
     enum Roles {
-        TransientRole = Qt::UserRole + 100,
-        CategoryRole = Qt::UserRole + 101,
-        SynopsisRole = Qt::UserRole + 102,
-        StatusRole = Qt::UserRole + 103
+        TransientRole = Qt::UserRole + 1,
+        CategoryRole,
+        SynopsisRole,
+        StatusRole
     };
+
     explicit ProjectTreeModel(QObject *parent = nullptr);
     ~ProjectTreeModel() override;
 
     void setProjectData(const QJsonObject &treeData);
     QJsonObject projectData() const;
 
+    // QAbstractItemModel interface
     QModelIndex index(int row, int column, const QModelIndex &parent = QModelIndex()) const override;
     QModelIndex parent(const QModelIndex &child) const override;
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     Qt::ItemFlags flags(const QModelIndex &index) const override;
-
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
 
-    // Manipulation
-    QModelIndex addFolder(const QString &name, const QString &path = QString(), const QModelIndex &parent = QModelIndex());
+    // Helpers
+    QModelIndex addFolder(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
     QModelIndex addFile(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
-    QModelIndex addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent);
+    QModelIndex addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
+    
+    // Scans absolute path and adds to model, discovering related assets
     void addFileWithSmartDiscovery(const QString &absolutePath, const QModelIndex &parent = QModelIndex());
+
     bool removeItem(const QModelIndex &index);
     bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
-
-    // Suppress per-row signals during bulk operations (e.g. import).
-    // Call beginBulkImport() before, endBulkImport() after; the view refreshes atomically.
-    void beginBulkImport();
-    void endBulkImport();
-
-    QModelIndex indexForItem(ProjectTreeItem *item) const;
 
     // Drag and Drop
     Qt::DropActions supportedDropActions() const override;
@@ -92,7 +93,11 @@ public:
 
     ProjectTreeItem* itemFromIndex(const QModelIndex &index) const;
     ProjectTreeItem* findItem(const QString &relativePath, ProjectTreeItem *root = nullptr) const;
+    QModelIndex indexForItem(ProjectTreeItem *item) const;
     ProjectTreeItem* rootItem() const { return m_rootItem; }
+
+    void beginBulkImport();
+    void endBulkImport();
 
 private:
     ProjectTreeItem* loadItem(const QJsonObject &obj, ProjectTreeItem *parent);
@@ -100,7 +105,7 @@ private:
 
     ProjectTreeItem *m_rootItem;
     bool m_bulkImporting = false;
-    mutable QMutex m_treeMutex;
+    mutable QRecursiveMutex m_treeMutex;
 };
 
 #endif // PROJECTTREEMODEL_H

@@ -18,6 +18,7 @@
 
 #include "librarianservice.h"
 #include "llmservice.h"
+#include <KLocalizedString>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -285,6 +286,7 @@ void LibrarianService::extractSemantic(const QString &filePath)
     LLMRequest request;
     request.provider = LLMProvider::Ollama;
     request.model = QStringLiteral("llama3");
+    request.serviceName = i18n("Librarian Agent");
     request.messages << LLMMessage{QStringLiteral("system"), QStringLiteral("You extract structured RPG data as JSON.")};
     request.messages << LLMMessage{QStringLiteral("user"), prompt};
     request.stream = false;

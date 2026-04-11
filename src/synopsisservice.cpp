@@ -208,6 +208,7 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
     LLMRequest req;
     req.provider = provider;
     req.model = model;
+    req.serviceName = i18n("File Synopsis");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG documents concisely.")};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this document in one short sentence: %1").arg(content.left(2000))};
     req.stream = false;
@@ -251,6 +252,7 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     LLMRequest req;
     req.provider = provider;
     req.model = model;
+    req.serviceName = i18n("Folder Synopsis");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG project folders.")};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this folder based on its contents: %1").arg(childSynopses.join(QLatin1String("\n")))};
     req.stream = false;

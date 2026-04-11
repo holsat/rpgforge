@@ -199,6 +199,7 @@ target_link_libraries(test_librarianservice
     Qt6::Sql 
     Qt6::Core 
     Qt6::Concurrent
+    KF6::I18n
 )
 add_executable(test_projectmanager 
     tests/test_projectmanager.cpp 
