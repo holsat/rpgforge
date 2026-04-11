@@ -1,3 +1,4 @@
+#include <QPointer>
 #include "librarianservice.h"
 #include "llmservice.h"
 #include <QDir>
@@ -250,7 +251,9 @@ void LibrarianService::extractSemantic(const QString &filePath)
     request.messages << LLMMessage{QStringLiteral("user"), prompt};
     request.stream = false;
 
-    m_llmService->sendNonStreamingRequest(request, [this, filePath](const QString &response) {
+    QPointer<LibrarianService> weakThis(this);
+    m_llmService->sendNonStreamingRequest(request, [weakThis, filePath](const QString &response) {
+        if (!weakThis) return;
         // Parse the JSON response and update the DB
         QJsonDocument doc = QJsonDocument::fromJson(response.toUtf8());
         if (!doc.isArray()) {
@@ -271,15 +274,15 @@ void LibrarianService::extractSemantic(const QString &filePath)
                 QJsonObject attrs = obj.value(QStringLiteral("attributes")).toObject();
 
                 if (!name.isEmpty()) {
-                    qint64 id = m_db->addEntity(name, type, filePath);
+                    qint64 id = weakThis->m_db->addEntity(name, type, filePath);
                     for (auto it = attrs.begin(); it != attrs.end(); ++it) {
-                        m_db->setAttribute(id, it.key(), it.value().toVariant());
+                        weakThis->m_db->setAttribute(id, it.key(), it.value().toVariant());
                     }
-                    Q_EMIT entityUpdated(id);
+                    Q_EMIT weakThis->entityUpdated(id);
                 }
             }
             // Trigger a refresh of the library variables
-            scanFile(filePath); 
+            weakThis->scanFile(filePath); 
         }
     });
 }

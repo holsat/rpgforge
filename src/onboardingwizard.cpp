@@ -1,3 +1,4 @@
+#include <QPointer>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -407,16 +408,20 @@ void OnboardingWizard::testAiConnection()
     QString oldKey = LLMService::instance().apiKey(req.provider);
     LLMService::instance().setApiKey(req.provider, m_aiKeyEdit->text());
 
-    LLMService::instance().sendNonStreamingRequest(req, [this, oldKey, req](const QString &response) {
-        if (response.trimmed().contains(QStringLiteral("OK"), Qt::CaseInsensitive)) {
-            m_testStatusLabel->setText(i18n("<font color='green'>Success! Connection verified.</font>"));
-        } else {
-            m_testStatusLabel->setText(i18n("<font color='red'>Failed: Received unexpected response. Check your key and model.</font>"));
-        }
-        
+    QPointer<OnboardingWizard> weakThis(this);
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis, oldKey, req](const QString &response) {
         // Restore old key (though wizard will overwrite it on accept anyway)
         LLMService::instance().setApiKey(req.provider, oldKey);
-        m_testAiBtn->setEnabled(true);
+        
+        if (!weakThis) return;
+        
+        if (response.trimmed().contains(QStringLiteral("OK"), Qt::CaseInsensitive)) {
+            weakThis->m_testStatusLabel->setText(i18n("<font color='green'>Success! Connection verified.</font>"));
+        } else {
+            weakThis->m_testStatusLabel->setText(i18n("<font color='red'>Failed: Received unexpected response. Check your key and model.</font>"));
+        }
+        
+        weakThis->m_testAiBtn->setEnabled(true);
     });
 }
 

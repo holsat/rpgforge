@@ -22,6 +22,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QSettings>
+#include <QPointer>
 
 SimulationActor::SimulationActor(const QString &name, QObject *parent)
     : QObject(parent), m_name(name)
@@ -94,9 +95,12 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
     req.messages.append({QStringLiteral("user"), QStringLiteral("What is your next move?")});
     req.stream = false;
 
-    LLMService::instance().sendNonStreamingRequest(req, [this](const QString &response) {
+    QPointer<SimulationActor> weakThis(this);
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis](const QString &response) {
+        if (!weakThis) return;
+        
         if (response.isEmpty()) {
-            Q_EMIT errorOccurred(QStringLiteral("Empty response from LLM actor %1").arg(m_name));
+            Q_EMIT weakThis->errorOccurred(QStringLiteral("Empty response from LLM actor %1").arg(weakThis->m_name));
             return;
         }
 
@@ -105,19 +109,19 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
         QJsonParseError error;
         QJsonDocument doc = QJsonDocument::fromJson(cleanJson.trimmed().toUtf8(), &error);
         if (doc.isNull() || !doc.isObject()) {
-            Q_EMIT errorOccurred(QStringLiteral("Failed to parse intent for %1: %2").arg(m_name, error.errorString()));
+            Q_EMIT weakThis->errorOccurred(QStringLiteral("Failed to parse intent for %1: %2").arg(weakThis->m_name, error.errorString()));
             return;
         }
 
-        m_lastIntent = doc.object();
+        weakThis->m_lastIntent = doc.object();
         
         // Update the plan from the LLM's decision
-        m_plan.clear();
-        QJsonArray planArray = m_lastIntent.value(QStringLiteral("current_plan")).toArray();
+        weakThis->m_plan.clear();
+        QJsonArray planArray = weakThis->m_lastIntent.value(QStringLiteral("current_plan")).toArray();
         for (const QJsonValue &v : planArray) {
-            m_plan.append(v.toString());
+            weakThis->m_plan.append(v.toString());
         }
 
-        Q_EMIT intentDecided(m_lastIntent);
+        Q_EMIT weakThis->intentDecided(weakThis->m_lastIntent);
     });
 }

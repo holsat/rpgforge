@@ -27,6 +27,7 @@
 #include <QJsonArray>
 #include <QSettings>
 #include <QDebug>
+#include <QPointer>
 
 SimulationArbiter::SimulationArbiter(QObject *parent)
     : QObject(parent)
@@ -99,9 +100,12 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
     req.stream = false;
     req.temperature = 0.1; // Maximum precision
 
-    LLMService::instance().sendNonStreamingRequest(req, [this](const QString &response) {
+    QPointer<SimulationArbiter> weakThis(this);
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis](const QString &response) {
+        if (!weakThis) return;
+
         if (response.isEmpty()) {
-            Q_EMIT errorOccurred(i18n("Empty response from Arbiter."));
+            Q_EMIT weakThis->errorOccurred(i18n("Empty response from Arbiter."));
             return;
         }
 
@@ -111,14 +115,14 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
         QJsonParseError error;
         QJsonDocument doc = QJsonDocument::fromJson(cleanJson.toUtf8(), &error);
         if (doc.isNull() || !doc.isObject()) {
-            Q_EMIT errorOccurred(i18n("Failed to parse Arbiter outcome: %1").arg(error.errorString()));
+            Q_EMIT weakThis->errorOccurred(i18n("Failed to parse Arbiter outcome: %1").arg(error.errorString()));
             return;
         }
 
         QJsonObject obj = doc.object();
         QJsonObject patch = obj.value(QStringLiteral("patch")).toObject();
         QString log = obj.value(QStringLiteral("log")).toString();
-        
-        Q_EMIT outcomeDecided(patch, log);
+
+        Q_EMIT weakThis->outcomeDecided(patch, log);
     });
 }

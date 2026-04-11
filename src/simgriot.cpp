@@ -20,6 +20,7 @@
 #include "llmservice.h"
 #include <QJsonDocument>
 #include <QSettings>
+#include <QPointer>
 
 SimulationGriot::SimulationGriot(QObject *parent)
     : QObject(parent)
@@ -69,11 +70,13 @@ void SimulationGriot::narrate(const QString &actorName, const QJsonObject &inten
     req.stream = false;
     req.temperature = 0.8; // High creativity
 
-    LLMService::instance().sendNonStreamingRequest(req, [this](const QString &response) {
+    QPointer<SimulationGriot> weakThis(this);
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis](const QString &response) {
+        if (!weakThis) return;
         if (response.isEmpty()) {
-            Q_EMIT errorOccurred(QStringLiteral("Empty response from Griot."));
+            Q_EMIT weakThis->errorOccurred(QStringLiteral("Empty response from Griot."));
             return;
         }
-        Q_EMIT narrativeDecided(response.trimmed());
+        Q_EMIT weakThis->narrativeDecided(response.trimmed());
     });
 }

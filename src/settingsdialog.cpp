@@ -1,3 +1,4 @@
+#include <QPointer>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -222,17 +223,26 @@ QWidget* SettingsDialog::createAgentsTab()
             req.messages << msg;
             req.stream = false;
 
-            LLMService::instance().sendNonStreamingRequest(req, [this, completed, failed, agentIds](const QString &response) {
+            QPointer<SettingsDialog> weakThis(this);
+            LLMService::instance().sendNonStreamingRequest(req, [weakThis, completed, failed, agentIds](const QString &response) {
+                if (!weakThis) {
+                    (*completed)++;
+                    if (*completed == agentIds.size()) {
+                        delete completed;
+                        delete failed;
+                    }
+                    return;
+                }
                 (*completed)++;
                 if (response.isEmpty()) (*failed)++;
                 
                 if (*completed == agentIds.size()) {
-                    m_testProgressBar->hide();
+                    weakThis->m_testProgressBar->hide();
                     if (*failed > 0) {
-                        QMessageBox::critical(this, i18n("Connection Test Failed"), 
+                        QMessageBox::critical(weakThis, i18n("Connection Test Failed"), 
                             i18n("%1 agent(s) failed to connect. Please verify your API keys and model names.", *failed));
                     } else {
-                        QMessageBox::information(this, i18n("Connection Test Successful"), 
+                        QMessageBox::information(weakThis, i18n("Connection Test Successful"), 
                             i18n("All agents connected successfully."));
                     }
                     delete completed;
