@@ -17,22 +17,21 @@
 */
 
 #include "analyzerservice.h"
-#include "knowledgebase.h"
 #include "llmservice.h"
-#include "textutils.h"
 #include "projectmanager.h"
-
-#include <QSettings>
+#include <KLocalizedString>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QDebug>
+#include <QSettings>
 #include <QDir>
+#include <QDebug>
+#include <QPointer>
 
 AnalyzerService& AnalyzerService::instance()
 {
-    static AnalyzerService s_instance;
-    return s_instance;
+    static AnalyzerService inst;
+    return inst;
 }
 
 AnalyzerService::AnalyzerService(QObject *parent)
@@ -44,9 +43,19 @@ AnalyzerService::~AnalyzerService() = default;
 
 void AnalyzerService::analyzeDocument(const QString &filePath, const QString &content)
 {
-    // Basic checks
-    if (content.trimmed().isEmpty()) return;
-    
+    if (m_paused) {
+        // Keep only the latest content for each file in the queue
+        auto it = std::find_if(m_queue.begin(), m_queue.end(), [&](const PendingAnalysis &p) {
+            return p.filePath == filePath;
+        });
+        if (it != m_queue.end()) {
+            it->content = content;
+        } else {
+            m_queue.append({filePath, content});
+        }
+        return;
+    }
+
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     // Default to "Paused" if not set
     int runMode = settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt(); 
@@ -54,17 +63,47 @@ void AnalyzerService::analyzeDocument(const QString &filePath, const QString &co
         return;
     }
 
+    if (m_activeAnalysisFile == filePath) return;
     m_activeAnalysisFile = filePath;
+
     Q_EMIT analysisStarted(filePath);
 
     // Step 1: Query KnowledgeBase for RAG context
-    // We use the content itself or a summary of it as the query.
-    // For simplicity, we just use the first few hundred characters as the query.
     QString queryText = content.left(1000);
     
-    KnowledgeBase::instance().search(queryText, 3, filePath, [this, filePath, content](const QList<SearchResult> &results) {
-        onRagSearchCompleted(filePath, content, results);
+    QPointer<AnalyzerService> weakThis(this);
+    KnowledgeBase::instance().search(queryText, 3, filePath, [weakThis, filePath, content](const QList<SearchResult> &results) {
+        if (weakThis) weakThis->onRagSearchCompleted(filePath, content, results);
     });
+}
+
+void AnalyzerService::pause()
+{
+    m_paused = true;
+}
+
+void AnalyzerService::resume()
+{
+    if (!m_paused) return;
+    m_paused = false;
+    
+    // Process queue (FIFO)
+    while (!m_queue.isEmpty()) {
+        PendingAnalysis p = m_queue.takeFirst();
+        analyzeDocument(p.filePath, p.content);
+    }
+}
+
+void AnalyzerService::suppressDiagnostic(const QString &message)
+{
+    if (!m_suppressionList.contains(message)) {
+        m_suppressionList.append(message);
+    }
+}
+
+bool AnalyzerService::isSuppressed(const QString &message) const
+{
+    return m_suppressionList.contains(message);
 }
 
 void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QString &content, const QList<SearchResult> &results)
@@ -91,26 +130,30 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
 
     LLMRequest req;
     req.provider = provider;
+    req.serviceName = i18n("Game Analyzer");
+    req.settingsKey = QStringLiteral("analyzer/model");
     
-    // Model is resolved by LLMService from settings; setting an empty model here
-    // lets sendNonStreamingRequest use the provider's configured default.
-    // If analyzer/model is explicitly set, that takes precedence.
     req.model = settings.value(QStringLiteral("analyzer/analyzer_model"), 
                                settings.value(QStringLiteral("analyzer/model"))).toString();
-    req.temperature = 0.2; // Low temp for analytical tasks
-    req.stream = false;
+    req.temperature = 0.2; 
     
     req.messages.append({QStringLiteral("system"), systemPrompt});
     req.messages.append({QStringLiteral("user"), augmentedContext});
+    req.stream = false;
 
-    LLMService::instance().sendNonStreamingRequest(req, [this, filePath](const QString &response) {
+    QPointer<AnalyzerService> weakThis(this);
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis, filePath](const QString &response) {
+        if (!weakThis) return;
+        
+        weakThis->m_activeAnalysisFile.clear();
+        
         if (response.isEmpty()) {
-            Q_EMIT analysisFailed(filePath, QStringLiteral("Empty response from LLM"));
+            Q_EMIT weakThis->analysisFailed(filePath, i18n("Empty response from LLM."));
             return;
         }
-        
+
         QList<Diagnostic> diagnostics = parseDiagnostics(response);
-        Q_EMIT diagnosticsUpdated(filePath, diagnostics);
+        Q_EMIT weakThis->diagnosticsUpdated(filePath, diagnostics);
     });
 }
 
@@ -118,45 +161,45 @@ QList<Diagnostic> AnalyzerService::parseDiagnostics(const QString &jsonResponse)
 {
     QList<Diagnostic> results;
     
-    // Clean up response if it has markdown formatting
-    QString cleanJson = stripMarkdownFences(jsonResponse);
-    
+    // Simple JSON cleanup if LLM included fences
+    QString cleanJson = jsonResponse.trimmed();
+    if (cleanJson.startsWith(QLatin1String("```json"))) {
+        cleanJson = cleanJson.mid(7);
+        if (cleanJson.endsWith(QLatin1String("```"))) cleanJson.chop(3);
+    }
+
     QJsonParseError error;
-    QJsonDocument doc = QJsonDocument::fromJson(cleanJson.toUtf8(), &error);
-    
+    QJsonDocument doc = QJsonDocument::fromJson(cleanJson.trimmed().toUtf8(), &error);
     if (doc.isNull() || !doc.isArray()) {
-        qWarning() << "Failed to parse analyzer response as JSON array:" << error.errorString();
+        qWarning() << "Failed to parse Analyzer JSON:" << error.errorString();
         return results;
     }
-    
+
     QJsonArray arr = doc.array();
-    for (const QJsonValue &val : arr) {
-        if (!val.isObject()) continue;
-        QJsonObject obj = val.toObject();
+    for (const auto &v : arr) {
+        QJsonObject obj = v.toObject();
+        QString message = obj.value(QStringLiteral("message")).toString();
         
+        // Skip if suppressed
+        if (instance().isSuppressed(message)) continue;
+
         Diagnostic d;
-        d.line = obj.value(QStringLiteral("line")).toInt(0);
-        {
-            const QString sev = obj.value(QStringLiteral("severity")).toString().toLower();
-            if (sev == QLatin1String("error")) d.severity = DiagnosticSeverity::Error;
-            else if (sev == QLatin1String("warning")) d.severity = DiagnosticSeverity::Warning;
-            else d.severity = DiagnosticSeverity::Info;
-        }
+        d.line = obj.value(QStringLiteral("line")).toInt();
+        QString sev = obj.value(QStringLiteral("severity")).toString().toLower();
+        if (sev == QStringLiteral("error")) d.severity = DiagnosticSeverity::Error;
+        else if (sev == QStringLiteral("warning")) d.severity = DiagnosticSeverity::Warning;
+        else d.severity = DiagnosticSeverity::Info;
+        
         d.message = obj.value(QStringLiteral("message")).toString();
         
         QJsonArray refs = obj.value(QStringLiteral("references")).toArray();
-        for (const QJsonValue &refVal : refs) {
-            if (refVal.isObject()) {
-                QJsonObject refObj = refVal.toObject();
-                DiagnosticReference r;
-                r.filePath = refObj.value(QStringLiteral("filePath")).toString();
-                r.line = refObj.value(QStringLiteral("line")).toInt(0);
-                d.references.append(r);
-            }
+        for (const auto &rv : refs) {
+            QJsonObject robj = rv.toObject();
+            d.references.append({robj.value(QStringLiteral("filePath")).toString(), robj.value(QStringLiteral("line")).toInt()});
         }
         
         results.append(d);
     }
-    
+
     return results;
 }

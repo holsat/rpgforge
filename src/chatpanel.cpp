@@ -360,8 +360,9 @@ void ChatPanel::sendMessage()
     m_inputEdit->clear();
 }
 
-void ChatPanel::askAI(const QString &userPrompt)
+void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
 {
+    QString actualServiceName = serviceName.isEmpty() ? i18n("AI Chat") : serviceName;
     MarkdownParser parser;
     QString html = parser.renderHtml(userPrompt);
     appendMessageToView(QStringLiteral("user"), html, userPrompt);
@@ -391,6 +392,7 @@ void ChatPanel::askAI(const QString &userPrompt)
                 LLMRequest request;
                 request.provider = currentProvider();
                 request.model = m_modelCombo->currentText();
+                request.serviceName = actualServiceName;
                 request.messages = m_history;
                 LLMService::instance().sendRequest(request);
                 return;
@@ -398,7 +400,7 @@ void ChatPanel::askAI(const QString &userPrompt)
                 // File is LARGE. Use RAG to pull relevant snippets from this specific file.
                 // Note: We search the KnowledgeBase but filter results to this file (or let it pull from others too if useful)
                 // For now, let's pull the top 10 relevant chunks from the project.
-                KnowledgeBase::instance().search(userPrompt, 10, QString(), [this, userPrompt](const QList<SearchResult> &results) {
+                KnowledgeBase::instance().search(userPrompt, 10, QString(), [this, userPrompt, actualServiceName](const QList<SearchResult> &results) {
                     QString context;
                     for (const auto &res : results) {
                         context += QStringLiteral("--- Source: %1 (Heading: %2) ---\n%3\n\n").arg(res.filePath, res.heading, res.content);
@@ -412,6 +414,7 @@ void ChatPanel::askAI(const QString &userPrompt)
                     LLMRequest request;
                     request.provider = currentProvider();
                     request.model = m_modelCombo->currentText().trimmed();
+                    request.serviceName = actualServiceName;
                     request.messages = m_history;
                     request.stream = true;
                     LLMService::instance().sendRequest(request);
@@ -426,6 +429,7 @@ void ChatPanel::askAI(const QString &userPrompt)
     LLMRequest request;
     request.provider = currentProvider();
     request.model = m_modelCombo->currentText().trimmed();
+    request.serviceName = actualServiceName;
     request.messages = m_history;
     request.stream = true;
     

@@ -28,6 +28,8 @@ class QTabWidget;
 class QListWidget;
 class QCheckBox;
 class QProgressBar;
+class QLabel;
+class QFormLayout;
 
 class SettingsDialog : public QDialog
 {
@@ -86,18 +88,20 @@ private:
 
     // Prompts
     QListWidget *m_promptsList;
-    QLineEdit *m_analyzerPromptEdit;
-    QLineEdit *m_synopsisFilePromptEdit;
-    QLineEdit *m_synopsisFolderPromptEdit;
-    QLineEdit *m_charGenPromptEdit;
-    QLineEdit *m_simArbiterPromptEdit;
-    QLineEdit *m_simGriotPromptEdit;
-    QLineEdit *m_simActorPromptEdit;
+    
+    struct EnginePrompt {
+        QString content;
+        QLabel *statusLabel;
+    };
+    QHash<QString, EnginePrompt> m_enginePrompts;
+
+    void setupEnginePromptRow(QFormLayout *layout, const QString &id, const QString &label);
+    void openPromptEditor(const QString &id);
 
     // Analyzer
     QComboBox *m_analyzerRunModeCombo;
     QComboBox *m_analyzerProviderCombo;
-    QLineEdit *m_analyzerModelEdit;
+    QComboBox *m_analyzerModelCombo; // Changed from QLineEdit
 };
 
 #endif // SETTINGSDIALOG_H

@@ -22,6 +22,7 @@
 #include <QScrollArea>
 
 class QGridLayout;
+class ProjectTreeModel;
 struct ProjectTreeItem;
 
 class CorkboardView : public QScrollArea
@@ -32,12 +33,13 @@ public:
     explicit CorkboardView(QWidget *parent = nullptr);
     ~CorkboardView() override;
 
-    void setFolder(ProjectTreeItem *folderItem);
-    ProjectTreeItem* currentFolder() const { return m_currentFolder; }
+    void setModel(ProjectTreeModel *model) { m_model = model; }
+    void setFolder(const QString &folderPath);
+    QString currentFolderPath() const { return m_currentFolderPath; }
 
 Q_SIGNALS:
     void fileActivated(const QString &relativePath);
-    void itemsReordered(ProjectTreeItem *folder, ProjectTreeItem *draggedItem, ProjectTreeItem *targetItem);
+    void itemsReordered(const QString &folderPath, const QString &draggedPath, const QString &targetPath);
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -52,7 +54,8 @@ private:
 
     QWidget *m_contentWidget = nullptr;
     QGridLayout *m_layout = nullptr;
-    ProjectTreeItem *m_currentFolder = nullptr;
+    ProjectTreeModel *m_model = nullptr;
+    QString m_currentFolderPath;
     QWidget *m_dropIndicator = nullptr;
 };
 

@@ -34,6 +34,7 @@ public:
     void setProjectVariables(const QMap<QString, QString> &vars);
     void setDocumentVariables(const QMap<QString, QString> &vars);
     void setPanelVariables(const QMap<QString, QString> &vars);
+    void setLibraryVariables(const QMap<QString, QString> &vars);
 
     // Resolve an expression (e.g., "{{hp_base}} + 10")
     QString resolve(const QString &expression, bool shouldEvaluateMath = true) const;
@@ -65,6 +66,7 @@ private:
     QMap<QString, QString> m_projectVars;
     QMap<QString, QString> m_documentVars;
     QMap<QString, QString> m_panelVars;
+    QMap<QString, QString> m_libraryVars;
 
     // Internal helper to get all merged variables (panel > doc > project)
     QMap<QString, QString> mergedVariables() const;

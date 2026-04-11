@@ -217,7 +217,7 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
         } else {
             m_hasPendingRequest = true;
             m_pendingRequest = {request, nonStreamCallback};
-            Q_EMIT modelNotFound(provider, model, cached);
+            Q_EMIT modelNotFound(provider, model, cached, request.serviceName);
         }
         return;
     }
@@ -231,7 +231,7 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
         } else {
             m_hasPendingRequest = true;
             m_pendingRequest = {request, nonStreamCallback};
-            Q_EMIT modelNotFound(request.provider, model, available);
+            Q_EMIT modelNotFound(request.provider, model, available, request.serviceName);
         }
     });
 }
@@ -250,9 +250,14 @@ void LLMService::retryWithModel(const QString &newModel)
     if (!m_modelCache[pending.request.provider].contains(newModel))
         m_modelCache[pending.request.provider].append(newModel);
 
-    // Persist to settings — this becomes the new source of truth.
+    // Persist to settings. Prefer specific settingsKey if provided, otherwise update global provider default.
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    settings.setValue(providerSettingsKey(pending.request.provider) + QStringLiteral("/model"), newModel);
+    QString key = pending.request.settingsKey;
+    if (key.isEmpty()) {
+        key = providerSettingsKey(pending.request.provider) + QStringLiteral("/model");
+    }
+    settings.setValue(key, newModel);
+    settings.sync();
 
     LLMRequest updated = pending.request;
     updated.model = newModel;
@@ -772,3 +777,15 @@ void LLMService::pullModel(const QString &modelName,
 
 
 
+
+QString LLMService::providerName(LLMProvider provider)
+{
+    switch (provider) {
+        case LLMProvider::OpenAI:    return QStringLiteral("OpenAI");
+        case LLMProvider::Anthropic: return QStringLiteral("Anthropic");
+        case LLMProvider::Ollama:    return QStringLiteral("Ollama");
+        case LLMProvider::Grok:      return QStringLiteral("Grok (xAI)");
+        case LLMProvider::Gemini:    return QStringLiteral("Gemini (Google)");
+    }
+    return QStringLiteral("Unknown");
+}

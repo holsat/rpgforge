@@ -486,9 +486,11 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
         if (git_repository_discover(&repoPath, filePath.toUtf8().constData(), 0, nullptr) != 0) goto history_cleanup;
         if (git_repository_open(&repo, repoPath.ptr) != 0) goto history_cleanup;
 
-        // Map commit OID to branches
+        // Map commit OID to branches and tags
         {
             QMap<QString, QStringList> commitBranches;
+            QMap<QString, QStringList> commitTags;
+            
             git_branch_iterator *branchIter = nullptr;
             if (git_branch_iterator_new(&branchIter, repo, GIT_BRANCH_LOCAL) == 0) {
                 git_reference *ref = nullptr;
@@ -504,6 +506,19 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
                 }
                 git_branch_iterator_free(branchIter);
             }
+
+            git_tag_foreach(repo, [](const char *name, git_oid *oid, void *payload) {
+                auto *map = static_cast<QMap<QString, QStringList>*>(payload);
+                char oid_str[GIT_OID_HEXSZ + 1];
+                git_oid_tostr(oid_str, sizeof(oid_str), oid);
+                // tag names come as refs/tags/Name
+                QString tagName = QString::fromUtf8(name);
+                if (tagName.startsWith(QLatin1String("refs/tags/"))) {
+                    tagName = tagName.mid(10);
+                }
+                (*map)[QString::fromLatin1(oid_str)] << tagName;
+                return 0;
+            }, &commitTags);
 
             git_revwalk_new(&walker, repo);
             git_revwalk_sorting(walker, GIT_SORT_TIME);
@@ -551,6 +566,7 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
                         entry.date = QDateTime::fromSecsSinceEpoch(git_commit_time(commit));
                         entry.message = QString::fromUtf8(git_commit_message(commit));
                         entry.branches = commitBranches.value(hashStr);
+                        entry.tags = commitTags.value(hashStr);
                         history.append(entry);
                     }
                     git_commit_free(commit);

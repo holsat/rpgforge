@@ -56,9 +56,20 @@ void VariableManager::setPanelVariables(const QMap<QString, QString> &vars)
     }
 }
 
+void VariableManager::setLibraryVariables(const QMap<QString, QString> &vars)
+{
+    if (m_libraryVars != vars) {
+        m_libraryVars = vars;
+        Q_EMIT variablesChanged();
+    }
+}
+
 QMap<QString, QString> VariableManager::mergedVariables() const
 {
     QMap<QString, QString> merged = m_projectVars;
+    for (auto it = m_libraryVars.begin(); it != m_libraryVars.end(); ++it) {
+        merged.insert(it.key(), it.value());
+    }
     for (auto it = m_documentVars.begin(); it != m_documentVars.end(); ++it) {
         merged.insert(it.key(), it.value());
     }

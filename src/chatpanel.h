@@ -54,7 +54,7 @@ public:
     /**
      * @brief Sends a request to the LLM with the given user prompt.
      */
-    void askAI(const QString &userPrompt);
+    void askAI(const QString &userPrompt, const QString &serviceName = QString());
 
     void insertRequested(const QString &text);
 

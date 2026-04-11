@@ -48,6 +48,8 @@ struct LLMMessage {
 struct LLMRequest {
     LLMProvider provider;
     QString model;
+    QString serviceName; // e.g. "Game Analyzer", "Character Generator"
+    QString settingsKey; // The settings path to update if the model is replaced (e.g. "analyzer/model")
     QList<LLMMessage> messages;
     bool stream = true;
     double temperature = 0.7;
@@ -121,6 +123,11 @@ public:
      */
     void retryWithModel(const QString &newModel);
 
+    /**
+     * @brief Returns a user-friendly name for the given provider.
+     */
+    static QString providerName(LLMProvider provider);
+
 Q_SIGNALS:
     /// Emitted when a new streaming request begins. requestId is a UUID that
     /// callers can store and use to filter responseChunk/responseFinished.
@@ -133,7 +140,7 @@ Q_SIGNALS:
      * @brief Emitted when the configured model is not in the provider's current model list.
      * Connect to this to show a model selection UI, then call retryWithModel().
      */
-    void modelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available);
+    void modelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
 
 private:
     explicit LLMService(QObject *parent = nullptr);
