@@ -164,7 +164,7 @@ void ProjectTreePanel::setupUi()
         if (selected.indexes().isEmpty()) return;
         QModelIndex index = selected.indexes().first();
         ProjectTreeItem *item = m_model->itemFromIndex(index);
-        if (item->type == ProjectTreeItem::Folder) {
+        if (item && item->type == ProjectTreeItem::Folder) {
             m_activeFolderIndex = QPersistentModelIndex(index);
             Q_EMIT folderActivated(item->path);
         }
@@ -244,11 +244,13 @@ void ProjectTreePanel::syncProject()
     
     QList<ProjectTreeItem*> allItems;
     std::function<void(ProjectTreeItem*)> collectItems = [&](ProjectTreeItem *item) {
-        if (item != m_model->itemFromIndex(QModelIndex())) {
+        if (item && item != m_model->itemFromIndex(QModelIndex())) {
             allItems.append(item);
         }
-        for (auto *child : item->children) {
-            collectItems(child);
+        if (item) {
+            for (auto *child : item->children) {
+                collectItems(child);
+            }
         }
     };
     collectItems(m_model->itemFromIndex(QModelIndex()));
@@ -310,7 +312,7 @@ void ProjectTreePanel::syncProject()
     Q_EMIT syncProgress(50, i18n("Aligning hierarchy..."));
 
     // 4. Hierarchy Alignment (Move files on disk to match logical tree)
-    // We do this by calculating the "target" path for every file in the tree
+    // We do this by calculating the \"target\" path for every file in the tree
     // Target path is based on the names of parent folders.
     
     std::function<QString(ProjectTreeItem*)> getLogicalPath = [&](ProjectTreeItem *item) -> QString {
@@ -351,7 +353,7 @@ void ProjectTreePanel::syncProject()
     m_treeView->expandAll();
 
     // Check if there are any uncommitted changes before committing
-    // This prevents duplicate "Initial sync" commits if Sync is hit twice.
+    // This prevents duplicate \"Initial sync\" commits if Sync is hit twice.
     if (!GitService::instance().hasUncommittedChanges(projectPath)) {
         // No changes, skip commit and go straight to push
         Q_EMIT syncProgress(90, i18n("Pushing to GitHub..."));
@@ -503,7 +505,7 @@ void ProjectTreePanel::onItemActivated(const QModelIndex &index)
 {
     if (!index.isValid()) return;
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (item->type == ProjectTreeItem::File) {
+    if (item && item->type == ProjectTreeItem::File) {
         Q_EMIT fileActivated(item->path);
     }
 }
@@ -518,7 +520,7 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         ProjectTreeItem *item1 = m_model->itemFromIndex(selected.at(0));
         ProjectTreeItem *item2 = m_model->itemFromIndex(selected.at(1));
         
-        if (item1->type == ProjectTreeItem::File && item2->type == ProjectTreeItem::File) {
+        if (item1 && item2 && item1->type == ProjectTreeItem::File && item2->type == ProjectTreeItem::File) {
             QString path1 = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(item1->path);
             QString path2 = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(item2->path);
             
@@ -535,6 +537,10 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
     if (index.isValid()) {
         menu.addSeparator();
         ProjectTreeItem *item = m_model->itemFromIndex(index);
+        if (!item) return;
+        
+        QString itemPath = item->path;
+        bool isFile = (item->type == ProjectTreeItem::File);
 
         // Category Submenu
         auto *categoryMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), i18n("Set Category"));
@@ -542,12 +548,19 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         auto addCategoryAction = [&](const QString &text, const QString &icon, ProjectTreeItem::Category cat) {
             auto *action = categoryMenu->addAction(QIcon::fromTheme(icon), text);
             action->setCheckable(true);
-            action->setChecked(item->category == cat);
-            connect(action, &QAction::triggered, this, [this, item, index, cat]() {
-                item->category = cat;
-                m_model->dataChanged(index, index, {Qt::DecorationRole});
-                saveTree();
+            // We resolve the item in the lambda to be safe
+            connect(action, &QAction::triggered, this, [this, itemPath, cat]() {
+                ProjectTreeItem *resolved = m_model->findItem(itemPath);
+                if (resolved) {
+                    resolved->category = cat;
+                    QModelIndex idx = m_model->indexForItem(resolved);
+                    if (idx.isValid()) m_model->dataChanged(idx, idx, {Qt::DecorationRole});
+                    saveTree();
+                }
             });
+            // Initial check state
+            ProjectTreeItem *resolved = m_model->findItem(itemPath);
+            if (resolved) action->setChecked(resolved->category == cat);
         };
 
         addCategoryAction(i18n("None"), QStringLiteral("folder"), ProjectTreeItem::None);
@@ -562,30 +575,37 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         addCategoryAction(i18n("Notes"), QStringLiteral("note-sticky"), ProjectTreeItem::Notes);
 
         menu.addSeparator();
-        if (item->type == ProjectTreeItem::File) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("document-history")), i18n("View History..."), this, [this, item, index]() {
+        if (isFile) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("document-history")), i18n("View History..."), this, [this, itemPath]() {
+                ProjectTreeItem *resolved = m_model->findItem(itemPath);
+                if (!resolved) return;
+
                 QString projectPath = ProjectManager::instance().projectPath();
-                QString fullPath = QDir(projectPath).absoluteFilePath(item->path);
+                QString fullPath = QDir(projectPath).absoluteFilePath(resolved->path);
                 
                 auto *dialog = new HistoryDialog(fullPath, this);
-                connect(dialog, &HistoryDialog::viewVersion, this, [this, fullPath, index](const QString &hash, int vIndex, const QDateTime &date, const QStringList &tags) {
+                connect(dialog, &HistoryDialog::viewVersion, this, [this, fullPath, itemPath](const QString &hash, int vIndex, const QDateTime &date, const QStringList &tags) {
                     QString tempDir = QDir::homePath() + QStringLiteral("/.rpgforge/.versions/");
                     QString tempPath = tempDir + hash + QStringLiteral("_") + QFileInfo(fullPath).fileName();
                     
                     auto future = GitService::instance().extractVersion(fullPath, hash, tempPath);
-                    future.then(this, [this, tempPath, index, vIndex, date, tags](bool success) {
+                    future.then(this, [this, tempPath, itemPath, vIndex, date, tags](bool success) {
                         if (success) {
-                            QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
-                            if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
-                            
-                            m_model->addTransientVersionLink(label, tempPath, index);
-                            m_treeView->expand(index);
-                            
-                            // Persist the change
-                            ProjectManager::instance().setTree(m_model->projectData());
-                            ProjectManager::instance().saveProject();
+                            ProjectTreeItem *res = m_model->findItem(itemPath);
+                            if (res) {
+                                QModelIndex resIdx = m_model->indexForItem(res);
+                                QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
+                                if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
+                                
+                                m_model->addTransientVersionLink(label, tempPath, resIdx);
+                                m_treeView->expand(resIdx);
+                                
+                                // Persist the change
+                                ProjectManager::instance().setTree(m_model->projectData());
+                                ProjectManager::instance().saveProject();
 
-                            Q_EMIT fileActivated(tempPath);
+                                Q_EMIT fileActivated(tempPath);
+                            }
                         }
                     });
                 });
@@ -598,9 +618,6 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                     });
                 });
                 connect(dialog, &HistoryDialog::compareVersion, this, [this, fullPath](const QString &hash) {
-                    // Emit signal or call MainWindow to show diff
-                    // We need a way to reach MainWindow. In this app, it's the parent of the panel's parent usually.
-                    // Or we can emit a signal from ProjectTreePanel.
                     Q_EMIT diffRequested(fullPath, hash);
                 });
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -609,7 +626,7 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         }
         menu.addSeparator();
         menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
-        if (item->type == ProjectTreeItem::File) {
+        if (isFile) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
         }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);
@@ -669,7 +686,7 @@ void ProjectTreePanel::renameFile()
     if (!index.isValid()) return;
 
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (item->type != ProjectTreeItem::File) return;
+    if (!item || item->type != ProjectTreeItem::File) return;
 
     QString projectPath = ProjectManager::instance().projectPath();
     QString oldAbsPath = QDir(projectPath).absoluteFilePath(item->path);
@@ -699,6 +716,7 @@ void ProjectTreePanel::editMetadata()
     if (!index.isValid()) return;
 
     ProjectTreeItem *item = m_model->itemFromIndex(index);
+    if (!item) return;
     
     // If it's a file, we can also update the metadata in the markdown file
     QString projectPath = ProjectManager::instance().projectPath();
@@ -771,8 +789,9 @@ ProjectTreeItem* ProjectTreePanel::currentFolder() const
     if (!index.isValid()) return m_model->itemFromIndex(QModelIndex());
 
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (item->type == ProjectTreeItem::Folder) return item;
-    return item->parent;
+    if (item && item->type == ProjectTreeItem::Folder) return item;
+    if (item) return item->parent;
+    return m_model->itemFromIndex(QModelIndex());
 }
 
 void ProjectTreePanel::saveTree()

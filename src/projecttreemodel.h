@@ -91,6 +91,7 @@ public:
 
     ProjectTreeItem* itemFromIndex(const QModelIndex &index) const;
     ProjectTreeItem* findItem(const QString &relativePath, ProjectTreeItem *root = nullptr) const;
+    ProjectTreeItem* rootItem() const { return m_rootItem; }
 
 private:
     ProjectTreeItem* loadItem(const QJsonObject &obj, ProjectTreeItem *parent);
