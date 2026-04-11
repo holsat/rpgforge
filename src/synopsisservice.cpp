@@ -200,10 +200,18 @@ void SynopsisService::processNext()
 void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &content)
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    QString model = settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString();
-    if (provider == LLMProvider::Anthropic) model = settings.value(QStringLiteral("llm/anthropic/model")).toString();
-    else if (provider == LLMProvider::Ollama) model = settings.value(QStringLiteral("llm/ollama/model"), QStringLiteral("llama3")).toString();
+    
+    // Use agent-specific settings first, then fall back to global
+    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_file_provider"), 
+                                     settings.value(QStringLiteral("llm/provider"), 0)).toInt();
+    LLMProvider provider = static_cast<LLMProvider>(providerIdx);
+    
+    QString model = settings.value(QStringLiteral("synopsis/synopsis_file_model")).toString();
+    if (model.isEmpty()) {
+        // Fallback to provider default model
+        QString sk = LLMService::providerSettingsKey(provider);
+        model = settings.value(sk + QStringLiteral("/model")).toString();
+    }
 
     LLMRequest req;
     req.provider = provider;
@@ -247,8 +255,16 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     }
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    QString model = settings.value(QStringLiteral("llm/openai/model"), QStringLiteral("gpt-4o")).toString();
+    
+    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_folder_provider"), 
+                                     settings.value(QStringLiteral("llm/provider"), 0)).toInt();
+    LLMProvider provider = static_cast<LLMProvider>(providerIdx);
+    
+    QString model = settings.value(QStringLiteral("synopsis/synopsis_folder_model")).toString();
+    if (model.isEmpty()) {
+        QString sk = LLMService::providerSettingsKey(provider);
+        model = settings.value(sk + QStringLiteral("/model")).toString();
+    }
 
     LLMRequest req;
     req.provider = provider;

@@ -1,10 +1,5 @@
 #include <QtTest>
 #include "../src/projecttreemodel.h"
-#include "../src/llmservice.h"
-
-// Self-contained mock for LLMService to satisfy SynopsisService dependency
-void LLMService::sendNonStreamingRequest(const LLMRequest&, std::function<void(const QString&)>) {}
-LLMService& LLMService::instance() { static auto* inst = reinterpret_cast<LLMService*>(new QObject()); return *inst; }
 
 class TestProjectTreeModel : public QObject
 {
