@@ -121,12 +121,7 @@ void SynopsisService::resume()
 
 void SynopsisService::processNext()
 {
-    if (m_paused) {
-        m_isProcessing = false;
-        return;
-    }
-
-    if (m_queue.isEmpty()) {
+    if (m_paused || m_queue.isEmpty()) {
         m_isProcessing = false;
         return;
     }
@@ -135,8 +130,8 @@ void SynopsisService::processNext()
     ProjectTreeItem *item = m_model->findItem(relPath);
     
     if (!item) {
-        // Item was deleted while in queue, skip to next immediately
-        processNext();
+        // Item was deleted while in queue, skip to next via event loop
+        QTimer::singleShot(0, this, &SynopsisService::processNext);
         return;
     }
 
@@ -146,7 +141,7 @@ void SynopsisService::processNext()
         QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
         if (!QFile::exists(fullPath)) {
             m_activeRequests.remove(relPath);
-            processNext();
+            QTimer::singleShot(0, this, &SynopsisService::processNext);
             return;
         }
 

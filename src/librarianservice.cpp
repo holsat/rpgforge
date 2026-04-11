@@ -1,4 +1,21 @@
-#include <QPointer>
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #include "librarianservice.h"
 #include "llmservice.h"
 #include <QDir>
@@ -12,6 +29,8 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointer>
+#include <QUuid>
 
 LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     : QObject(parent), m_llmService(llmService)
@@ -49,11 +68,25 @@ void LibrarianService::setProjectPath(const QString &path)
     }
     
     QString dbPath = QDir(path).filePath(QStringLiteral(".rpgforge.db"));
+    m_dbPath = dbPath;
     if (m_db->open(dbPath)) {
         scanAll();
     } else {
         Q_EMIT errorOccurred(m_db->lastError());
     }
+}
+
+QSqlDatabase LibrarianService::getDatabase() const
+{
+    QString connectionName = QStringLiteral("librarian_thread_") + QString::number(size_t(QThread::currentThreadId()));
+    if (QSqlDatabase::contains(connectionName)) {
+        return QSqlDatabase::database(connectionName);
+    }
+    
+    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+    db.setDatabaseName(m_dbPath);
+    db.open();
+    return db;
 }
 
 void LibrarianService::pause()
@@ -76,7 +109,7 @@ void LibrarianService::resume()
 
 void LibrarianService::scanAll()
 {
-    if (m_paused) return;
+    if (m_paused || m_projectPath.isEmpty()) return;
     
     QDir dir(m_projectPath);
     QStringList filters;
@@ -128,17 +161,19 @@ void LibrarianService::processQueue()
     
     // Collect all variables from DB for the VariableManager
     QMap<QString, QString> libVars;
-    QSqlQuery query(m_db->database());
-    query.exec(QStringLiteral("SELECT e.type, e.name, a.key, a.value FROM entities e "
-                              "JOIN attributes a ON e.id = a.entity_id"));
-    while (query.next()) {
-        QString type = query.value(0).toString().replace(QStringLiteral(" "), QString());
-        QString name = query.value(1).toString().replace(QStringLiteral(" "), QString());
-        QString key = query.value(2).toString().replace(QStringLiteral(" "), QString());
-        QString val = query.value(3).toString();
-        
-        // Format: type.name.key
-        libVars.insert(QStringLiteral("%1.%2.%3").arg(type, name, key), val);
+    QSqlDatabase db = getDatabase();
+    if (db.isOpen()) {
+        QSqlQuery query(db);
+        query.exec(QStringLiteral("SELECT e.type, e.name, a.key, a.value FROM entities e "
+                                "JOIN attributes a ON e.id = a.entity_id"));
+        while (query.next()) {
+            QString type = query.value(0).toString().replace(QStringLiteral(" "), QString());
+            QString name = query.value(1).toString().replace(QStringLiteral(" "), QString());
+            QString key = query.value(2).toString().replace(QStringLiteral(" "), QString());
+            QString val = query.value(3).toString();
+            
+            libVars.insert(QStringLiteral("%1.%2.%3").arg(type, name, key), val);
+        }
     }
     Q_EMIT libraryVariablesChanged(libVars);
 
@@ -212,8 +247,6 @@ void LibrarianService::runSemanticBatch()
 {
     if (m_paused || m_projectPath.isEmpty() || !m_llmService) return;
 
-    // Find a file that needs semantic indexing
-    // For now, we pick the first .md file we find that hasn't been scanned recently
     QDir dir(m_projectPath);
     QStringList filters;
     filters << QStringLiteral("*.md");
@@ -235,7 +268,6 @@ void LibrarianService::extractSemantic(const QString &filePath)
     QString content = in.readAll();
     file.close();
 
-    // Prepare prompt for the Librarian Agent
     QString prompt = QStringLiteral(
         "You are the Librarian Agent for RPG Forge. Your task is to extract structured game design data from the following text.\n"
         "Identify Entities (Monsters, Items, Classes, Spells, etc.) and their Attributes (Stats, costs, descriptions).\n"
@@ -245,8 +277,8 @@ void LibrarianService::extractSemantic(const QString &filePath)
     ) + content;
 
     LLMRequest request;
-    request.provider = LLMProvider::Ollama; // Default or from settings
-    request.model = QStringLiteral("llama3"); // Default or from settings
+    request.provider = LLMProvider::Ollama;
+    request.model = QStringLiteral("llama3");
     request.messages << LLMMessage{QStringLiteral("system"), QStringLiteral("You extract structured RPG data as JSON.")};
     request.messages << LLMMessage{QStringLiteral("user"), prompt};
     request.stream = false;
@@ -254,10 +286,8 @@ void LibrarianService::extractSemantic(const QString &filePath)
     QPointer<LibrarianService> weakThis(this);
     m_llmService->sendNonStreamingRequest(request, [weakThis, filePath](const QString &response) {
         if (!weakThis) return;
-        // Parse the JSON response and update the DB
         QJsonDocument doc = QJsonDocument::fromJson(response.toUtf8());
         if (!doc.isArray()) {
-            // Try to find JSON in the response if the LLM added chatter
             int start = response.indexOf(QLatin1Char('['));
             int end = response.lastIndexOf(QLatin1Char(']'));
             if (start != -1 && end != -1) {
@@ -281,7 +311,6 @@ void LibrarianService::extractSemantic(const QString &filePath)
                     Q_EMIT weakThis->entityUpdated(id);
                 }
             }
-            // Trigger a refresh of the library variables
             weakThis->scanFile(filePath); 
         }
     });

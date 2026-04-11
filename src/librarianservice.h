@@ -1,3 +1,21 @@
+/*
+    RPG Forge
+    Copyright (C) 2026  Sheldon L.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #ifndef LIBRARIANSERVICE_H
 #define LIBRARIANSERVICE_H
 
@@ -24,14 +42,14 @@ public:
     void setProjectPath(const QString &path);
     bool isPaused() const { return m_paused; }
 
+    LibrarianDatabase* database() const { return m_db; }
+
 public Q_SLOTS:
     void pause();
     void resume();
     void scanAll();
     void scanFile(const QString &filePath);
     void triggerSemanticReindex();
-
-    LibrarianDatabase* database() const { return m_db; }
 
 Q_SIGNALS:
     void entityUpdated(qint64 entityId);
@@ -53,10 +71,13 @@ private:
     void parseMarkdownTables(const QString &content, const QString &sourceFile);
     void parseMarkdownLists(const QString &content, const QString &sourceFile);
 
+    QSqlDatabase getDatabase() const;
+
     LLMService *m_llmService;
     LibrarianDatabase *m_db;
     QFileSystemWatcher *m_watcher;
     QString m_projectPath;
+    QString m_dbPath;
     
     QMutex m_mutex;
     bool m_paused = false;

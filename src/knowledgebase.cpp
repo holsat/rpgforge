@@ -18,25 +18,22 @@
 
 #include "knowledgebase.h"
 #include "llmservice.h"
-#include "markdownparser.h"
-
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
-#include <QFileSystemWatcher>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
-#include <QSettings>
-#include <QtConcurrent>
-#include <QUuid>
 #include <QDebug>
-#include <QtMath>
-#include <QByteArray>
-#include <QDataStream>
 #include <QRegularExpression>
-#include <KLocalizedString>
 #include <QCryptographicHash>
+#include <QSettings>
+#include <QDataStream>
+#include <QtMath>
+#include <QFileSystemWatcher>
+#include <QtConcurrent/QtConcurrent>
+#include <QUuid>
+#include <KLocalizedString>
+#include <QPointer>
 
 KnowledgeBase& KnowledgeBase::instance()
 {
@@ -64,16 +61,15 @@ void KnowledgeBase::initForProject(const QString &projectPath)
     m_dbPath = QDir(projectPath).absoluteFilePath(QStringLiteral(".rpgforge-vectors.db"));
 
     setupDatabase();
-
-    // Optionally index all markdown files if they haven't been indexed
-    // For now, we'll just set up the watcher on all .md files in the project
-    // A complete implementation would recursively scan the project and index missing files.
 }
 
 void KnowledgeBase::close()
 {
-    if (QSqlDatabase::contains(QStringLiteral("rpgforge_vectors"))) {
-        QSqlDatabase::removeDatabase(QStringLiteral("rpgforge_vectors"));
+    {
+        QMutexLocker locker(&m_dbMutex);
+        if (QSqlDatabase::contains(QStringLiteral("rpgforge_vectors"))) {
+            QSqlDatabase::removeDatabase(QStringLiteral("rpgforge_vectors"));
+        }
     }
     if (m_watcher) {
         QStringList files = m_watcher->files();
@@ -86,6 +82,7 @@ void KnowledgeBase::close()
 
 void KnowledgeBase::setupDatabase()
 {
+    QMutexLocker locker(&m_dbMutex);
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("rpgforge_vectors"));
     db.setDatabaseName(m_dbPath);
 
@@ -102,6 +99,19 @@ void KnowledgeBase::setupDatabase()
                               "content TEXT,"
                               "file_hash TEXT,"
                               "embedding BLOB)"));
+}
+
+QSqlDatabase KnowledgeBase::getDatabase() const
+{
+    QString connectionName = QStringLiteral("kb_thread_") + QString::number(size_t(QThread::currentThreadId()));
+    if (QSqlDatabase::contains(connectionName)) {
+        return QSqlDatabase::database(connectionName);
+    }
+    
+    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+    db.setDatabaseName(m_dbPath);
+    db.open();
+    return db;
 }
 
 void KnowledgeBase::indexFile(const QString &filePath)
@@ -130,14 +140,17 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     QString relativePath = QDir(m_projectPath).relativeFilePath(filePath);
     QByteArray currentHash = QCryptographicHash::hash(content.toUtf8(), QCryptographicHash::Md5).toHex();
 
-    QSqlDatabase db = QSqlDatabase::database(QStringLiteral("rpgforge_vectors"));
-    if (db.isOpen()) {
-        QSqlQuery query(db);
-        query.prepare(QStringLiteral("SELECT file_hash FROM chunks WHERE file_path = ? LIMIT 1"));
-        query.addBindValue(relativePath);
-        if (query.exec() && query.next()) {
-            if (query.value(0).toByteArray() == currentHash) {
-                return; // Content hasn't changed, skip re-indexing
+    {
+        QMutexLocker locker(&m_dbMutex);
+        QSqlDatabase db = getDatabase();
+        if (db.isOpen()) {
+            QSqlQuery query(db);
+            query.prepare(QStringLiteral("SELECT file_hash FROM chunks WHERE file_path = ? LIMIT 1"));
+            query.addBindValue(relativePath);
+            if (query.exec() && query.next()) {
+                if (query.value(0).toByteArray() == currentHash) {
+                    return; // Content hasn't changed, skip re-indexing
+                }
             }
         }
     }
@@ -148,27 +161,29 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     
-    // Anthropic doesn't support embeddings in our code right now
     if (provider == LLMProvider::Anthropic) {
-        qWarning() << "Anthropic selected, skipping embeddings.";
         return;
     }
     
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
     // Clear old chunks for this file
-    if (db.isOpen()) {
-        QSqlQuery query(db);
-        query.prepare(QStringLiteral("DELETE FROM chunks WHERE file_path = ?"));
-        query.addBindValue(relativePath);
-        query.exec();
+    {
+        QMutexLocker locker(&m_dbMutex);
+        QSqlDatabase db = getDatabase();
+        if (db.isOpen()) {
+            QSqlQuery query(db);
+            query.prepare(QStringLiteral("DELETE FROM chunks WHERE file_path = ?"));
+            query.addBindValue(relativePath);
+            query.exec();
+        }
     }
 
+    QPointer<KnowledgeBase> weakThis(this);
     for (const QString &chunkText : rawChunks) {
         QString trimmed = chunkText.trimmed();
         if (trimmed.isEmpty()) continue;
 
-        // Try to extract a heading name
         QString heading;
         if (trimmed.startsWith(QLatin1String("# "))) {
             heading = trimmed.section(QLatin1Char('\n'), 0, 0).mid(2).trimmed();
@@ -179,16 +194,17 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         }
 
         m_pendingEmbeddings++;
-        Q_EMIT indexingProgress(0, m_pendingEmbeddings); // just indicating busy
+        Q_EMIT indexingProgress(0, m_pendingEmbeddings);
 
-        LLMService::instance().generateEmbedding(provider, model, trimmed, [this, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
+        LLMService::instance().generateEmbedding(provider, model, trimmed, [weakThis, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
+            if (!weakThis) return;
             if (!embedding.isEmpty()) {
-                storeChunk(filePath, heading, trimmed, embedding, currentHash);
+                weakThis->storeChunk(filePath, heading, trimmed, embedding, currentHash);
             }
-            m_pendingEmbeddings--;
-            if (m_pendingEmbeddings <= 0) {
-                m_pendingEmbeddings = 0;
-                Q_EMIT indexingFinished();
+            weakThis->m_pendingEmbeddings--;
+            if (weakThis->m_pendingEmbeddings <= 0) {
+                weakThis->m_pendingEmbeddings = 0;
+                Q_EMIT weakThis->indexingFinished();
             }
         });
     }
@@ -196,7 +212,8 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
 
 void KnowledgeBase::storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding, const QByteArray &fileHash)
 {
-    QSqlDatabase db = QSqlDatabase::database(QStringLiteral("rpgforge_vectors"));
+    QMutexLocker locker(&m_dbMutex);
+    QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return;
 
     QByteArray blob;
@@ -231,9 +248,14 @@ float KnowledgeBase::cosineSimilarity(const QVector<float> &a, const QVector<flo
 
 void KnowledgeBase::search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback)
 {
+    if (m_projectPath.isEmpty()) {
+        if (callback) callback({});
+        return;
+    }
+
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    
+
     if (provider == LLMProvider::Anthropic) {
         if (callback) callback({});
         return;
@@ -241,72 +263,57 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
 
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
-    LLMService::instance().generateEmbedding(provider, model, queryText, [this, topK, excludeFile, callback](const QVector<float> &queryVector) {
-        if (queryVector.isEmpty()) {
+    QPointer<KnowledgeBase> weakThis(this);
+    LLMService::instance().generateEmbedding(provider, model, queryText, [weakThis, topK, excludeFile, callback](const QVector<float> &queryVector) {
+        if (!weakThis || queryVector.isEmpty()) {
             if (callback) callback({});
             return;
         }
 
-        // Run the heavy similarity search in a background thread
-        QtConcurrent::run([this, queryVector, topK, excludeFile, callback]() {
-            QList<SearchResult> results;
-            QString connectionName = QStringLiteral("kb_search_") + QUuid::createUuid().toString();
+        QtConcurrent::run([weakThis, queryVector, topK, excludeFile, callback]() {
+            if (!weakThis) return;
             
+            QList<SearchResult> results;
             {
-                QSqlDatabase db = QSqlDatabase::cloneDatabase(QSqlDatabase::database(QStringLiteral("rpgforge_vectors")), connectionName);
-                if (!db.open()) {
+                QMutexLocker locker(&weakThis->m_dbMutex);
+                QSqlDatabase db = weakThis->getDatabase();
+                if (!db.isOpen()) {
                     if (callback) callback({});
                     return;
                 }
 
-                QString excludeRel = excludeFile.isEmpty() ? QString() : QDir(m_projectPath).relativeFilePath(excludeFile);
-
                 QSqlQuery query(db);
-                if (excludeRel.isEmpty()) {
-                    query.exec(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks"));
-                } else {
-                    query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
-                    query.addBindValue(excludeRel);
-                    query.exec();
-                }
-
-                while (query.next()) {
-                    QString path = query.value(0).toString();
-                    QString head = query.value(1).toString();
-                    QString cont = query.value(2).toString();
-                    QByteArray blob = query.value(3).toByteArray();
-
-                    QVector<float> vec;
-                    QDataStream stream(&blob, QIODevice::ReadOnly);
-                    stream.setVersion(QDataStream::Qt_6_0);
-                    stream >> vec;
-
-                    float sim = cosineSimilarity(queryVector, vec);
-                    
-                    if (sim > 0.45f) { // Slightly lower threshold for initial filtering
-                        results.append({path, head, cont, sim});
+                query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
+                query.addBindValue(excludeFile);
+                
+                if (query.exec()) {
+                    while (query.next()) {
+                        SearchResult res;
+                        res.filePath = query.value(0).toString();
+                        res.heading = query.value(1).toString();
+                        res.content = query.value(2).toString();
+                        
+                        QByteArray blob = query.value(3).toByteArray();
+                        QVector<float> emb;
+                        QDataStream stream(&blob, QIODevice::ReadOnly);
+                        stream.setVersion(QDataStream::Qt_6_0);
+                        stream >> emb;
+                        
+                        res.score = weakThis->cosineSimilarity(queryVector, emb);
+                        results.append(res);
                     }
                 }
-                db.close();
             }
-            QSqlDatabase::removeDatabase(connectionName);
 
-            // Sort descending
             std::sort(results.begin(), results.end(), [](const SearchResult &a, const SearchResult &b) {
                 return a.score > b.score;
             });
 
-            // Top K
             if (results.size() > topK) {
                 results = results.mid(0, topK);
             }
 
-            // Return results on the original thread if needed, but since it's a callback,
-            // we just invoke it. If the caller needs it on main thread, they should handle it.
-            // For safety with most UI-bound callbacks, we'll invoke it.
-            if (callback) {
-                callback(results);
-            }
+            if (callback) callback(results);
         });
     });
 }
