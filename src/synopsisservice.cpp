@@ -211,7 +211,7 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
     req.serviceName = i18n("File Synopsis");
     req.settingsKey = QStringLiteral("synopsis/synopsis_file_model");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG documents concisely.")};
-    req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this document in one short sentence: %1").arg(content.left(2000))};
+    req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this document in one short sentence: %1", content.left(2000))};
     req.stream = false;
 
     QString relPath = item->path;
@@ -256,7 +256,7 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     req.serviceName = i18n("Folder Synopsis");
     req.settingsKey = QStringLiteral("synopsis/synopsis_folder_model");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG project folders.")};
-    req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this folder based on its contents: %1").arg(childSynopses.join(QLatin1String("\n")))};
+    req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this folder based on its contents: %1", childSynopses.join(QLatin1String("\n")))};
     req.stream = false;
 
     QPointer<SynopsisService> weakThis(this);

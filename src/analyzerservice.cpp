@@ -115,8 +115,9 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     QString systemPrompt = settings.value(QStringLiteral("analyzer/system_prompt"), 
         QStringLiteral("You are an expert RPG game design analyzer.\n"
                        "Analyze the provided document for rule conflicts, ambiguities, and completeness gaps.\n"
+                       "IMPORTANT: Use 1-based line indexing. Line 1 is the very first line of the provided text (including YAML frontmatter).\n"
                        "You must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\n"
-                       "Format: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]")).toString();
+                       "Format: [{\"line\": 1, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 1}]}]")).toString();
 
     QString augmentedContext = QStringLiteral("<current_document path=\"%1\">\n%2\n</current_document>\n").arg(QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath), content);
 

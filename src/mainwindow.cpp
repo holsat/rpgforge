@@ -199,11 +199,13 @@ void MainWindow::setupEditor()
     // Main Manuscript Document
     m_document = m_editor->createDocument(this);
     m_editorView = m_document->createView(this);
+    m_editorView->focusProxy()->installEventFilter(this);
     m_document->setHighlightingMode(QStringLiteral("Markdown"));
 
     // Research Document (for split view)
     m_researchDocument = m_editor->createDocument(this);
     m_researchView = m_researchDocument->createView(this);
+    m_researchView->focusProxy()->installEventFilter(this);
     m_researchDocument->setHighlightingMode(QStringLiteral("Markdown"));
 
     m_editorSplitter = new QSplitter(Qt::Horizontal, this);
@@ -1324,6 +1326,27 @@ void MainWindow::performSearch(const QString &text)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_editorView->focusProxy() && event->type() == QEvent::ToolTip) {
+        auto *helpEvent = static_cast<QHelpEvent*>(event);
+        KTextEditor::Cursor cursor = m_editorView->coordinatesToCursor(helpEvent->pos());
+        
+        // 1. Check Librarian Ranges
+        for (auto *range : m_librarianRanges) {
+            if (range->contains(cursor)) {
+                QToolTip::showText(helpEvent->globalPos(), range->attribute()->toolTip());
+                return true;
+            }
+        }
+        
+        // 2. Check Diagnostic Ranges
+        for (auto *range : m_diagnosticRanges) {
+            if (range->contains(cursor)) {
+                QToolTip::showText(helpEvent->globalPos(), range->attribute()->toolTip());
+                return true;
+            }
+        }
+    }
+
     // Fix KateCompletionWidget positioning.
     // Kate's updatePosition() uses parentWidget()->geometry() for bounds checking,
     // but on Wayland the geometry position includes window decoration offsets (e.g. y=25

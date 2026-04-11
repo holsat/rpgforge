@@ -92,7 +92,7 @@ void CharacterDossierService::scanManuscript()
     req.model = model;
     req.settingsKey = QStringLiteral("dossier/model");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are a literary analyst. Extract a list of character names mentioned in the following RPG manuscript.")};
-    req.messages << LLMMessage{QStringLiteral("user"), i18n("List ONLY the names of significant characters found in this text, as a JSON array of strings:\n\n%1").arg(combinedText.left(5000))};
+    req.messages << LLMMessage{QStringLiteral("user"), i18n("List ONLY the names of significant characters found in this text, as a JSON array of strings:\n\n%1", combinedText.left(5000))};
     req.stream = false;
 
     QPointer<CharacterDossierService> weakThis(this);
@@ -155,12 +155,13 @@ void CharacterDossierService::updateDossier(const QString &characterName, const 
         "9. Key Moments (Significant traits/changes/actions)\n\n"
         "If information is missing for a section, mark it as [Unknown/Pending].\n"
         "Keep the prose atmospheric and consistent with the project's tone.\n"
-        "Return ONLY the updated Markdown content."
-    ).arg(characterName);
+        "Return ONLY the updated Markdown content.",
+        characterName);
 
     QString userPrompt = i18n(
-        "EXISTING DOSSIER:\n%1\n\nNEW MANUSCRIPT CONTEXT:\n%2\n\nUpdate the dossier now."
-    ).arg(existingContent.isEmpty() ? i18n("[New Character]") : existingContent, contextText.left(4000));
+        "EXISTING DOSSIER:\n%1\n\nNEW MANUSCRIPT CONTEXT:\n%2\n\nUpdate the dossier now.",
+        existingContent.isEmpty() ? i18n("[New Character]") : existingContent, 
+        contextText.left(4000));
 
     req.messages << LLMMessage{QStringLiteral("system"), systemPrompt};
     req.messages << LLMMessage{QStringLiteral("user"), userPrompt};
