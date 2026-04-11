@@ -26,6 +26,7 @@
 #include <QUrl>
 #include <QRegularExpression>
 #include <KLocalizedString>
+#include <QMutexLocker>
 
 ProjectTreeModel::ProjectTreeModel(QObject *parent)
     : QAbstractItemModel(parent)
@@ -37,24 +38,30 @@ ProjectTreeModel::ProjectTreeModel(QObject *parent)
 
 ProjectTreeModel::~ProjectTreeModel()
 {
+    QMutexLocker locker(&m_treeMutex);
     delete m_rootItem;
+    m_rootItem = nullptr;
 }
 
 void ProjectTreeModel::setProjectData(const QJsonObject &treeData)
 {
     beginResetModel();
-    delete m_rootItem;
-    m_rootItem = loadItem(treeData, nullptr);
-    if (!m_rootItem) {
-        m_rootItem = new ProjectTreeItem();
-        m_rootItem->type = ProjectTreeItem::Folder;
-        m_rootItem->name = QStringLiteral("Root");
+    {
+        QMutexLocker locker(&m_treeMutex);
+        delete m_rootItem;
+        m_rootItem = loadItem(treeData, nullptr);
+        if (!m_rootItem) {
+            m_rootItem = new ProjectTreeItem();
+            m_rootItem->type = ProjectTreeItem::Folder;
+            m_rootItem->name = QStringLiteral("Root");
+        }
     }
     endResetModel();
 }
 
 QJsonObject ProjectTreeModel::projectData() const
 {
+    QMutexLocker locker(&m_treeMutex);
     return saveItem(m_rootItem);
 }
 
@@ -109,6 +116,7 @@ ProjectTreeItem* ProjectTreeModel::loadItem(const QJsonObject &obj, ProjectTreeI
 QJsonObject ProjectTreeModel::saveItem(ProjectTreeItem *item) const
 {
     QJsonObject obj;
+    if (!item) return obj;
     obj[QStringLiteral("type")] = item->type == ProjectTreeItem::File ? QStringLiteral("file") : QStringLiteral("folder");
     obj[QStringLiteral("category")] = categoryToString(item->category);
     obj[QStringLiteral("name")] = item->name;
@@ -132,6 +140,8 @@ QModelIndex ProjectTreeModel::index(int row, int column, const QModelIndex &pare
 
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     if (!parentItem) return QModelIndex();
+    
+    QMutexLocker locker(&m_treeMutex);
     ProjectTreeItem *childItem = parentItem->children.value(row);
     if (childItem) return createIndex(row, column, childItem);
     return QModelIndex();
@@ -143,11 +153,12 @@ QModelIndex ProjectTreeModel::parent(const QModelIndex &child) const
 
     ProjectTreeItem *childItem = itemFromIndex(child);
     if (!childItem) return QModelIndex();
+    
+    QMutexLocker locker(&m_treeMutex);
     ProjectTreeItem *parentItem = childItem->parent;
 
     if (parentItem == m_rootItem || !parentItem) return QModelIndex();
 
-    // Find the row of the parentItem in ITS parent
     ProjectTreeItem *grandParent = parentItem->parent;
     if (!grandParent) return QModelIndex();
 
@@ -160,6 +171,8 @@ int ProjectTreeModel::rowCount(const QModelIndex &parent) const
     if (parent.column() > 0) return 0;
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     if (!parentItem) return 0;
+    
+    QMutexLocker locker(&m_treeMutex);
     return parentItem->children.count();
 }
 
@@ -176,6 +189,7 @@ QVariant ProjectTreeModel::data(const QModelIndex &index, int role) const
     ProjectTreeItem *item = itemFromIndex(index);
     if (!item) return QVariant();
 
+    QMutexLocker locker(&m_treeMutex);
     if (role == Qt::DisplayRole || role == Qt::EditRole) {
         return item->name;
     } else if (role == Qt::DecorationRole) {
@@ -190,9 +204,7 @@ QVariant ProjectTreeModel::data(const QModelIndex &index, int role) const
                 default: return QIcon::fromTheme(QStringLiteral("folder"));
             }
         } else {
-            // Check transient/version links
             if (item->transient) return QIcon::fromTheme(QStringLiteral("document-history"));
-
             switch (item->category) {
                 case ProjectTreeItem::Scene: return QIcon::fromTheme(QStringLiteral("document-edit-symbolic"));
                 case ProjectTreeItem::Notes: return QIcon::fromTheme(QStringLiteral("note-sticky"));
@@ -239,6 +251,7 @@ bool ProjectTreeModel::setData(const QModelIndex &index, const QVariant &value, 
     ProjectTreeItem *item = itemFromIndex(index);
     if (!item) return false;
 
+    QMutexLocker locker(&m_treeMutex);
     if (role == Qt::EditRole) {
         item->name = value.toString();
         Q_EMIT dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole});
@@ -271,8 +284,10 @@ static bool isItemInTree(ProjectTreeItem *item, ProjectTreeItem *root) {
 ProjectTreeItem* ProjectTreeModel::itemFromIndex(const QModelIndex &index) const
 {
     if (index.isValid()) {
+        if (index.model() != this) return nullptr;
         auto *item = static_cast<ProjectTreeItem*>(index.internalPointer());
-        // CRITICAL: Double check that this pointer actually belongs to our current tree!
+        // Mutex is needed to safely traverse/check tree
+        QMutexLocker locker(&m_treeMutex);
         if (isItemInTree(item, m_rootItem)) return item;
         return nullptr;
     }
@@ -281,10 +296,10 @@ ProjectTreeItem* ProjectTreeModel::itemFromIndex(const QModelIndex &index) const
 
 ProjectTreeItem* ProjectTreeModel::findItem(const QString &relativePath, ProjectTreeItem *root) const
 {
+    QMutexLocker locker(&m_treeMutex);
     if (!root) root = m_rootItem;
     if (!root) return nullptr;
 
-    // Check root and children
     if (root->path == relativePath) return root;
 
     for (auto *child : root->children) {
@@ -297,6 +312,8 @@ ProjectTreeItem* ProjectTreeModel::findItem(const QString &relativePath, Project
 QModelIndex ProjectTreeModel::indexForItem(ProjectTreeItem *item) const
 {
     if (!item || item == m_rootItem) return QModelIndex();
+    
+    QMutexLocker locker(&m_treeMutex);
     ProjectTreeItem *parentItem = item->parent;
     if (!parentItem) return QModelIndex();
     int row = parentItem->children.indexOf(item);
@@ -320,6 +337,8 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     if (!parentItem) return QModelIndex();
+    
+    QMutexLocker locker(&m_treeMutex);
     int row = parentItem->children.count();
 
     SynopsisService::instance().pause();
@@ -340,6 +359,8 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     if (!parentItem) return QModelIndex();
+    
+    QMutexLocker locker(&m_treeMutex);
     int row = parentItem->children.count();
 
     SynopsisService::instance().pause();
@@ -360,6 +381,8 @@ QModelIndex ProjectTreeModel::addTransientVersionLink(const QString &name, const
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     if (!parentItem) return QModelIndex();
+    
+    QMutexLocker locker(&m_treeMutex);
     int row = parentItem->children.count();
 
     SynopsisService::instance().pause();
@@ -397,6 +420,7 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
     ProjectTreeItem *parentItem = itemFromIndex(parent);
     
     if (isMedia && (parentItem == m_rootItem || !targetParent.isValid())) {
+        QMutexLocker locker(&m_treeMutex);
         ProjectTreeItem *mediaFolder = nullptr;
         for (auto *child : m_rootItem->children) {
             if (child->type == ProjectTreeItem::Folder && child->name.toLower() == QStringLiteral("media")) {
@@ -404,6 +428,7 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
                 break;
             }
         }
+        locker.unlock();
         
         if (!mediaFolder) {
             targetParent = addFolder(i18n("Media"), QStringLiteral("media"), QModelIndex());
@@ -414,8 +439,12 @@ void ProjectTreeModel::addFileWithSmartDiscovery(const QString &absolutePath, co
     
     ProjectTreeItem *pItem = itemFromIndex(targetParent);
     if (!pItem) return;
-    for (auto *child : pItem->children) {
-        if (child->type == ProjectTreeItem::File && child->path == relativePath) return;
+    
+    {
+        QMutexLocker locker(&m_treeMutex);
+        for (auto *child : pItem->children) {
+            if (child->type == ProjectTreeItem::File && child->path == relativePath) return;
+        }
     }
 
     addFile(fi.completeBaseName(), relativePath, targetParent);
@@ -453,8 +482,11 @@ bool ProjectTreeModel::removeItem(const QModelIndex &index)
     SynopsisService::instance().cancelRequest(item->path);
     SynopsisService::instance().pause();
     beginRemoveRows(index.parent(), row, row);
-    parentItem->children.removeAt(row);
-    delete item;
+    {
+        QMutexLocker locker(&m_treeMutex);
+        parentItem->children.removeAt(row);
+        delete item;
+    }
     endRemoveRows();
     SynopsisService::instance().resume();
     return true;
@@ -466,16 +498,19 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
     if (newParent->type == ProjectTreeItem::File) return false;
 
     ProjectTreeItem *oldParent = item->parent;
-    if (!oldParent) return false; // Root cannot be moved
+    if (!oldParent) return false;
 
     int oldRow = oldParent->children.indexOf(item);
     if (oldRow == -1) return false;
 
     beginMoveRows(indexForItem(oldParent), oldRow, oldRow, indexForItem(newParent), newRow);
-    oldParent->children.removeAt(oldRow);
-    item->parent = newParent;
-    if (newRow > newParent->children.size()) newRow = newParent->children.size();
-    newParent->children.insert(newRow, item);
+    {
+        QMutexLocker locker(&m_treeMutex);
+        oldParent->children.removeAt(oldRow);
+        item->parent = newParent;
+        if (newRow > newParent->children.size()) newRow = newParent->children.size();
+        newParent->children.insert(newRow, item);
+    }
     endMoveRows();
     return true;
 }
@@ -500,6 +535,8 @@ QMimeData* ProjectTreeModel::mimeData(const QModelIndexList &indexes) const
         if (!idx.isValid()) continue;
         ProjectTreeItem *item = itemFromIndex(idx);
         if (!item) continue;
+        
+        QMutexLocker locker(&m_treeMutex);
         paths << item->path;
 
         if (item->type == ProjectTreeItem::File && ProjectManager::instance().isProjectOpen()) {
@@ -521,13 +558,19 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
     if (action == Qt::IgnoreAction) return true;
 
     ProjectTreeItem *newParentItem = itemFromIndex(parent);
-    if (!newParentItem) newParentItem = m_rootItem;
+    if (!newParentItem) {
+        QMutexLocker locker(&m_treeMutex);
+        newParentItem = m_rootItem;
+    }
 
     if (newParentItem->type == ProjectTreeItem::File) {
         newParentItem = newParentItem->parent;
     }
 
-    if (!newParentItem) newParentItem = m_rootItem;
+    if (!newParentItem) {
+        QMutexLocker locker(&m_treeMutex);
+        newParentItem = m_rootItem;
+    }
 
     if (data->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))) {
         const QStringList paths = QString::fromUtf8(data->data(QStringLiteral("application/x-rpgforge-treeitem"))).split(QLatin1Char('\n'));

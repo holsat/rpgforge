@@ -31,6 +31,7 @@
 #include <QJsonObject>
 #include <QPointer>
 #include <QUuid>
+#include <QtConcurrent/QtConcurrent>
 
 LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     : QObject(parent), m_llmService(llmService)
@@ -59,11 +60,11 @@ LibrarianService::~LibrarianService()
 void LibrarianService::setProjectPath(const QString &path)
 {
     if (path.isEmpty()) return;
+    qDebug() << "LibrarianService: Setting project path:" << path;
     QMutexLocker locker(&m_mutex);
     m_projectPath = path;
-    m_pendingFiles.clear(); // Clear any queue from previous project
+    m_pendingFiles.clear(); 
     
-    // Clear old watches
     QStringList watched = m_watcher->files();
     if (!watched.isEmpty()) {
         m_watcher->removePaths(watched);
@@ -93,20 +94,20 @@ QSqlDatabase LibrarianService::getDatabase() const
 
 void LibrarianService::pause()
 {
+    qDebug() << "LibrarianService: Pausing...";
     QMutexLocker locker(&m_mutex);
     m_paused = true;
     m_processTimer->stop();
     m_semanticTimer->stop();
-    qDebug() << "Librarian Service Paused.";
 }
 
 void LibrarianService::resume()
 {
+    qDebug() << "LibrarianService: Resuming...";
     QMutexLocker locker(&m_mutex);
     m_paused = false;
     m_processTimer->start();
     m_semanticTimer->start();
-    qDebug() << "Librarian Service Resumed.";
 }
 
 void LibrarianService::scanAll()
@@ -132,6 +133,7 @@ void LibrarianService::scanAll()
 
 void LibrarianService::scanFile(const QString &filePath)
 {
+    if (filePath.isEmpty()) return;
     QMutexLocker locker(&m_mutex);
     if (!m_pendingFiles.contains(filePath)) {
         m_pendingFiles.append(filePath);
@@ -154,32 +156,40 @@ void LibrarianService::processQueue()
 
     Q_EMIT scanningStarted();
     
-    while (!m_pendingFiles.isEmpty()) {
-        QString filePath = m_pendingFiles.takeFirst();
-        locker.unlock();
-        extractHeuristic(filePath);
-        locker.relock();
-    }
+    QStringList filesToProcess = m_pendingFiles;
+    m_pendingFiles.clear();
     
-    // Collect all variables from DB for the VariableManager
-    QMap<QString, QString> libVars;
-    QSqlDatabase db = getDatabase();
-    if (db.isOpen()) {
-        QSqlQuery query(db);
-        query.exec(QStringLiteral("SELECT e.type, e.name, a.key, a.value FROM entities e "
-                                "JOIN attributes a ON e.id = a.entity_id"));
-        while (query.next()) {
-            QString type = query.value(0).toString().replace(QStringLiteral(" "), QString());
-            QString name = query.value(1).toString().replace(QStringLiteral(" "), QString());
-            QString key = query.value(2).toString().replace(QStringLiteral(" "), QString());
-            QString val = query.value(3).toString();
-            
-            libVars.insert(QStringLiteral("%1.%2.%3").arg(type, name, key), val);
-        }
-    }
-    Q_EMIT libraryVariablesChanged(libVars);
+    QPointer<LibrarianService> weakThis(this);
+    QtConcurrent::run([weakThis, filesToProcess]() {
+        if (!weakThis) return;
 
-    Q_EMIT scanningFinished();
+        for (const QString &filePath : filesToProcess) {
+            if (!weakThis || weakThis->isPaused()) break;
+            weakThis->extractHeuristic(filePath);
+        }
+
+        // Finalize back on main thread
+        QMetaObject::invokeMethod(weakThis.data(), [weakThis]() {
+            if (!weakThis) return;
+            
+            QMap<QString, QString> libVars;
+            QSqlDatabase db = weakThis->getDatabase();
+            if (db.isOpen()) {
+                QSqlQuery query(db);
+                query.exec(QStringLiteral("SELECT e.type, e.name, a.key, a.value FROM entities e "
+                                        "JOIN attributes a ON e.id = a.entity_id"));
+                while (query.next()) {
+                    QString type = query.value(0).toString().replace(QStringLiteral(" "), QString());
+                    QString name = query.value(1).toString().replace(QStringLiteral(" "), QString());
+                    QString key = query.value(2).toString().replace(QStringLiteral(" "), QString());
+                    QString val = query.value(3).toString();
+                    libVars.insert(QStringLiteral("%1.%2.%3").arg(type, name, key), val);
+                }
+            }
+            Q_EMIT weakThis->libraryVariablesChanged(libVars);
+            Q_EMIT weakThis->scanningFinished();
+        }, Qt::QueuedConnection);
+    });
 }
 
 void LibrarianService::extractHeuristic(const QString &filePath)
@@ -191,7 +201,6 @@ void LibrarianService::extractHeuristic(const QString &filePath)
     QString content = in.readAll();
     file.close();
 
-    // Heuristic extraction
     parseMarkdownTables(content, filePath);
     parseMarkdownLists(content, filePath);
 }
@@ -203,19 +212,14 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
     QStringList lines = content.split(QLatin1Char('\n'));
     for (int i = 0; i < lines.size(); ++i) {
         if (lines[i].startsWith(QLatin1Char('|'))) {
-            // Found a potential table
             QStringList headers = lines[i].split(QLatin1Char('|'), Qt::SkipEmptyParts);
             if (!headers.isEmpty() && i + 1 < lines.size() && separatorRegex.match(lines[i+1]).hasMatch()) {
-                // It's a table with headers
                 QString tableName = headers[0].trimmed().toLower().replace(QStringLiteral(" "), QString());
-                
-                // Extract rows
                 for (int j = i + 2; j < lines.size() && lines[j].startsWith(QLatin1Char('|')); ++j) {
                     QStringList cells = lines[j].split(QLatin1Char('|'), Qt::SkipEmptyParts);
                     if (cells.size() >= 2) {
                         QString entityName = cells[0].trimmed();
                         qint64 entityId = m_db->addEntity(entityName, tableName, sourceFile);
-                        
                         for (int k = 1; k < cells.size() && k < headers.size(); ++k) {
                             QString key = headers[k].trimmed().toLower();
                             QString val = cells[k].trimmed();

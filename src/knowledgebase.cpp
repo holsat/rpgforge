@@ -56,30 +56,28 @@ KnowledgeBase::~KnowledgeBase()
 void KnowledgeBase::initForProject(const QString &projectPath)
 {
     if (projectPath.isEmpty()) return;
+    qDebug() << "KnowledgeBase: Initializing for project:" << projectPath;
     close();
 
     m_projectPath = projectPath;
     m_dbPath = QDir(projectPath).absoluteFilePath(QStringLiteral(".rpgforge-vectors.db"));
-    m_pendingFiles.clear(); // Ensure no stale queue
+    m_pendingFiles.clear();
 
     setupDatabase();
 }
 
 void KnowledgeBase::close()
 {
-    {
-        QMutexLocker locker(&m_dbMutex);
-        if (QSqlDatabase::contains(QStringLiteral("rpgforge_vectors"))) {
-            QSqlDatabase::removeDatabase(QStringLiteral("rpgforge_vectors"));
-        }
+    QMutexLocker locker(&m_dbMutex);
+    if (QSqlDatabase::contains(QStringLiteral("rpgforge_vectors"))) {
+        QSqlDatabase::removeDatabase(QStringLiteral("rpgforge_vectors"));
     }
     if (m_watcher) {
         QStringList files = m_watcher->files();
         if (!files.isEmpty()) m_watcher->removePaths(files);
-        QStringList dirs = m_watcher->directories();
-        if (!dirs.isEmpty()) m_watcher->removePaths(dirs);
     }
     m_pendingEmbeddings = 0;
+    m_pendingFiles.clear();
 }
 
 void KnowledgeBase::setupDatabase()
@@ -118,14 +116,13 @@ QSqlDatabase KnowledgeBase::getDatabase() const
 
 void KnowledgeBase::indexFile(const QString &filePath)
 {
-    if (m_projectPath.isEmpty()) return;
+    if (m_projectPath.isEmpty() || filePath.isEmpty()) return;
     
     if (m_paused) {
         if (!m_pendingFiles.contains(filePath)) m_pendingFiles.append(filePath);
         return;
     }
 
-    // Make sure it's being watched
     if (!m_watcher->files().contains(filePath)) {
         m_watcher->addPath(filePath);
     }
@@ -135,22 +132,6 @@ void KnowledgeBase::indexFile(const QString &filePath)
 
     QString content = QString::fromUtf8(file.readAll());
     chunkAndEmbed(filePath, content);
-}
-
-void KnowledgeBase::pause()
-{
-    m_paused = true;
-}
-
-void KnowledgeBase::resume()
-{
-    if (!m_paused) return;
-    m_paused = false;
-    
-    // Process queued files
-    while (!m_pendingFiles.isEmpty()) {
-        indexFile(m_pendingFiles.takeFirst());
-    }
 }
 
 void KnowledgeBase::onFileChanged(const QString &path)
@@ -172,25 +153,20 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
             query.addBindValue(relativePath);
             if (query.exec() && query.next()) {
                 if (query.value(0).toByteArray() == currentHash) {
-                    return; // Content hasn't changed, skip re-indexing
+                    return;
                 }
             }
         }
     }
 
-    // Extremely simplified chunker: split by markdown H1/H2
     QStringList rawChunks = content.split(QRegularExpression(QStringLiteral("(?=\\n##? )")));
     
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    
-    if (provider == LLMProvider::Anthropic) {
-        return;
-    }
+    if (provider == LLMProvider::Anthropic) return;
     
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
-    // Clear old chunks for this file
     {
         QMutexLocker locker(&m_dbMutex);
         QSqlDatabase db = getDatabase();
@@ -208,13 +184,9 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         if (trimmed.isEmpty()) continue;
 
         QString heading;
-        if (trimmed.startsWith(QLatin1String("# "))) {
-            heading = trimmed.section(QLatin1Char('\n'), 0, 0).mid(2).trimmed();
-        } else if (trimmed.startsWith(QLatin1String("## "))) {
-            heading = trimmed.section(QLatin1Char('\n'), 0, 0).mid(3).trimmed();
-        } else {
-            heading = i18n("General");
-        }
+        if (trimmed.startsWith(QLatin1String("# "))) heading = trimmed.section(QLatin1Char('\n'), 0, 0).mid(2).trimmed();
+        else if (trimmed.startsWith(QLatin1String("## "))) heading = trimmed.section(QLatin1Char('\n'), 0, 0).mid(3).trimmed();
+        else heading = i18n("General");
 
         m_pendingEmbeddings++;
         Q_EMIT indexingProgress(0, m_pendingEmbeddings);
@@ -257,32 +229,31 @@ void KnowledgeBase::storeChunk(const QString &filePath, const QString &heading, 
 float KnowledgeBase::cosineSimilarity(const QVector<float> &a, const QVector<float> &b)
 {
     if (a.isEmpty() || a.size() != b.size()) return 0.0f;
-
     float dot = 0.0f, normA = 0.0f, normB = 0.0f;
     for (int i = 0; i < a.size(); ++i) {
         dot += a[i] * b[i];
         normA += a[i] * a[i];
         normB += b[i] * b[i];
     }
-    
     if (normA == 0.0f || normB == 0.0f) return 0.0f;
     return dot / (qSqrt(normA) * qSqrt(normB));
 }
 
+void KnowledgeBase::pause() { m_paused = true; }
+void KnowledgeBase::resume()
+{
+    if (!m_paused) return;
+    m_paused = false;
+    while (!m_pendingFiles.isEmpty()) indexFile(m_pendingFiles.takeFirst());
+}
+
 void KnowledgeBase::search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback)
 {
-    if (m_projectPath.isEmpty()) {
-        if (callback) callback({});
-        return;
-    }
+    if (m_projectPath.isEmpty() || !callback) return;
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-
-    if (provider == LLMProvider::Anthropic) {
-        if (callback) callback({});
-        return;
-    }
+    if (provider == LLMProvider::Anthropic) { callback({}); return; }
 
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
@@ -300,30 +271,24 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             {
                 QMutexLocker locker(&weakThis->m_dbMutex);
                 QSqlDatabase db = weakThis->getDatabase();
-                if (!db.isOpen()) {
-                    if (callback) callback({});
-                    return;
-                }
-
-                QSqlQuery query(db);
-                query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
-                query.addBindValue(excludeFile);
-                
-                if (query.exec()) {
-                    while (query.next()) {
-                        SearchResult res;
-                        res.filePath = query.value(0).toString();
-                        res.heading = query.value(1).toString();
-                        res.content = query.value(2).toString();
-                        
-                        QByteArray blob = query.value(3).toByteArray();
-                        QVector<float> emb;
-                        QDataStream stream(&blob, QIODevice::ReadOnly);
-                        stream.setVersion(QDataStream::Qt_6_0);
-                        stream >> emb;
-                        
-                        res.score = weakThis->cosineSimilarity(queryVector, emb);
-                        results.append(res);
+                if (db.isOpen()) {
+                    QSqlQuery query(db);
+                    query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
+                    query.addBindValue(excludeFile);
+                    if (query.exec()) {
+                        while (query.next()) {
+                            SearchResult res;
+                            res.filePath = query.value(0).toString();
+                            res.heading = query.value(1).toString();
+                            res.content = query.value(2).toString();
+                            QByteArray blob = query.value(3).toByteArray();
+                            QVector<float> emb;
+                            QDataStream stream(&blob, QIODevice::ReadOnly);
+                            stream.setVersion(QDataStream::Qt_6_0);
+                            stream >> emb;
+                            res.score = weakThis->cosineSimilarity(queryVector, emb);
+                            results.append(res);
+                        }
                     }
                 }
             }
@@ -332,11 +297,12 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
                 return a.score > b.score;
             });
 
-            if (results.size() > topK) {
-                results = results.mid(0, topK);
-            }
+            if (results.size() > topK) results = results.mid(0, topK);
 
-            if (callback) callback(results);
+            // CRITICAL: Invoke callback on the main thread!
+            QMetaObject::invokeMethod(weakThis.data(), [callback, results]() {
+                callback(results);
+            }, Qt::QueuedConnection);
         });
     });
 }

@@ -23,6 +23,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QIcon>
+#include <QMutex>
 
 struct ProjectTreeItem {
     enum Type { Folder, File };
@@ -99,6 +100,7 @@ private:
 
     ProjectTreeItem *m_rootItem;
     bool m_bulkImporting = false;
+    mutable QMutex m_treeMutex;
 };
 
 #endif // PROJECTTREEMODEL_H
