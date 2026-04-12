@@ -24,6 +24,7 @@ CharacterDossierService::CharacterDossierService(QObject *parent)
 {
     m_scanTimer = new QTimer(this);
     m_scanTimer->setInterval(60000); // Scan every minute if not paused
+    m_scanTimer->setSingleShot(false);
     connect(m_scanTimer, &QTimer::timeout, this, &CharacterDossierService::scanManuscript);
 }
 
@@ -38,6 +39,8 @@ void CharacterDossierService::setProjectPath(const QString &path)
     QMutexLocker locker(&m_mutex);
     m_projectPath = path;
     if (!path.isEmpty()) {
+        // Initial delay to avoid scanning during project setup
+        QTimer::singleShot(10000, this, &CharacterDossierService::scanManuscript);
         m_scanTimer->start();
     } else {
         m_scanTimer->stop();
@@ -46,12 +49,14 @@ void CharacterDossierService::setProjectPath(const QString &path)
 
 void CharacterDossierService::pause()
 {
+    QMutexLocker locker(&m_mutex);
     m_paused = true;
     m_scanTimer->stop();
 }
 
 void CharacterDossierService::resume()
 {
+    QMutexLocker locker(&m_mutex);
     m_paused = false;
     if (!m_projectPath.isEmpty()) {
         m_scanTimer->start();
@@ -60,7 +65,10 @@ void CharacterDossierService::resume()
 
 void CharacterDossierService::scanManuscript()
 {
-    if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
+    }
 
     qDebug() << "CharacterDossierService: Scanning manuscript for characters...";
     
@@ -81,6 +89,11 @@ void CharacterDossierService::scanManuscript()
 
     if (combinedText.isEmpty()) return;
 
+    // List existing sketches to tell the AI what we already know
+    QDir sketchDir(QDir(m_projectPath).absoluteFilePath(QStringLiteral("library/Character Sketches")));
+    QStringList existingSketches = sketchDir.entryList({QStringLiteral("*.md")}, QDir::Files);
+    for (QString &s : existingSketches) s.chop(3); // Remove .md
+
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("dossier/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
     QString model = settings.value(QStringLiteral("dossier/model"), (provider == LLMProvider::Ollama ? QStringLiteral("llama3") : QString())).toString();
@@ -92,7 +105,7 @@ void CharacterDossierService::scanManuscript()
     req.model = model;
     req.settingsKey = QStringLiteral("dossier/model");
     req.messages << LLMMessage{QStringLiteral("system"), i18n("You are a literary analyst. Extract a list of character names mentioned in the following RPG manuscript.")};
-    req.messages << LLMMessage{QStringLiteral("user"), i18n("List ONLY the names of significant characters found in this text, as a JSON array of strings:\n\n%1", combinedText.left(5000))};
+    req.messages << LLMMessage{QStringLiteral("user"), i18n("List ONLY the names of significant characters found in this text, as a JSON array of strings. Existing sketches: %1\n\nMANUSCRIPT:\n%2", existingSketches.join(QLatin1String(", ")), combinedText.left(5000))};
     req.stream = false;
 
     QPointer<CharacterDossierService> weakThis(this);
@@ -120,9 +133,12 @@ void CharacterDossierService::scanManuscript()
 
 void CharacterDossierService::updateDossier(const QString &characterName, const QString &contextText)
 {
-    if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
+    }
 
-    QString dossierPath = QDir(m_projectPath).absoluteFilePath(QStringLiteral("library/Characters/") + characterName + QStringLiteral(".md"));
+    QString dossierPath = QDir(m_projectPath).absoluteFilePath(QStringLiteral("library/Character Sketches/") + characterName + QStringLiteral(".md"));
     QString existingContent;
     QFile file(dossierPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {

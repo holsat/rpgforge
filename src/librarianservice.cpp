@@ -228,6 +228,7 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
                             QString val = cells[k].trimmed();
                             m_db->setAttribute(entityId, key, val);
                         }
+                        qDebug() << "Librarian: Extracted table entity" << entityName << "type" << tableName << "from" << sourceFile;
                         Q_EMIT entityUpdated(entityId);
                     }
                 }
@@ -238,7 +239,8 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
 
 void LibrarianService::parseMarkdownLists(const QString &content, const QString &sourceFile)
 {
-    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
+    // Regex for "Key: Value" or "- Key: Value"
+    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s\\.]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
     QRegularExpressionMatchIterator it = kvRegex.globalMatch(content);
     
     while (it.hasNext()) {
@@ -246,9 +248,13 @@ void LibrarianService::parseMarkdownLists(const QString &content, const QString 
         QString key = match.captured(1).trimmed();
         QString value = match.captured(2).trimmed();
         
-        qint64 globalId = m_db->addEntity(QStringLiteral("Global"), QStringLiteral("property"), sourceFile);
-        m_db->setAttribute(globalId, key.toLower(), value);
-        Q_EMIT entityUpdated(globalId);
+        if (key.toLower() == QStringLiteral("title") || key.toLower() == QStringLiteral("status")) continue;
+
+        // Use key as entity name if no specific category found
+        qint64 entityId = m_db->addEntity(key, QStringLiteral("property"), sourceFile);
+        m_db->setAttribute(entityId, QStringLiteral("value"), value);
+        qDebug() << "Librarian: Extracted property" << key << "=" << value << "from" << sourceFile;
+        Q_EMIT entityUpdated(entityId);
     }
 }
 

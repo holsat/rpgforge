@@ -1098,7 +1098,7 @@ void MainWindow::updateErrorHighlighting()
 
     // 2. Update auxiliary views
     QString contentOnly = VariableManager::stripMetadata(text);
-    if (m_outlinePanel) m_outlinePanel->documentChanged(contentOnly);
+    if (m_outlinePanel) m_outlinePanel->documentChanged(text); // Use FULL text for outline/line numbers
     
     auto *projectPreviewAct = actionCollection()->action(QStringLiteral("project_preview_mode"));
     if (projectPreviewAct && projectPreviewAct->isChecked()) {

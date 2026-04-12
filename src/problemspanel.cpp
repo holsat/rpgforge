@@ -54,7 +54,7 @@ void ProblemsPanel::setupUi()
     toolbarLayout->addWidget(new QLabel(i18n("Filter:"), this));
     toolbarLayout->addWidget(m_filterCombo);
     
-    auto *titleLabel = new QLabel(i18n("<b>Game Analyzer Service</b>"), this);
+    auto *titleLabel = new QLabel(i18n("<b>Analyzer Service</b>"), this);
     titleLabel->setAlignment(Qt::AlignCenter);
     toolbarLayout->addStretch();
     toolbarLayout->addWidget(titleLabel);
