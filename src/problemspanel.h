@@ -42,6 +42,7 @@ Q_SIGNALS:
 
 private Q_SLOTS:
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
+    void onItemClicked(int row, int column);
     void onItemDoubleClicked(int row, int column);
     void onFilterChanged();
 
