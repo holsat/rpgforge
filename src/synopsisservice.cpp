@@ -94,23 +94,31 @@ void SynopsisService::scanProject()
         return;
     }
     
-    QList<ProjectTreeItem*> items;
-    ProjectTreeItem *root = nullptr;
+    struct ItemInfo {
+        QString path;
+        ProjectTreeItem::Type type;
+        bool isManuscript;
+        bool hasSynopsis;
+    };
+    QList<ItemInfo> items;
 
     m_model->executeUnderLock([&]() {
-        root = m_model->rootItem();
+        ProjectTreeItem *root = m_model->rootItem();
         if (!root || root->children.isEmpty()) return;
 
-        std::function<void(ProjectTreeItem*)> scan = [&](ProjectTreeItem *item) {
+        std::function<void(ProjectTreeItem*, bool)> scan = [&](ProjectTreeItem *item, bool inManuscript) {
             if (!item) return;
+            
+            bool manuscript = inManuscript || (item->category == ProjectTreeItem::Manuscript);
+            
             if (item != root) {
-                items.append(item);
+                items.append({item->path, item->type, manuscript, !item->synopsis.isEmpty()});
             }
             for (auto *child : item->children) {
-                scan(child);
+                scan(child, manuscript);
             }
         };
-        scan(root);
+        scan(root, false);
     });
 
     if (items.isEmpty()) return;
@@ -118,29 +126,20 @@ void SynopsisService::scanProject()
     qDebug() << "SynopsisService: Found" << items.count() << "items to check.";
 
     // Prioritize files to build leaf-level data first
-    for (auto *item : items) {
-        if (item->type == ProjectTreeItem::File) {
-            // ONLY index items under the Manuscript folder
-            bool isManuscript = false;
-            ProjectTreeItem *p = item;
-            while (p) {
-                if (p->category == ProjectTreeItem::Manuscript) {
-                    isManuscript = true;
-                    break;
-                }
-                p = p->parent;
-            }
-
-            if (isManuscript && item->synopsis.isEmpty() && !item->path.isEmpty()) {
-                requestUpdate(item->path);
+    for (const auto &info : items) {
+        if (info.type == ProjectTreeItem::File) {
+            if (info.isManuscript && !info.hasSynopsis && !info.path.isEmpty()) {
+                requestUpdate(info.path);
             }
         }
     }
     
     // Then request folders
-    for (auto *item : items) {
-        if (item->type == ProjectTreeItem::Folder) {
-            if (item->synopsis.isEmpty()) requestUpdate(item->path);
+    for (const auto &info : items) {
+        if (info.type == ProjectTreeItem::Folder) {
+            if (!info.hasSynopsis && !info.path.isEmpty()) {
+                requestUpdate(info.path);
+            }
         }
     }
 }
