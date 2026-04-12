@@ -53,24 +53,31 @@ void SynopsisService::requestUpdate(const QString &relativePath, bool force)
 {
     if (relativePath.isEmpty()) return;
     
-    if (!force) {
-        ProjectTreeItem *item = m_model ? m_model->findItem(relativePath) : nullptr;
-        if (item && !item->synopsis.isEmpty()) return;
-    }
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!force) {
+            ProjectTreeItem *item = nullptr;
+            if (m_model) {
+                item = m_model->findItem(relativePath);
+            }
+            if (item && !item->synopsis.isEmpty()) return;
+        }
 
-    if (!m_queue.contains(relativePath) && !m_activeRequests.contains(relativePath)) {
-        qDebug() << "SynopsisService: Queuing update for" << relativePath;
-        m_queue.enqueue(relativePath);
-    }
+        if (!m_queue.contains(relativePath) && !m_activeRequests.contains(relativePath)) {
+            qDebug() << "SynopsisService: Queuing update for" << relativePath;
+            m_queue.enqueue(relativePath);
+        }
 
-    if (!m_isProcessing) {
+        if (m_isProcessing) return;
         m_isProcessing = true;
-        QTimer::singleShot(0, this, &SynopsisService::processNext);
     }
+
+    QTimer::singleShot(0, this, &SynopsisService::processNext);
 }
 
 void SynopsisService::cancelRequest(const QString &relativePath)
 {
+    QMutexLocker locker(&m_mutex);
     m_queue.removeAll(relativePath);
     m_activeRequests.remove(relativePath);
 }
@@ -86,29 +93,27 @@ void SynopsisService::scanProject()
         qDebug() << "SynopsisService: Scan aborted - Project not open.";
         return;
     }
-    if (m_paused) {
-        qDebug() << "SynopsisService: Scan aborted - Service is paused.";
-        return;
-    }
-
-    ProjectTreeItem *root = m_model->rootItem();
-    if (!root || root->children.isEmpty()) {
-        qDebug() << "SynopsisService: Scan aborted - Tree is empty.";
-        return;
-    }
-
+    
     QList<ProjectTreeItem*> items;
-    std::function<void(ProjectTreeItem*)> scan = [&](ProjectTreeItem *item) {
-        if (!item) return;
-        if (item != root) {
-            items.append(item);
-        }
-        for (auto *child : item->children) {
-            scan(child);
-        }
-    };
+    ProjectTreeItem *root = nullptr;
 
-    scan(root);
+    m_model->executeUnderLock([&]() {
+        root = m_model->rootItem();
+        if (!root || root->children.isEmpty()) return;
+
+        std::function<void(ProjectTreeItem*)> scan = [&](ProjectTreeItem *item) {
+            if (!item) return;
+            if (item != root) {
+                items.append(item);
+            }
+            for (auto *child : item->children) {
+                scan(child);
+            }
+        };
+        scan(root);
+    });
+
+    if (items.isEmpty()) return;
 
     qDebug() << "SynopsisService: Found" << items.count() << "items to check.";
 
@@ -143,38 +148,57 @@ void SynopsisService::scanProject()
 void SynopsisService::pause()
 {
     qDebug() << "SynopsisService: Pausing...";
+    QMutexLocker locker(&m_mutex);
     m_paused = true;
 }
 
 void SynopsisService::resume()
 {
     qDebug() << "SynopsisService: Resuming...";
-    if (!m_paused) return;
-    m_paused = false;
+    bool startProcessing = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_paused) return;
+        m_paused = false;
+        
+        if (!m_queue.isEmpty() && !m_isProcessing) {
+            m_isProcessing = true;
+            startProcessing = true;
+        }
+    }
     
-    if (!m_queue.isEmpty() && !m_isProcessing) {
-        m_isProcessing = true;
+    if (startProcessing) {
         QTimer::singleShot(0, this, &SynopsisService::processNext);
     }
 }
 
 void SynopsisService::processNext()
 {
-    if (m_paused || m_queue.isEmpty()) {
-        m_isProcessing = false;
-        return;
+    QString relPath;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_paused || m_queue.isEmpty()) {
+            m_isProcessing = false;
+            return;
+        }
+        relPath = m_queue.dequeue();
+        m_activeRequests.insert(relPath);
     }
 
-    QString relPath = m_queue.dequeue();
-    ProjectTreeItem *item = m_model ? m_model->findItem(relPath) : nullptr;
+    ProjectTreeItem *item = nullptr;
+    if (m_model) {
+        item = m_model->findItem(relPath);
+    }
     
     if (!item) {
         qDebug() << "SynopsisService: Item no longer in tree, skipping:" << relPath;
+        {
+            QMutexLocker locker(&m_mutex);
+            m_activeRequests.remove(relPath);
+        }
         QTimer::singleShot(0, this, &SynopsisService::processNext);
         return;
     }
-
-    m_activeRequests.insert(relPath);
 
     if (item->type == ProjectTreeItem::File) {
         QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
@@ -227,14 +251,21 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
     LLMService::instance().sendNonStreamingRequest(req, [weakThis, relPath](const QString &response) {
         if (!weakThis) return;
         
-        ProjectTreeItem *resItem = weakThis->m_model ? weakThis->m_model->findItem(relPath) : nullptr;
+        ProjectTreeItem *resItem = nullptr;
+        if (weakThis->m_model) {
+            resItem = weakThis->m_model->findItem(relPath);
+        }
+
         if (resItem) {
             resItem->synopsis = response.trimmed();
             QModelIndex idx = weakThis->m_model->indexForItem(resItem);
             if (idx.isValid()) Q_EMIT weakThis->m_model->dataChanged(idx, idx, {ProjectTreeModel::SynopsisRole});
         }
         
-        weakThis->m_activeRequests.remove(relPath);
+        {
+            QMutexLocker locker(&weakThis->m_mutex);
+            weakThis->m_activeRequests.remove(relPath);
+        }
         QTimer::singleShot(0, weakThis.data(), &SynopsisService::processNext);
     });
 }
@@ -279,14 +310,21 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     LLMService::instance().sendNonStreamingRequest(req, [weakThis, relPath](const QString &response) {
         if (!weakThis) return;
         
-        ProjectTreeItem *resItem = weakThis->m_model ? weakThis->m_model->findItem(relPath) : nullptr;
+        ProjectTreeItem *resItem = nullptr;
+        if (weakThis->m_model) {
+            resItem = weakThis->m_model->findItem(relPath);
+        }
+
         if (resItem) {
             resItem->synopsis = response.trimmed();
             QModelIndex idx = weakThis->m_model->indexForItem(resItem);
             if (idx.isValid()) Q_EMIT weakThis->m_model->dataChanged(idx, idx, {ProjectTreeModel::SynopsisRole});
         }
         
-        weakThis->m_activeRequests.remove(relPath);
+        {
+            QMutexLocker locker(&weakThis->m_mutex);
+            weakThis->m_activeRequests.remove(relPath);
+        }
         QTimer::singleShot(0, weakThis.data(), &SynopsisService::processNext);
     });
 }

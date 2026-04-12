@@ -245,6 +245,7 @@ add_executable(test_projecttreemodel
     src/synopsisservice.cpp
     src/projectmanager.cpp
     src/variablemanager.cpp
+    src/llmservice.cpp
 )
 target_link_libraries(test_projecttreemodel
     Qt6::Test
@@ -253,6 +254,7 @@ target_link_libraries(test_projecttreemodel
     Qt6::Network
     Qt6::Concurrent
     KF6::I18n
+    KF6::Wallet
 )
 add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
 

@@ -99,6 +99,12 @@ public:
     void beginBulkImport();
     void endBulkImport();
 
+    /**
+     * @brief Executes a lambda while holding the tree's recursive mutex.
+     * Essential for safe background iteration of the tree.
+     */
+    void executeUnderLock(const std::function<void()> &func) const;
+
 private:
     ProjectTreeItem* loadItem(const QJsonObject &obj, ProjectTreeItem *parent);
     QJsonObject saveItem(ProjectTreeItem *item) const;

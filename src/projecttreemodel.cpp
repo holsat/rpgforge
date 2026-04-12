@@ -338,6 +338,12 @@ void ProjectTreeModel::endBulkImport()
     endResetModel();
 }
 
+void ProjectTreeModel::executeUnderLock(const std::function<void()> &func) const
+{
+    QMutexLocker locker(&m_treeMutex);
+    func();
+}
+
 QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path, const QModelIndex &parent)
 {
     ProjectTreeItem *parentItem = itemFromIndex(parent);
