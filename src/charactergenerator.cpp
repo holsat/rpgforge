@@ -1,3 +1,4 @@
+#include <QPointer>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -177,6 +178,8 @@ void CharacterGenerator::generateCharacter()
         req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("chargen/chargen_provider"), 
                                                                settings.value(QStringLiteral("llm/provider"), 0)).toInt());
         req.model = settings.value(QStringLiteral("chargen/chargen_model")).toString();
+        req.serviceName = i18n("Character Generator");
+        req.settingsKey = QStringLiteral("chargen/chargen_model");
         if (req.model.isEmpty()) {
             req.model = (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")).toString() : settings.value(QStringLiteral("llm/ollama/model")).toString();
         }
@@ -185,9 +188,11 @@ void CharacterGenerator::generateCharacter()
         req.messages.append({QStringLiteral("user"), userPrompt});
         req.stream = false;
 
-        LLMService::instance().sendNonStreamingRequest(req, [this](const QString &response) {
-            m_progressBar->hide();
-            m_nextBtn->setEnabled(true);
+        QPointer<CharacterGenerator> weakThis(this);
+        LLMService::instance().sendNonStreamingRequest(req, [weakThis](const QString &response) {
+            if (!weakThis) return;
+            weakThis->m_progressBar->hide();
+            weakThis->m_nextBtn->setEnabled(true);
             
             if (response.isEmpty()) return;
 
@@ -198,11 +203,11 @@ void CharacterGenerator::generateCharacter()
                 if (cleanJson.endsWith(QLatin1String("```"))) cleanJson.chop(3);
             }
 
-            m_resultEdit->setPlainText(cleanJson.trimmed());
-            m_stack->setCurrentIndex(1);
-            m_prevBtn->setEnabled(true);
-            m_nextBtn->setText(i18n("Regenerate"));
-            m_saveBtn->setVisible(true);
+            weakThis->m_resultEdit->setPlainText(cleanJson.trimmed());
+            weakThis->m_stack->setCurrentIndex(1);
+            weakThis->m_prevBtn->setEnabled(true);
+            weakThis->m_nextBtn->setText(i18n("Regenerate"));
+            weakThis->m_saveBtn->setVisible(true);
         });
     });
 }

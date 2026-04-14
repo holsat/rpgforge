@@ -17,6 +17,8 @@
 */
 
 #include "problemspanel.h"
+#include "diagnosticdetaildialog.h"
+#include "projectmanager.h"
 #include <KLocalizedString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -25,7 +27,7 @@
 #include <QComboBox>
 #include <QIcon>
 #include <QDir>
-#include "projectmanager.h"
+#include <QLabel>
 
 ProblemsPanel::ProblemsPanel(QWidget *parent)
     : QWidget(parent)
@@ -48,7 +50,14 @@ void ProblemsPanel::setupUi()
     m_filterCombo = new QComboBox(this);
     m_filterCombo->addItems({i18n("All Issues"), i18n("Errors Only"), i18n("Warnings Only"), i18n("Info Only")});
     connect(m_filterCombo, &QComboBox::currentIndexChanged, this, &ProblemsPanel::onFilterChanged);
+    
+    toolbarLayout->addWidget(new QLabel(i18n("Filter:"), this));
     toolbarLayout->addWidget(m_filterCombo);
+    
+    auto *titleLabel = new QLabel(i18n("<b>Analyzer Service</b>"), this);
+    titleLabel->setAlignment(Qt::AlignCenter);
+    toolbarLayout->addStretch();
+    toolbarLayout->addWidget(titleLabel);
     toolbarLayout->addStretch();
 
     layout->addLayout(toolbarLayout);
@@ -60,6 +69,12 @@ void ProblemsPanel::setupUi()
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->verticalHeader()->hide();
     
+    // Enable word wrap and dynamic row height to prevent cutoff
+    m_table->setWordWrap(true);
+    m_table->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    
+    connect(m_table, &QTableWidget::cellClicked, this, &ProblemsPanel::onItemClicked);
+    connect(m_table, &QTableWidget::cellActivated, this, &ProblemsPanel::onItemClicked);
     connect(m_table, &QTableWidget::cellDoubleClicked, this, &ProblemsPanel::onItemDoubleClicked);
 
     layout->addWidget(m_table);
@@ -90,6 +105,9 @@ void ProblemsPanel::refreshTable()
         QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath);
 
         for (const Diagnostic &d : it.value()) {
+            // Check if suppressed globally
+            if (AnalyzerService::instance().isSuppressed(d.message)) continue;
+
             if (d.severity == DiagnosticSeverity::Error) totalErrors++;
             else if (d.severity == DiagnosticSeverity::Warning) totalWarnings++;
             else totalInfos++;
@@ -115,6 +133,9 @@ void ProblemsPanel::refreshTable()
             }
 
             auto *sevItem = new QTableWidgetItem(icon, sevLabel);
+            // Store diagnostic in UserRole for the double-click dialog
+            sevItem->setData(Qt::UserRole, QVariant::fromValue(row)); // Dummy, we use map lookups later
+
             auto *msgItem = new QTableWidgetItem(d.message);
             auto *fileItem = new QTableWidgetItem(relPath);
             fileItem->setData(Qt::UserRole, filePath); // Store absolute path
@@ -135,10 +156,52 @@ void ProblemsPanel::onItemDoubleClicked(int row, int /*column*/)
 {
     auto *fileItem = m_table->item(row, 2);
     auto *lineItem = m_table->item(row, 3);
+    auto *msgItem = m_table->item(row, 1);
+    auto *sevItem = m_table->item(row, 0);
     
+    if (!fileItem || !lineItem || !msgItem) return;
+
+    QString path = fileItem->data(Qt::UserRole).toString();
+    int line = lineItem->data(Qt::UserRole).toInt();
+    QString message = msgItem->text();
+
+    // Reconstruct diagnostic for dialog
+    Diagnostic d;
+    d.filePath = path;
+    d.line = line;
+    d.message = message;
+    QString sevText = sevItem->text();
+    if (sevText == i18n("Error")) d.severity = DiagnosticSeverity::Error;
+    else if (sevText == i18n("Warning")) d.severity = DiagnosticSeverity::Warning;
+    else d.severity = DiagnosticSeverity::Info;
+
+    DiagnosticDetailDialog dialog(d, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        if (dialog.selectedAction() == DiagnosticDetailDialog::Ignore || dialog.selectedAction() == DiagnosticDetailDialog::Fixed) {
+            // Suppress the message globally
+            AnalyzerService::instance().suppressDiagnostic(d.message);
+            
+            // Remove from local cache and refresh
+            QList<Diagnostic> &list = m_diagnosticsMap[path];
+            list.removeIf([&](const Diagnostic &ld) { return ld.message == message; });
+            refreshTable();
+            return;
+        }
+    }
+
+    // Default action: jump to line
+    Q_EMIT issueActivated(path, line);
+}
+
+void ProblemsPanel::onItemClicked(int row, int column)
+{
+    Q_UNUSED(column);
+    auto *fileItem = m_table->item(row, 2);
+    auto *lineItem = m_table->item(row, 3);
     if (fileItem && lineItem) {
         QString path = fileItem->data(Qt::UserRole).toString();
         int line = lineItem->data(Qt::UserRole).toInt();
-        Q_EMIT issueActivated(path, line);
+        // Convert from 1-based AI line to 0-based Editor line
+        Q_EMIT issueActivated(path, qMax(0, line - 1));
     }
 }

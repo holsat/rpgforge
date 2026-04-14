@@ -134,6 +134,8 @@ void PreviewPanel::updatePreview()
         return;
     }
 
+    if (!m_webView->page()) return;
+
     QString contentOnly = VariableManager::stripMetadata(m_pendingMarkdown);
 
     // Replace variables before rendering markdown to HTML
@@ -165,11 +167,14 @@ void PreviewPanel::updatePreview()
 
 void PreviewPanel::scrollBy(int x, int y)
 {
-    m_webView->page()->runJavaScript(QStringLiteral("window.scrollBy(%1, %2)").arg(x).arg(y));
+    if (m_webView->page()) {
+        m_webView->page()->runJavaScript(QStringLiteral("window.scrollBy(%1, %2)").arg(x).arg(y));
+    }
 }
 
 void PreviewPanel::scrollToPercentage(double percentage)
 {
+    if (!m_webView->page()) return;
     // Scroll to a percentage of the document height
     QString js = QStringLiteral(
         "(function() {"
@@ -186,6 +191,7 @@ void PreviewPanel::scrollToPercentage(double percentage)
 
 void PreviewPanel::scrollToLine(int line, bool smooth)
 {
+    if (!m_webView->page()) return;
     // Find the element with data-sourcepos that corresponds to this line
     // cmark uses 1-based line numbers.
     QString js = QStringLiteral(

@@ -26,6 +26,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <QPointer>
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
@@ -157,7 +158,7 @@ static QUrl normalizeOllamaUrl(const QString &rawEndpoint, const QString &target
 // ---------------------------------------------------------------------------
 // Helper: map provider → settings key prefix
 // ---------------------------------------------------------------------------
-static QString providerSettingsKey(LLMProvider p)
+QString LLMService::providerSettingsKey(LLMProvider p)
 {
     switch (p) {
         case LLMProvider::OpenAI:    return QStringLiteral("llm/openai");
@@ -176,7 +177,7 @@ QString LLMService::resolvedModel(const LLMRequest &request) const
 {
     if (!request.model.isEmpty()) return request.model;
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    return settings.value(providerSettingsKey(request.provider) + QStringLiteral("/model")).toString();
+    return settings.value(LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model")).toString();
 }
 
 // ---------------------------------------------------------------------------
@@ -214,24 +215,28 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
         if (cached.isEmpty() || cached.contains(model)) {
             // Empty cache = fetch failed previously; give the request a chance.
             dispatchRequest(request, model, nonStreamCallback);
-        } else {
+        } else if (!m_isShowingModelDialog) {
             m_hasPendingRequest = true;
             m_pendingRequest = {request, nonStreamCallback};
-            Q_EMIT modelNotFound(provider, model, cached);
+            m_isShowingModelDialog = true;
+            Q_EMIT modelNotFound(provider, model, cached, request.serviceName);
         }
         return;
     }
 
     // First use for this provider this session — fetch the model list.
-    fetchModels(provider, [this, request, model, nonStreamCallback](const QStringList &available) {
-        m_modelCache[request.provider] = available; // cache even if empty
+    QPointer<LLMService> weakThis(this);
+    fetchModels(provider, [weakThis, request, model, nonStreamCallback](const QStringList &available) {
+        if (!weakThis) return;
+        weakThis->m_modelCache[request.provider] = available; // cache even if empty
 
         if (available.isEmpty() || available.contains(model)) {
-            dispatchRequest(request, model, nonStreamCallback);
-        } else {
-            m_hasPendingRequest = true;
-            m_pendingRequest = {request, nonStreamCallback};
-            Q_EMIT modelNotFound(request.provider, model, available);
+            weakThis->dispatchRequest(request, model, nonStreamCallback);
+        } else if (!weakThis->m_isShowingModelDialog) {
+            weakThis->m_hasPendingRequest = true;
+            weakThis->m_pendingRequest = {request, nonStreamCallback};
+            weakThis->m_isShowingModelDialog = true;
+            Q_EMIT weakThis->modelNotFound(request.provider, model, available, request.serviceName);
         }
     });
 }
@@ -250,9 +255,14 @@ void LLMService::retryWithModel(const QString &newModel)
     if (!m_modelCache[pending.request.provider].contains(newModel))
         m_modelCache[pending.request.provider].append(newModel);
 
-    // Persist to settings — this becomes the new source of truth.
+    // Persist to settings. Prefer specific settingsKey if provided, otherwise update global provider default.
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    settings.setValue(providerSettingsKey(pending.request.provider) + QStringLiteral("/model"), newModel);
+    QString key = pending.request.settingsKey;
+    if (key.isEmpty()) {
+        key = LLMService::providerSettingsKey(pending.request.provider) + QStringLiteral("/model");
+    }
+    settings.setValue(key, newModel);
+    settings.sync();
 
     LLMRequest updated = pending.request;
     updated.model = newModel;
@@ -294,7 +304,7 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
     if (request.provider == LLMProvider::OpenAI
         || request.provider == LLMProvider::Grok
         || request.provider == LLMProvider::Gemini) {
-        const QString sk = providerSettingsKey(request.provider);
+        const QString sk = LLMService::providerSettingsKey(request.provider);
         const QString defaultEndpoint =
             (request.provider == LLMProvider::Grok)
                 ? QStringLiteral("https://api.x.ai/v1/chat/completions")
@@ -373,7 +383,8 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         connect(reply, &QNetworkReply::readyRead, this, &LLMService::handleReadyRead);
         connect(reply, &QNetworkReply::finished, this, &LLMService::handleFinished);
     } else {
-        connect(reply, &QNetworkReply::finished, this, [reply, nonStreamCallback, provider = request.provider]() {
+        QPointer<LLMService> weakThis(this);
+        connect(reply, &QNetworkReply::finished, this, [weakThis, reply, nonStreamCallback, provider = request.provider]() {
             QString result;
             if (reply->error() == QNetworkReply::NoError) {
                 QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
@@ -395,7 +406,17 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
             } else {
                 qWarning() << "LLM Non-Streaming Error:" << reply->errorString() << reply->readAll();
             }
-            if (nonStreamCallback) nonStreamCallback(result);
+            
+            if (nonStreamCallback) {
+                if (weakThis) {
+                    QMetaObject::invokeMethod(weakThis.data(), [nonStreamCallback, result]() {
+                        nonStreamCallback(result);
+                    }, Qt::QueuedConnection);
+                } else {
+                    // LLMService was destroyed, but we can still run the callback if it doesn't depend on LLMService state.
+                    // However, most callbacks expect to update UI/state, so we skip if service is gone.
+                }
+            }
             reply->deleteLater();
         });
     }
@@ -772,3 +793,15 @@ void LLMService::pullModel(const QString &modelName,
 
 
 
+
+QString LLMService::providerName(LLMProvider provider)
+{
+    switch (provider) {
+        case LLMProvider::OpenAI:    return QStringLiteral("OpenAI");
+        case LLMProvider::Anthropic: return QStringLiteral("Anthropic");
+        case LLMProvider::Ollama:    return QStringLiteral("Ollama");
+        case LLMProvider::Grok:      return QStringLiteral("Grok (xAI)");
+        case LLMProvider::Gemini:    return QStringLiteral("Gemini (Google)");
+    }
+    return QStringLiteral("Unknown");
+}

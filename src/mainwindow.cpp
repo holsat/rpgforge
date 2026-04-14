@@ -1,3 +1,4 @@
+#include <QtConcurrent/QtConcurrent>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -44,6 +45,9 @@
 #include "problemspanel.h"
 #include "analyzerservice.h"
 #include "llmservice.h"
+#include "librarianservice.h"
+#include "characterdossierservice.h"
+#include "agentgatekeeper.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -68,6 +72,8 @@
 #include <KTextEditor/Editor>
 #include <KTextEditor/View>
 #include <QApplication>
+#include <QToolTip>
+#include <QHelpEvent>
 #include <QDropEvent>
 #include <QEvent>
 #include <QDir>
@@ -98,7 +104,20 @@ MainWindow::MainWindow(QWidget *parent)
     : KXmlGuiWindow(parent)
 {
     setupEditor();
+
+    m_librarianService = new LibrarianService(&LLMService::instance(), this);
+    AgentGatekeeper::instance().setLibrarianService(m_librarianService);
+    CharacterDossierService::instance().init(&LLMService::instance(), m_librarianService);
+
+    connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
+    connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
+        VariableManager::instance().setLibraryVariables(vars);
+    });
+
     setupSidebar();
+    if (m_variablesPanel) {
+        m_variablesPanel->setLibrarianService(m_librarianService);
+    }
     setupActions();
 
     setupGUI(Default, QStringLiteral(":/rpgforgeui.rc"));
@@ -129,12 +148,14 @@ MainWindow::MainWindow(QWidget *parent)
         if (wizard.exec() == QDialog::Accepted) {
             // After successful onboarding, if a project was created, open the README
             if (ProjectManager::instance().isProjectOpen()) {
+                AgentGatekeeper::instance().resumeAll();
                 QString readmePath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(QStringLiteral("research/README.md"));
                 if (QFile::exists(readmePath)) {
                     openFileFromUrl(QUrl::fromLocalFile(readmePath));
                 }
             }
         }
+        settings.setValue(QStringLiteral("firstRunComplete"), true);
     }
 
     // Restore previous session after everything is set up
@@ -180,11 +201,13 @@ void MainWindow::setupEditor()
     // Main Manuscript Document
     m_document = m_editor->createDocument(this);
     m_editorView = m_document->createView(this);
+    m_editorView->focusProxy()->installEventFilter(this);
     m_document->setHighlightingMode(QStringLiteral("Markdown"));
 
     // Research Document (for split view)
     m_researchDocument = m_editor->createDocument(this);
     m_researchView = m_researchDocument->createView(this);
+    m_researchView->focusProxy()->installEventFilter(this);
     m_researchDocument->setHighlightingMode(QStringLiteral("Markdown"));
 
     m_editorSplitter = new QSplitter(Qt::Horizontal, this);
@@ -412,7 +435,7 @@ void MainWindow::setupSidebar()
             // If the corkboard is showing a folder that contains one of these items, refresh it
             // Simple approach: if corkboard is visible, just refresh it.
             if (m_corkboardView->isVisible()) {
-                m_corkboardView->setFolder(m_corkboardView->currentFolder());
+                m_corkboardView->setFolder(m_corkboardView->currentFolderPath());
             }
         }
     });
@@ -503,13 +526,14 @@ void MainWindow::setupSidebar()
             // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
-    connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](ProjectTreeItem *folder) {
-        if (!folder) return;
-        const QString nameLower = folder->name.toLower();
+    m_corkboardView->setModel(m_projectTree->model());
+    connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](const QString &folderPath) {
+        if (folderPath.isEmpty()) return;
+        const QString nameLower = folderPath.section(QDir::separator(), -1).toLower();
         if (nameLower == QStringLiteral("media") || nameLower == QStringLiteral("stylesheets")) {
             return;
         }
-        m_corkboardView->setFolder(folder);
+        m_corkboardView->setFolder(folderPath);
         showCentralView(m_corkboardView);
     });
     connect(m_projectTree, &ProjectTreePanel::diffRequested, this, &MainWindow::showDiff);
@@ -517,21 +541,19 @@ void MainWindow::setupSidebar()
         if (ProjectManager::instance().isProjectOpen()) {
             QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relativePath);
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
-            showCentralView(m_editorView);
         }
     });
-    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](ProjectTreeItem *folder, ProjectTreeItem *draggedItem, ProjectTreeItem *targetItem) {
-        int toIdx = -1;
-        if (targetItem) {
-            toIdx = folder->children.indexOf(targetItem);
-        } else {
-            toIdx = folder->children.size();
-        }
-
-        if (m_projectTree->model()->moveItem(draggedItem, folder, toIdx)) {
-            ProjectManager::instance().setTree(m_projectTree->model()->projectData());
-            ProjectManager::instance().saveProject();
-            // Debounced refresh will be triggered by model signals via ProjectTreePanel
+    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
+        ProjectTreeItem *folder = m_projectTree->model()->findItem(folderPath);
+        ProjectTreeItem *dragged = m_projectTree->model()->findItem(draggedPath);
+        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : m_projectTree->model()->findItem(targetPath);
+        
+        if (folder && dragged) {
+            int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
+            if (m_projectTree->model()->moveItem(dragged, folder, toIdx)) {
+                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
+                ProjectManager::instance().saveProject();
+            }
         }
     });
     connect(m_outlinePanel, &OutlinePanel::headingsUpdated,
@@ -551,7 +573,7 @@ void MainWindow::setupSidebar()
     });
 
     connect(&VariableManager::instance(), &VariableManager::variablesChanged, this, [this]() {
-        if (m_previewPanel) {
+        if (m_previewPanel && m_document) {
             m_previewPanel->setMarkdown(m_document->text());
         }
     });
@@ -562,15 +584,24 @@ void MainWindow::setupSidebar()
     });
 
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
-        if (m_corkboardView) m_corkboardView->setFolder(nullptr);
-        KnowledgeBase::instance().initForProject(ProjectManager::instance().projectPath());
+        if (m_corkboardView) m_corkboardView->setFolder(QString());
+        QString projectDir = ProjectManager::instance().projectPath();
+        KnowledgeBase::instance().initForProject(projectDir);
+        CharacterDossierService::instance().setProjectPath(projectDir);
+        
+        // RESUME ALL AGENTS
+        AgentGatekeeper::instance().resumeAll();
+
         m_projectStatsStatus->show();
         updateProjectStats();
         SynopsisService::instance().scanProject();
     });
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
+        // PAUSE ALL AGENTS
+        AgentGatekeeper::instance().pauseAll();
+
         if (m_corkboardView) {
-            m_corkboardView->setFolder(nullptr);
+            m_corkboardView->setFolder(QString());
             showCentralView(m_editorView);
         }
         m_projectStatsStatus->hide();
@@ -865,6 +896,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             else m_document->setHighlightingMode(QStringLiteral("Markdown"));
         }
         updateTitle();
+        if (m_librarianService) m_librarianService->scanFile(path);
         onTextChanged();
         saveSession();
     }
@@ -905,7 +937,10 @@ void MainWindow::newProject()
         QString name = dialog.projectName();
         
         if (!dir.isEmpty() && !name.isEmpty()) {
+            AgentGatekeeper::instance().pauseAll();
             if (ProjectManager::instance().createProject(dir, name)) {
+                if (m_librarianService) m_librarianService->setProjectPath(dir);
+                CharacterDossierService::instance().setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
@@ -916,6 +951,7 @@ void MainWindow::newProject()
                     openFileFromUrl(QUrl::fromLocalFile(readmePath));
                 }
             }
+            AgentGatekeeper::instance().resumeAll();
         }
     }
 }
@@ -927,7 +963,10 @@ void MainWindow::openProject()
     
     if (!filePath.isEmpty()) {
         if (ProjectManager::instance().openProject(filePath)) {
-            m_fileExplorer->setRootPath(ProjectManager::instance().projectPath());
+            QString projectDir = ProjectManager::instance().projectPath();
+            if (m_librarianService) m_librarianService->setProjectPath(projectDir);
+            CharacterDossierService::instance().setProjectPath(projectDir);
+            m_fileExplorer->setRootPath(projectDir);
             updateTitle();
         }
     }
@@ -1059,7 +1098,7 @@ void MainWindow::updateErrorHighlighting()
 
     // 2. Update auxiliary views
     QString contentOnly = VariableManager::stripMetadata(text);
-    if (m_outlinePanel) m_outlinePanel->documentChanged(contentOnly);
+    if (m_outlinePanel) m_outlinePanel->documentChanged(text); // Use FULL text for outline/line numbers
     
     auto *projectPreviewAct = actionCollection()->action(QStringLiteral("project_preview_mode"));
     if (projectPreviewAct && projectPreviewAct->isChecked()) {
@@ -1113,6 +1152,11 @@ void MainWindow::updateErrorHighlighting()
                 m_errorRanges.append(mr);
             }
         }
+    }
+
+    if (m_librarianService) {
+        m_librarianService->scanFile(doc->url().toLocalFile());
+        updateLibrarianHighlights();
     }
 }
 
@@ -1170,9 +1214,10 @@ void MainWindow::togglePreview()
 void MainWindow::syncScroll()
 {
     auto *view = activeView();
-    if (!view || !m_previewPanel || !m_previewPanel->isVisible()) return;
+    if (!view || !m_previewPanel || !m_previewPanel->isVisible() || !m_previewPanel->window()) return;
 
     // Use scrollToLine with smooth=false for real-time synchronization
+    // Ensure the view is valid and has a Kate view interface
     int currentLine = view->firstDisplayedLine();
     m_previewPanel->scrollToLine(currentLine, false);
 }
@@ -1238,11 +1283,15 @@ void MainWindow::performSearch(const QString &text)
     auto *doc = activeDocument();
 
     if (view && doc && !doc->url().isEmpty()) {
-        // Document Search: Use KTextEditor's search functionality
         KTextEditor::SearchOptions options = KTextEditor::Default;
         KTextEditor::Cursor start = view->cursorPosition();
-        
-        // Find next occurrence
+
+        // Find NEXT if text is same
+        if (text == m_lastSearchText && view->selection()) {
+            start = view->selectionRange().end();
+        }
+        m_lastSearchText = text;
+
         QList<KTextEditor::Range> results = doc->searchText(KTextEditor::Range(start, doc->documentEnd()), text, options);
         KTextEditor::Range range = results.isEmpty() ? KTextEditor::Range::invalid() : results.first();
         
@@ -1256,21 +1305,50 @@ void MainWindow::performSearch(const QString &text)
             view->setSelection(range);
             view->setCursorPosition(range.start());
         } else {
-            // Not found in current document, fall back to global search if project is open
+            // Not found in current document, ask if user wants global AI search
             if (ProjectManager::instance().isProjectOpen()) {
-                m_sidebar->showPanel(m_chatId);
-                m_chatPanel->askAI(i18n("Search project for: %1", text));
+                auto res = QMessageBox::question(this, i18n("Not Found"), 
+                    i18n("'%1' was not found in this document. Search entire project using AI?", text),
+                    QMessageBox::Yes | QMessageBox::No);
+                
+                if (res == QMessageBox::Yes) {
+                    m_sidebar->showPanel(m_chatId);
+                    m_chatPanel->askAI(i18n("Search project for: %1", text), i18n("AI Project Search"));
+                }
+            } else {
+                QMessageBox::information(this, i18n("Not Found"), i18n("'%1' was not found in this document.", text));
             }
         }
     } else if (ProjectManager::instance().isProjectOpen()) {
         // Global Search: Ask AI / KnowledgeBase via Chat Panel
         m_sidebar->showPanel(m_chatId);
-        m_chatPanel->askAI(i18n("Search project for: %1", text));
+        m_chatPanel->askAI(i18n("Search project for: %1", text), i18n("AI Project Search"));
     }
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_editorView->focusProxy() && event->type() == QEvent::ToolTip) {
+        auto *helpEvent = static_cast<QHelpEvent*>(event);
+        KTextEditor::Cursor cursor = m_editorView->coordinatesToCursor(helpEvent->pos());
+        
+        // 1. Check Librarian Ranges
+        for (auto *range : m_librarianRanges) {
+            if (range->contains(cursor)) {
+                QToolTip::showText(helpEvent->globalPos(), range->attribute()->toolTip());
+                return true;
+            }
+        }
+        
+        // 2. Check Diagnostic Ranges
+        for (auto *range : m_diagnosticRanges) {
+            if (range->contains(cursor)) {
+                QToolTip::showText(helpEvent->globalPos(), range->attribute()->toolTip());
+                return true;
+            }
+        }
+    }
+
     // Fix KateCompletionWidget positioning.
     // Kate's updatePosition() uses parentWidget()->geometry() for bounds checking,
     // but on Wayland the geometry position includes window decoration offsets (e.g. y=25
@@ -1595,7 +1673,7 @@ void MainWindow::aiExpand()
     }
 
     m_sidebar->showPanel(m_chatId);
-    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Expand"));
 }
 
 void MainWindow::aiRewrite()
@@ -1614,7 +1692,7 @@ void MainWindow::aiRewrite()
     }
 
     m_sidebar->showPanel(m_chatId);
-    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Rewrite"));
 }
 
 void MainWindow::aiSummarize()
@@ -1633,7 +1711,7 @@ void MainWindow::aiSummarize()
     }
 
     m_sidebar->showPanel(m_chatId);
-    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection);
+    m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Summarize"));
 }
 
 void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
@@ -1652,13 +1730,15 @@ void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagn
     m_diagnosticRanges.clear();
 
     for (const Diagnostic &d : diagnostics) {
-        if (d.line < 0 || d.line >= doc->lines()) continue;
+        // AI returns 1-based indexing, convert to 0-based
+        int line = qMax(0, d.line - 1);
+        if (line >= doc->lines()) continue;
 
-        QString lineText = doc->line(d.line);
+        QString lineText = doc->line(line);
         int startCol = lineText.length() - lineText.trimmed().length(); // Skip leading whitespace
         int endCol = lineText.length();
 
-        KTextEditor::Range range(d.line, startCol, d.line, endCol);
+        KTextEditor::Range range(line, startCol, line, endCol);
         auto *mr = doc->newMovingRange(range);
         
         KTextEditor::Attribute::Ptr attr(new KTextEditor::Attribute());
@@ -1673,6 +1753,7 @@ void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagn
             attr->setUnderlineColor(Qt::blue);
         }
         
+        attr->setToolTip(d.message);
         mr->setAttribute(attr);
         mr->setAttributeOnlyForViews(true);
         
@@ -1694,9 +1775,50 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
 
     menu->addSeparator();
     auto *aiMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("chat-conversation")), i18n("AI Assistant"));
-    
-    auto *expand = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Expand Selection"));
-    connect(expand, &QAction::triggered, this, &MainWindow::aiExpand);
+
+    // Check for Librarian inconsistencies at cursor
+    KTextEditor::Cursor cursor = view->cursorPosition();
+    KTextEditor::MovingRange *librarianRange = nullptr;
+    for (auto *range : m_librarianRanges) {
+        if (range && range->contains(cursor) && range->attribute() && range->attribute()->underlineColor() == Qt::red) {
+            librarianRange = range;
+            break;
+        }
+    }
+
+    if (librarianRange) {
+        auto *guardMenu = menu->addMenu(QIcon::fromTheme(QStringLiteral("security-high")), i18n("Consistency Guardian"));
+
+        QString key;
+        // Basic heuristic to get key from text (e.g. "Strength: 15")
+        QString lineText = view->document()->line(librarianRange->start().line());
+        QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):"));
+        auto match = kvRegex.match(lineText);
+        if (match.hasMatch()) key = match.captured(1).trimmed().toLower();
+
+        if (!key.isEmpty()) {
+            QString rangeText = view->document()->text(librarianRange->toRange());
+            auto *updateLib = guardMenu->addAction(i18n("Update Library to match '%1'", rangeText));
+            connect(updateLib, &QAction::triggered, this, [this, key, rangeText]() {
+                QList<qint64> entities = m_librarianService->database()->findEntitiesByAttribute(key, QVariant());
+                for (qint64 id : entities) {
+                    m_librarianService->database()->setAttribute(id, key, rangeText);
+                }
+                m_librarianService->scanAll(); // Refresh
+            });
+
+            auto *updateText = guardMenu->addAction(i18n("Revert text to Library value"));
+            connect(updateText, &QAction::triggered, this, [this, key, librarianRange]() {
+                QList<qint64> entities = m_librarianService->database()->findEntitiesByAttribute(key, QVariant());
+                if (!entities.isEmpty()) {
+                    QString masterVal = m_librarianService->database()->getAttribute(entities.first(), key).toString();
+                    librarianRange->document()->replaceText(librarianRange->toRange(), masterVal);
+                }
+            });
+        }
+    }
+
+    auto *expand = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Expand Selection"));    connect(expand, &QAction::triggered, this, &MainWindow::aiExpand);
     
     auto *rewrite = aiMenu->addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Rewrite Selection"));
     connect(rewrite, &QAction::triggered, this, &MainWindow::aiRewrite);
@@ -1715,32 +1837,71 @@ void MainWindow::importScrivener()
     QString scrivPath = QFileDialog::getExistingDirectory(this, i18n("Select Scrivener Project (.scriv)"), QDir::homePath());
     if (scrivPath.isEmpty()) return;
 
+    // Ensure everything is paused before we even touch the project manager
+    AgentGatekeeper::instance().pauseAll();
+
+    // 1. Auto-create project if none open
     if (!ProjectManager::instance().isProjectOpen()) {
-        QMessageBox::warning(this, i18n("No Project Open"), i18n("Please open or create an RPG Forge project before importing."));
-        return;
+        QFileInfo fi(scrivPath);
+        QString projectName = fi.baseName();
+        QString targetDir = fi.absolutePath() + QDir::separator() + projectName + QStringLiteral("_forge");
+        
+        if (QDir(targetDir).exists()) {
+            auto result = QMessageBox::question(this, i18n("Project Directory Exists"),
+                i18n("The directory '%1' already exists. Use it for the new project?", targetDir));
+            if (result != QMessageBox::Yes) {
+                AgentGatekeeper::instance().resumeAll();
+                return;
+            }
+        }
+
+        // We temporarily block the resumeAll() that is normally triggered by projectOpened
+        if (!ProjectManager::instance().createProject(targetDir, projectName)) {
+            QMessageBox::critical(this, i18n("Error"), i18n("Failed to create project at %1", targetDir));
+            AgentGatekeeper::instance().resumeAll();
+            return;
+        }
+        
+        if (m_librarianService) m_librarianService->setProjectPath(targetDir);
+        m_fileExplorer->setRootPath(targetDir);
+        ProjectManager::instance().setupDefaultProject(targetDir, projectName);
+        updateTitle();
     }
 
-    ScrivenerImporter importer;
+    QString projectPath = ProjectManager::instance().projectPath();
+    auto importer = std::make_shared<ScrivenerImporter>();
+    
     auto *progressDialog = new QProgressDialog(i18n("Importing Scrivener Project..."), i18n("Cancel"), 0, 100, this);
     progressDialog->setWindowModality(Qt::WindowModal);
+    progressDialog->show();
     
-    connect(&importer, &ScrivenerImporter::progress, progressDialog, &QProgressDialog::setValue);
-    connect(&importer, &ScrivenerImporter::progress, progressDialog, [progressDialog](int, const QString &message) {
-        progressDialog->setLabelText(message);
+    connect(importer.get(), &ScrivenerImporter::progress, this, [progressDialog](int val, const QString &msg) {
+        progressDialog->setValue(val);
+        progressDialog->setLabelText(msg);
+    }, Qt::QueuedConnection);
+
+    // Explicitly keep them paused
+    AgentGatekeeper::instance().pauseAll();
+
+    QtConcurrent::run([importer, scrivPath, projectPath, this]() {
+        ProjectTreeModel backgroundModel;
+        bool success = importer->import(scrivPath, projectPath, &backgroundModel);
+        auto resultData = backgroundModel.projectData();
+        
+        QMetaObject::invokeMethod(this, [this, success, resultData]() {
+            if (success) {
+                m_projectTree->model()->setProjectData(resultData);
+                ProjectManager::instance().setTree(resultData);
+                ProjectManager::instance().saveProject();
+                QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
+            } else {
+                QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
+            }
+
+            // ONLY resume agents now that EVERYTHING is finished
+            AgentGatekeeper::instance().resumeAll();
+        }, Qt::QueuedConnection);
     });
-
-    SynopsisService::instance().pause();
-    importer.import(scrivPath, ProjectManager::instance().projectPath(), m_projectTree->model());
-    SynopsisService::instance().resume();
-
-    ProjectManager::instance().setTree(m_projectTree->model()->projectData());
-
-    ProjectManager::instance().saveProject();
-    
-    progressDialog->close();
-    delete progressDialog;
-    
-    QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
 }
 
 void MainWindow::importWord()
@@ -1944,16 +2105,24 @@ void MainWindow::compareSimulations()
     }
 }
 
-void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available)
+void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName)
 {
     auto *dlg = new QDialog(this);
     dlg->setWindowTitle(i18n("Model Unavailable"));
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     auto *layout = new QVBoxLayout(dlg);
-    auto *label = new QLabel(i18n(
-        "The model <b>%1</b> is no longer available from this provider.<br/>"
-        "Select a replacement model to use instead:", invalidModel), dlg);
+    
+    QString details;
+    if (!serviceName.isEmpty()) {
+        details = i18n("The service <b>%1</b> is attempting to use model <b>%2</b> via <b>%3</b>, but it is no longer available.",
+                       serviceName, invalidModel, LLMService::providerName(provider));
+    } else {
+        details = i18n("The model <b>%1</b> is no longer available from provider <b>%2</b>.",
+                       invalidModel, LLMService::providerName(provider));
+    }
+
+    auto *label = new QLabel(details + QStringLiteral("<br/><br/>") + i18n("Select a replacement model to use instead:"), dlg);
     label->setWordWrap(true);
     layout->addWidget(label);
 
@@ -1966,6 +2135,10 @@ void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidMod
     connect(buttons, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
 
+    connect(dlg, &QDialog::finished, this, []() {
+        LLMService::instance().setShowingModelDialog(false);
+    });
+
     connect(dlg, &QDialog::accepted, this, [combo]() {
         const QString selected = combo->currentText();
         if (!selected.isEmpty())
@@ -1973,10 +2146,100 @@ void MainWindow::onModelNotFound(LLMProvider provider, const QString &invalidMod
     });
 
     dlg->open();
-    Q_UNUSED(provider)
 }
 
 
 
 
 
+
+static KTextEditor::Cursor offsetToCursor(KTextEditor::Document *doc, int offset)
+{
+    int currentOffset = 0;
+    for (int line = 0; line < doc->lines(); ++line) {
+        int lineLength = doc->lineLength(line);
+        if (offset <= currentOffset + lineLength) {
+            return KTextEditor::Cursor(line, offset - currentOffset);
+        }
+        currentOffset += lineLength + 1; // +1 for newline
+    }
+    return KTextEditor::Cursor::invalid();
+}
+
+void MainWindow::updateLibrarianHighlights()
+{
+    auto *doc = activeDocument();
+    if (!doc || !m_librarianService || !m_librarianService->database()->database().isOpen()) return;
+
+    // Clear old highlights
+    qDeleteAll(m_librarianRanges);
+    m_librarianRanges.clear();
+
+    QString text = doc->text();
+
+    // 1. Check for inconsistencies (Red Squiggles)
+    // We scan for key:value patterns and check them against the DB
+    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
+    QRegularExpressionMatchIterator it = kvRegex.globalMatch(text);
+
+    KTextEditor::Attribute::Ptr errorAttr(new KTextEditor::Attribute());
+    errorAttr->setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+    errorAttr->setUnderlineColor(Qt::red);
+
+    while (it.hasNext()) {
+        QRegularExpressionMatch match = it.next();
+        QString key = match.captured(1).trimmed().toLower();
+        QString value = match.captured(2).trimmed();
+
+        // Query DB for this key
+        QList<qint64> entities = m_librarianService->database()->findEntitiesByAttribute(key, QVariant());
+        for (qint64 id : entities) {
+            QVariant masterVal = m_librarianService->database()->getAttribute(id, key);
+            if (masterVal.isValid() && masterVal.toString() != value) {
+                // Inconsistency found!
+                KTextEditor::Cursor start = offsetToCursor(doc, match.capturedStart(2));
+                KTextEditor::Cursor end = offsetToCursor(doc, match.capturedEnd(2));
+                
+                if (start.isValid() && end.isValid()) {
+                    KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
+                    range->setAttribute(errorAttr);
+                    range->setZDepth(100.0);
+                    
+                    // ADD TOOLTIP
+                    QString source = m_librarianService->database()->getReferences(id).join(QStringLiteral(", "));
+                    range->setAttribute(errorAttr);
+                    errorAttr->setToolTip(i18n("Consistency Error: Library value for '%1' is '%2'\nSource: %3", 
+                                               key, masterVal.toString(), source));
+                    
+                    m_librarianRanges.append(range);
+                }
+            }
+        }
+    }
+
+    // 2. Highlight auto-bound variables (Green Underline)
+    KTextEditor::Attribute::Ptr boundAttr(new KTextEditor::Attribute());
+    boundAttr->setUnderlineStyle(QTextCharFormat::DashUnderline);
+    boundAttr->setUnderlineColor(Qt::green);
+
+    QRegularExpression varRegex(QStringLiteral("\\{\\{(.+?)\\}\\}"));
+    it = varRegex.globalMatch(text);
+    while (it.hasNext()) {
+        QRegularExpressionMatch match = it.next();
+        KTextEditor::Cursor start = offsetToCursor(doc, match.capturedStart());
+        KTextEditor::Cursor end = offsetToCursor(doc, match.capturedEnd());
+        
+        if (start.isValid() && end.isValid()) {
+            KTextEditor::MovingRange *range = doc->newMovingRange(KTextEditor::Range(start, end));
+            range->setAttribute(boundAttr);
+            
+            // ADD TOOLTIP
+            QString varName = match.captured(1);
+            KTextEditor::Attribute::Ptr specificAttr(new KTextEditor::Attribute(*boundAttr));
+            specificAttr->setToolTip(i18n("Auto-bound Variable: Linked to Librarian '%1'", varName));
+            range->setAttribute(specificAttr);
+            
+            m_librarianRanges.append(range);
+        }
+    }
+}

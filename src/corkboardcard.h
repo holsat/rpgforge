@@ -34,7 +34,7 @@ public:
     explicit CorkboardCard(ProjectTreeItem *item, QWidget *parent = nullptr);
     ~CorkboardCard() override;
 
-    ProjectTreeItem* item() const { return m_item; }
+    QString itemPath() const { return m_itemPath; }
 
 Q_SIGNALS:
     void clicked();
@@ -48,7 +48,7 @@ protected:
 private:
     void setupUi();
 
-    ProjectTreeItem *m_item;
+    QString m_itemPath;
     QString m_title;
     QString m_status;
     QString m_synopsis;

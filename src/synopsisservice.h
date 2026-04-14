@@ -23,6 +23,8 @@
 #include <QString>
 #include <QQueue>
 #include <QSet>
+#include <QMutex>
+#include <QPointer>
 
 class ProjectTreeModel;
 struct ProjectTreeItem;
@@ -79,11 +81,12 @@ private:
     void updateFolderSynopsis(ProjectTreeItem *folder);
     void updateFileSynopsis(ProjectTreeItem *file, const QString &content);
 
-    ProjectTreeModel *m_model = nullptr;
+    QPointer<ProjectTreeModel> m_model;
     QQueue<QString> m_queue;
     QSet<QString> m_activeRequests;
     bool m_isProcessing = false;
     bool m_paused = false;
+    QMutex m_mutex;
 };
 
 #endif // SYNOPSISSERVICE_H

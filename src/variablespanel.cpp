@@ -42,8 +42,31 @@ DraggableVariableTree::DraggableVariableTree(QWidget *parent)
 
 QString DraggableVariableTree::fullVariableName(QTreeWidgetItem *item) const
 {
-    if (!item) return QString();
-    if (item->parent()) {
+    if (!item || item->flags() == Qt::ItemIsEnabled) return QString();
+    
+    // Check if it belongs to Library
+    QTreeWidgetItem *p = item;
+    bool isLibrary = false;
+    while (p) {
+        if (p->text(0) == i18n("Library (Auto-extracted)")) {
+            isLibrary = true;
+            break;
+        }
+        p = p->parent();
+    }
+
+    if (isLibrary) {
+        // Librarian path: type.entity.attribute
+        QStringList parts;
+        p = item;
+        while (p && p->text(0) != i18n("Library (Auto-extracted)")) {
+            parts.prepend(p->text(0));
+            p = p->parent();
+        }
+        return parts.join(QLatin1Char('.'));
+    }
+
+    if (item->parent() && item->parent()->text(0) != i18n("Custom Variables")) {
         // Variant: parent_name.variant_name
         return item->parent()->text(0) + QLatin1Char('.') + item->text(0);
     }
@@ -120,9 +143,15 @@ void VariablesPanel::setupUi()
     m_removeButton->setToolTip(i18n("Remove Selected Variable/Variant"));
     connect(m_removeButton, &QToolButton::clicked, this, &VariablesPanel::removeVariable);
 
+    m_reindexButton = new QToolButton(toolbar);
+    m_reindexButton->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));
+    m_reindexButton->setToolTip(i18n("Re-index Library (Full Scan)"));
+    connect(m_reindexButton, &QToolButton::clicked, this, &VariablesPanel::triggerReindex);
+
     toolbarLayout->addWidget(m_addButton);
     toolbarLayout->addWidget(m_addVariantButton);
     toolbarLayout->addWidget(m_removeButton);
+    toolbarLayout->addWidget(m_reindexButton);
     toolbarLayout->addStretch();
     
     layout->addWidget(toolbar);
@@ -135,6 +164,16 @@ void VariablesPanel::setupUi()
     m_treeWidget->setRootIsDecorated(true);
     m_treeWidget->setContextMenuPolicy(Qt::CustomContextMenu);
     
+    m_customVarsRoot = new QTreeWidgetItem(m_treeWidget);
+    m_customVarsRoot->setText(0, i18n("Custom Variables"));
+    m_customVarsRoot->setFlags(Qt::ItemIsEnabled);
+    m_customVarsRoot->setExpanded(true);
+
+    m_libraryRoot = new QTreeWidgetItem(m_treeWidget);
+    m_libraryRoot->setText(0, i18n("Library (Auto-extracted)"));
+    m_libraryRoot->setFlags(Qt::ItemIsEnabled);
+    m_libraryRoot->setExpanded(true);
+    
     m_treeWidget->setColumnWidth(3, 50);
     
     connect(m_treeWidget, &QTreeWidget::itemChanged, this, &VariablesPanel::onItemChanged);
@@ -145,7 +184,7 @@ void VariablesPanel::setupUi()
 
 void VariablesPanel::addVariable()
 {
-    auto *item = new QTreeWidgetItem(m_treeWidget);
+    auto *item = new QTreeWidgetItem(m_customVarsRoot);
     item->setText(0, i18n("new_variable"));
     item->setText(1, QStringLiteral("0"));
     item->setText(2, QStringLiteral("0"));
@@ -233,8 +272,8 @@ void VariablesPanel::recalculateAll()
         }
     };
 
-    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
-        calcItem(m_treeWidget->topLevelItem(i));
+    for (int i = 0; i < m_customVarsRoot->childCount(); ++i) {
+        calcItem(m_customVarsRoot->child(i));
     }
     
     m_treeWidget->blockSignals(false);
@@ -242,12 +281,14 @@ void VariablesPanel::recalculateAll()
 
 void VariablesPanel::saveVariables()
 {
+    if (!m_customVarsRoot) return;
+
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("Variables"));
     settings.beginGroup(QStringLiteral("CustomVariables"));
     settings.remove(QString());
     
-    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
-        auto *item = m_treeWidget->topLevelItem(i);
+    for (int i = 0; i < m_customVarsRoot->childCount(); ++i) {
+        auto *item = m_customVarsRoot->child(i);
         QString name = item->text(0);
         settings.beginGroup(name);
         settings.setValue(QStringLiteral("expression"), item->text(2));
@@ -276,11 +317,12 @@ void VariablesPanel::loadVariables()
     QStringList groups = settings.childGroups();
     
     m_treeWidget->blockSignals(true);
-    m_treeWidget->clear();
+    // Only clear children of customVarsRoot if it exists
+    if (m_customVarsRoot) qDeleteAll(m_customVarsRoot->takeChildren());
 
     for (const QString &name : groups) {
         settings.beginGroup(name);
-        auto *item = new QTreeWidgetItem(m_treeWidget);
+        auto *item = new QTreeWidgetItem(m_customVarsRoot);
         item->setText(0, name);
         item->setText(2, settings.value(QStringLiteral("expression")).toString());
         bool calc = settings.value(QStringLiteral("calculate"), true).toBool();
@@ -315,8 +357,10 @@ void VariablesPanel::loadVariables()
 QMap<QString, QString> VariablesPanel::variables() const
 {
     QMap<QString, QString> vars;
-    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
-        auto *item = m_treeWidget->topLevelItem(i);
+    if (!m_customVarsRoot) return vars;
+
+    for (int i = 0; i < m_customVarsRoot->childCount(); ++i) {
+        auto *item = m_customVarsRoot->child(i);
         QString name = item->text(0);
         bool shouldCalc = item->checkState(3) == Qt::Checked;
         vars.insert(name, shouldCalc ? (QStringLiteral("CALC:") + item->text(2)) : item->text(2));
@@ -325,9 +369,80 @@ QMap<QString, QString> VariablesPanel::variables() const
             auto *vItem = item->child(j);
             QString vName = name + QLatin1Char('.') + vItem->text(0);
             bool vShouldCalc = vItem->checkState(3) == Qt::Checked;
-            vars.insert(vName, vShouldCalc ? (QStringLiteral("CALC:") + vItem->text(2)) : vItem->text(2));
+            vars.insert(vName, vShouldCalc ? (QStringLiteral("CALC:") + item->text(2)) : item->text(2));
         }
 
     }
     return vars;
+}
+
+#include "librarianservice.h"
+
+void VariablesPanel::setLibrarianService(LibrarianService *service)
+{
+    m_librarianService = service;
+    if (m_librarianService) {
+        connect(m_librarianService, &LibrarianService::entityUpdated, this, &VariablesPanel::refreshLibrary);
+        connect(m_librarianService, &LibrarianService::scanningFinished, this, &VariablesPanel::refreshLibrary);
+        refreshLibrary();
+    }
+}
+
+void VariablesPanel::triggerReindex()
+{
+    if (m_librarianService) {
+        m_librarianService->scanAll();
+    }
+}
+
+void VariablesPanel::refreshLibrary()
+{
+    if (!m_librarianService || !m_libraryRoot || !m_librarianService->database()->database().isOpen()) return;
+
+    m_treeWidget->blockSignals(true);
+    qDeleteAll(m_libraryRoot->takeChildren());
+
+    // Use the main connection from the service
+    QSqlDatabase db = m_librarianService->database()->database();
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("SELECT id, name, type FROM entities"))) {
+        qWarning() << "Librarian Refresh failed:" << query.lastError().text();
+        m_treeWidget->blockSignals(false);
+        return;
+    }
+
+    QMap<QString, QTreeWidgetItem*> typeGroups;
+
+    while (query.next()) {
+        qint64 id = query.value(0).toLongLong();
+        QString name = query.value(1).toString();
+        QString type = query.value(2).toString();
+
+        if (type.isEmpty()) type = i18n("General");
+
+        if (!typeGroups.contains(type)) {
+            auto *group = new QTreeWidgetItem(m_libraryRoot);
+            group->setText(0, type);
+            group->setFlags(Qt::ItemIsEnabled);
+            group->setExpanded(true);
+            typeGroups.insert(type, group);
+        }
+
+        auto *entityItem = new QTreeWidgetItem(typeGroups[type]);
+        entityItem->setText(0, name);
+        entityItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        entityItem->setData(0, Qt::UserRole, id);
+
+        // Fetch attributes
+        QVariantMap attrs = m_librarianService->database()->getAttributes(id);
+        for (auto it = attrs.constBegin(); it != attrs.constEnd(); ++it) {
+            auto *attrItem = new QTreeWidgetItem(entityItem);
+            attrItem->setText(0, it.key());
+            attrItem->setText(1, it.value().toString());
+            attrItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        }
+    }
+
+    m_treeWidget->blockSignals(false);
+    qDebug() << "VariablesPanel: Library refreshed with" << m_libraryRoot->childCount() << "types.";
 }

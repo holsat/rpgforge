@@ -42,6 +42,7 @@ class ChatPanel;
 class ProblemsPanel;
 class SimulationPanel;
 class Sidebar;
+class LibrarianService;
 class QWebEngineView;
 class QPushButton;
 class QTimer;
@@ -105,6 +106,7 @@ private Q_SLOTS:
     void togglePreview();
     void syncScroll();
     void updateErrorHighlighting();
+    void updateLibrarianHighlights();
     void performSearch(const QString &text);
 
     // AI Actions
@@ -112,7 +114,7 @@ private Q_SLOTS:
     void aiRewrite();
     void aiSummarize();
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
-    void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available);
+    void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
 
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }
@@ -183,8 +185,11 @@ private:
 
     QList<KTextEditor::MovingRange*> m_errorRanges;
     QList<KTextEditor::MovingRange*> m_diagnosticRanges;
+    QList<KTextEditor::MovingRange*> m_librarianRanges;
 
     QUrl m_currentUrl;
+    LibrarianService *m_librarianService = nullptr;
+    QString m_lastSearchText;
 };
 
 #endif // MAINWINDOW_H

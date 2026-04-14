@@ -57,7 +57,12 @@ void VisualDiffView::setupUi()
     saveBtn->setIcon(QIcon::fromTheme(QStringLiteral("document-save")));
     saveBtn->setText(i18n("Save Changes"));
     saveBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    connect(saveBtn, &QToolButton::clicked, this, &VisualDiffView::saveChanges);
+    connect(saveBtn, &QToolButton::clicked, this, [this]() {
+        if (m_part) {
+            m_part->save();
+            Q_EMIT saveRequested(m_file2);
+        }
+    });
     toolbar->addWidget(saveBtn);
 
     auto *swapBtn = new QToolButton(this);
