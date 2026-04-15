@@ -51,6 +51,54 @@ private Q_SLOTS:
         QVERIFY(!pm.isProjectOpen());
     }
 
+    void testSchemaMigration()
+    {
+        ProjectManager &pm = ProjectManager::instance();
+        QString projName = QStringLiteral("MigrationTest");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QString projFile = projPath + QStringLiteral("/rpgforge.project");
+
+        QDir().mkpath(projPath);
+
+        // Manually create a v1 project file
+        QJsonObject v1Data;
+        v1Data[QStringLiteral("name")] = projName;
+        v1Data[QStringLiteral("version")] = 1;
+        v1Data[QStringLiteral("marginLeft")] = 10.0;
+        v1Data[QStringLiteral("marginTop")] = 15.0;
+        v1Data[QStringLiteral("marginRight")] = 20.0;
+        v1Data[QStringLiteral("marginBottom")] = 25.0;
+
+        QFile file(projFile);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QJsonDocument(v1Data).toJson());
+        file.close();
+
+        // Open the v1 project
+        QVERIFY(pm.openProject(projFile));
+        QVERIFY(pm.isProjectOpen());
+
+        // Verify that margins were migrated to the new nested structure
+        QCOMPARE(pm.marginLeft(), 10.0);
+        QCOMPARE(pm.marginTop(), 15.0);
+        QCOMPARE(pm.marginRight(), 20.0);
+        QCOMPARE(pm.marginBottom(), 25.0);
+
+        // Save and verify the version on disk is now 2
+        QVERIFY(pm.saveProject());
+        pm.closeProject();
+
+        QFile reOpenFile(projFile);
+        QVERIFY(reOpenFile.open(QIODevice::ReadOnly));
+        QJsonDocument doc = QJsonDocument::fromJson(reOpenFile.readAll());
+        QJsonObject data = doc.object();
+        QCOMPARE(data.value(QStringLiteral("version")).toInt(), 2);
+        QVERIFY(data.contains(QStringLiteral("margins")));
+        QVERIFY(!data.contains(QStringLiteral("marginLeft")));
+
+        reOpenFile.close();
+    }
+
     void testStressHarness()
     {
         ProjectManager &pm = ProjectManager::instance();

@@ -60,7 +60,8 @@ QString DraggableVariableTree::fullVariableName(QTreeWidgetItem *item) const
         QStringList parts;
         p = item;
         while (p && p->text(0) != i18n("Library (Auto-extracted)")) {
-            parts.prepend(p->text(0));
+            // LibrarianService sanitizes keys by removing spaces
+            parts.prepend(p->text(0).replace(QStringLiteral(" "), QString()));
             p = p->parent();
         }
         return parts.join(QLatin1Char('.'));

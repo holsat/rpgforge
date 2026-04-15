@@ -19,6 +19,7 @@
 #include "projectmanager.h"
 #include "projecttreemodel.h"
 #include "variablemanager.h"
+#include "projectkeys.h"
 
 #include <KLocalizedString>
 #include <QFile>
@@ -46,81 +47,144 @@ ProjectManager::ProjectManager(QObject *parent)
 void ProjectManager::loadDefaults()
 {
     m_data = QJsonObject();
-    m_data[QStringLiteral("name")] = i18n("Untitled Project");
-    m_data[QStringLiteral("author")] = i18n("Unknown Author");
-    m_data[QStringLiteral("pageSize")] = QStringLiteral("A4");
-    m_data[QStringLiteral("marginLeft")] = 20.0;
-    m_data[QStringLiteral("marginRight")] = 20.0;
-    m_data[QStringLiteral("marginTop")] = 20.0;
-    m_data[QStringLiteral("marginBottom")] = 20.0;
-    m_data[QStringLiteral("showPageNumbers")] = true;
-    m_data[QStringLiteral("autoSync")] = true;
+    m_data[QLatin1String(ProjectKeys::Name)] = i18n("Untitled Project");
+    m_data[QLatin1String(ProjectKeys::Author)] = i18n("Unknown Author");
+    m_data[QLatin1String(ProjectKeys::PageSize)] = QStringLiteral("A4");
+    
+    QJsonObject margins;
+    margins[QStringLiteral("left")] = 20.0;
+    margins[QStringLiteral("right")] = 20.0;
+    margins[QStringLiteral("top")] = 20.0;
+    margins[QStringLiteral("bottom")] = 20.0;
+    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+
+    m_data[QLatin1String(ProjectKeys::ShowPageNumbers)] = true;
+    m_data[QLatin1String(ProjectKeys::AutoSync)] = true;
+    m_data[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+}
+
+void ProjectManager::migrate(QJsonObject &data)
+{
+    int version = data.value(QLatin1String(ProjectKeys::Version)).toInt(1);
+    bool changed = false;
+
+    // v1 -> v2: Nest flat margins
+    if (version < 2) {
+        QJsonObject margins;
+        margins[QStringLiteral("left")] = data.value(QLatin1String(ProjectKeys::MarginLeft)).toDouble(20.0);
+        margins[QStringLiteral("right")] = data.value(QLatin1String(ProjectKeys::MarginRight)).toDouble(20.0);
+        margins[QStringLiteral("top")] = data.value(QLatin1String(ProjectKeys::MarginTop)).toDouble(20.0);
+        margins[QStringLiteral("bottom")] = data.value(QLatin1String(ProjectKeys::MarginBottom)).toDouble(20.0);
+
+        data[QLatin1String(ProjectKeys::Margins)] = margins;
+
+        data.remove(QLatin1String(ProjectKeys::MarginLeft));
+        data.remove(QLatin1String(ProjectKeys::MarginRight));
+        data.remove(QLatin1String(ProjectKeys::MarginTop));
+        data.remove(QLatin1String(ProjectKeys::MarginBottom));
+
+        version = 2;
+        changed = true;
+    }
+
+    if (changed) {
+        data[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+        qDebug() << "ProjectManager: Migrated project schema to version" << ProjectKeys::CurrentVersion;
+    }
 }
 
 QString ProjectManager::projectName() const
 {
-    return m_data.value(QStringLiteral("name")).toString();
+    return m_data.value(QLatin1String(ProjectKeys::Name)).toString();
 }
 
 void ProjectManager::setProjectName(const QString &name)
 {
     if (projectName() != name) {
-        m_data[QStringLiteral("name")] = name;
+        m_data[QLatin1String(ProjectKeys::Name)] = name;
         Q_EMIT projectSettingsChanged();
     }
 }
 
 QString ProjectManager::author() const
 {
-    return m_data.value(QStringLiteral("author")).toString();
+    return m_data.value(QLatin1String(ProjectKeys::Author)).toString();
 }
 
 void ProjectManager::setAuthor(const QString &author)
 {
     if (this->author() != author) {
-        m_data[QStringLiteral("author")] = author;
+        m_data[QLatin1String(ProjectKeys::Author)] = author;
         Q_EMIT projectSettingsChanged();
     }
 }
 
-QString ProjectManager::pageSize() const { return m_data.value(QStringLiteral("pageSize")).toString(); }
-void ProjectManager::setPageSize(const QString &size) { m_data[QStringLiteral("pageSize")] = size; Q_EMIT projectSettingsChanged(); }
+QString ProjectManager::pageSize() const { return m_data.value(QLatin1String(ProjectKeys::PageSize)).toString(); }
+void ProjectManager::setPageSize(const QString &size) { m_data[QLatin1String(ProjectKeys::PageSize)] = size; Q_EMIT projectSettingsChanged(); }
 
-double ProjectManager::marginLeft() const { return m_data.value(QStringLiteral("marginLeft")).toDouble(); }
-void ProjectManager::setMarginLeft(double margin) { m_data[QStringLiteral("marginLeft")] = margin; Q_EMIT projectSettingsChanged(); }
+double ProjectManager::marginLeft() const { 
+    return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("left")).toDouble(20.0); 
+}
+void ProjectManager::setMarginLeft(double margin) { 
+    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
+    margins[QStringLiteral("left")] = margin;
+    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    Q_EMIT projectSettingsChanged(); 
+}
 
-double ProjectManager::marginRight() const { return m_data.value(QStringLiteral("marginRight")).toDouble(); }
-void ProjectManager::setMarginRight(double margin) { m_data[QStringLiteral("marginRight")] = margin; Q_EMIT projectSettingsChanged(); }
+double ProjectManager::marginRight() const { 
+    return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("right")).toDouble(20.0); 
+}
+void ProjectManager::setMarginRight(double margin) { 
+    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
+    margins[QStringLiteral("right")] = margin;
+    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    Q_EMIT projectSettingsChanged(); 
+}
 
-double ProjectManager::marginTop() const { return m_data.value(QStringLiteral("marginTop")).toDouble(); }
-void ProjectManager::setMarginTop(double margin) { m_data[QStringLiteral("marginTop")] = margin; Q_EMIT projectSettingsChanged(); }
+double ProjectManager::marginTop() const { 
+    return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("top")).toDouble(20.0); 
+}
+void ProjectManager::setMarginTop(double margin) { 
+    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
+    margins[QStringLiteral("top")] = margin;
+    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    Q_EMIT projectSettingsChanged(); 
+}
 
-double ProjectManager::marginBottom() const { return m_data.value(QStringLiteral("marginBottom")).toDouble(); }
-void ProjectManager::setMarginBottom(double margin) { m_data[QStringLiteral("marginBottom")] = margin; Q_EMIT projectSettingsChanged(); }
+double ProjectManager::marginBottom() const { 
+    return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("bottom")).toDouble(20.0); 
+}
+void ProjectManager::setMarginBottom(double margin) { 
+    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
+    margins[QStringLiteral("bottom")] = margin;
+    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    Q_EMIT projectSettingsChanged(); 
+}
 
-bool ProjectManager::showPageNumbers() const { return m_data.value(QStringLiteral("showPageNumbers")).toBool(); }
-void ProjectManager::setShowPageNumbers(bool show) { m_data[QStringLiteral("showPageNumbers")] = show; Q_EMIT projectSettingsChanged(); }
+bool ProjectManager::showPageNumbers() const { return m_data.value(QLatin1String(ProjectKeys::ShowPageNumbers)).toBool(); }
+void ProjectManager::setShowPageNumbers(bool show) { m_data[QLatin1String(ProjectKeys::ShowPageNumbers)] = show; Q_EMIT projectSettingsChanged(); }
 
-QString ProjectManager::stylesheetPath() const { return m_data.value(QStringLiteral("stylesheetPath")).toString(); }
-void ProjectManager::setStylesheetPath(const QString &path) { m_data[QStringLiteral("stylesheetPath")] = path; Q_EMIT projectSettingsChanged(); }
+QString ProjectManager::stylesheetPath() const { return m_data.value(QLatin1String(ProjectKeys::StylesheetPath)).toString(); }
+void ProjectManager::setStylesheetPath(const QString &path) { m_data[QLatin1String(ProjectKeys::StylesheetPath)] = path; Q_EMIT projectSettingsChanged(); }
 
-bool ProjectManager::autoSync() const { return m_data.value(QStringLiteral("autoSync")).toBool(); }
+bool ProjectManager::autoSync() const { return m_data.value(QLatin1String(ProjectKeys::AutoSync)).toBool(); }
 void ProjectManager::setAutoSync(bool enabled)
 {
     if (autoSync() != enabled) {
-        m_data[QStringLiteral("autoSync")] = enabled;
+        m_data[QLatin1String(ProjectKeys::AutoSync)] = enabled;
         Q_EMIT projectSettingsChanged();
     }
 }
 
 QJsonObject ProjectManager::tree() const
 {
-    return m_data.value(QStringLiteral("tree")).toObject();
+    return m_data.value(QLatin1String(ProjectKeys::Tree)).toObject();
 }
 
 void ProjectManager::setTree(const QJsonObject &tree)
 {
-    m_data[QStringLiteral("tree")] = tree;
+    m_data[QLatin1String(ProjectKeys::Tree)] = tree;
     Q_EMIT treeChanged();
 }
 
@@ -143,11 +207,8 @@ bool ProjectManager::openProject(const QString &filePath)
     m_projectFilePath = filePath;
     m_data = doc.object();
 
-    const int fileVersion = m_data.value(QStringLiteral("version")).toInt(0);
-    if (fileVersion > 1) {
-        qWarning() << "rpgforge.project was written by a newer version of RPG Forge (schema version"
-                   << fileVersion << "). Some data may not load correctly.";
-    }
+    // Migrate old project files to current schema version
+    migrate(m_data);
 
     Q_EMIT projectOpened();
     return true;
@@ -237,7 +298,7 @@ bool ProjectManager::saveProject()
         return false;
     }
 
-    m_data[QStringLiteral("version")] = 1;
+    m_data[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
     QJsonDocument doc(m_data);
     file.write(doc.toJson());
     return true;
@@ -265,8 +326,8 @@ QStringList ProjectManager::stylesheetPaths() const
 int ProjectManager::countWordsInTree(const QJsonObject &tree, const QString &projectPath) const
 {
     int count = 0;
-    if (tree.value(QStringLiteral("type")).toInt() == 1) { // File
-        QString relPath = tree.value(QStringLiteral("path")).toString();
+    if (tree.value(QLatin1String(ProjectKeys::Type)).toInt() == 1) { // File
+        QString relPath = tree.value(QLatin1String(ProjectKeys::Path)).toString();
         QString fullPath = QDir(projectPath).absoluteFilePath(relPath);
         QFile f(fullPath);
         if (f.open(QIODevice::ReadOnly)) {
@@ -275,7 +336,7 @@ int ProjectManager::countWordsInTree(const QJsonObject &tree, const QString &pro
         }
     }
     
-    QJsonArray children = tree.value(QStringLiteral("children")).toArray();
+    QJsonArray children = tree.value(QLatin1String(ProjectKeys::Children)).toArray();
     for (const auto &child : children) {
       count += countWordsInTree(child.toObject(), projectPath);
     }

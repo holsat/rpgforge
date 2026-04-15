@@ -117,7 +117,7 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
         QJsonParseError error;
         QJsonDocument doc = QJsonDocument::fromJson(cleanJson.toUtf8(), &error);
         if (doc.isNull() || !doc.isObject()) {
-            Q_EMIT weakThis->errorOccurred(i18n("Failed to parse Arbiter outcome: %1").arg(error.errorString()));
+            Q_EMIT weakThis->errorOccurred(i18n("Failed to parse Arbiter outcome: %1", error.errorString()));
             return;
         }
 

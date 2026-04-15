@@ -80,19 +80,6 @@ void LibrarianService::setProjectPath(const QString &path)
     }
 }
 
-QSqlDatabase LibrarianService::getDatabase() const
-{
-    QString connectionName = QStringLiteral("librarian_thread_") + QString::number(size_t(QThread::currentThreadId()));
-    if (QSqlDatabase::contains(connectionName)) {
-        return QSqlDatabase::database(connectionName);
-    }
-    
-    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
-    db.setDatabaseName(m_dbPath);
-    db.open();
-    return db;
-}
-
 void LibrarianService::pause()
 {
     qDebug() << "LibrarianService: Pausing...";
@@ -174,7 +161,7 @@ void LibrarianService::processQueue()
             if (!weakThis) return;
             
             QMap<QString, QString> libVars;
-            QSqlDatabase db = weakThis->getDatabase();
+            QSqlDatabase db = weakThis->database()->database();
             if (db.isOpen()) {
                 QSqlQuery query(db);
                 query.exec(QStringLiteral("SELECT e.type, e.name, a.key, a.value FROM entities e "
@@ -222,9 +209,13 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
                     QStringList cells = lines[j].split(QLatin1Char('|'), Qt::SkipEmptyParts);
                     if (cells.size() >= 2) {
                         QString entityName = cells[0].trimmed();
-                        qint64 entityId = m_db->addEntity(entityName, tableName, sourceFile);
+                        qint64 entityId = m_db->findEntity(entityName, tableName, sourceFile);
+                        if (entityId == -1) {
+                            entityId = m_db->addEntity(entityName, tableName, sourceFile);
+                        }
+                        
                         for (int k = 1; k < cells.size() && k < headers.size(); ++k) {
-                            QString key = headers[k].trimmed().toLower();
+                            QString key = headers[k].trimmed().toLower().replace(QStringLiteral(" "), QString());
                             QString val = cells[k].trimmed();
                             m_db->setAttribute(entityId, key, val);
                         }
@@ -239,22 +230,63 @@ void LibrarianService::parseMarkdownTables(const QString &content, const QString
 
 void LibrarianService::parseMarkdownLists(const QString &content, const QString &sourceFile)
 {
-    // Regex for "Key: Value" or "- Key: Value"
-    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s\\.]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
-    QRegularExpressionMatchIterator it = kvRegex.globalMatch(content);
+    QStringList lines = content.split(QLatin1Char('\n'));
     
-    while (it.hasNext()) {
-        QRegularExpressionMatch match = it.next();
-        QString key = match.captured(1).trimmed();
-        QString value = match.captured(2).trimmed();
-        
-        if (key.toLower() == QStringLiteral("title") || key.toLower() == QStringLiteral("status")) continue;
+    QRegularExpression headerRegex(QStringLiteral("^(#+)\\s+(.+)$"));
+    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*(?:\\*\\*|__)?([\\w\\s\\.]+)(?:\\*\\*|__)?\\s*:\\s*(.+)$"));
 
-        // Use key as entity name if no specific category found
-        qint64 entityId = m_db->addEntity(key, QStringLiteral("property"), sourceFile);
-        m_db->setAttribute(entityId, QStringLiteral("value"), value);
-        qDebug() << "Librarian: Extracted property" << key << "=" << value << "from" << sourceFile;
-        Q_EMIT entityUpdated(entityId);
+    struct Section {
+        int level;
+        QString name;
+    };
+    QList<Section> sectionStack;
+    sectionStack.append({0, QStringLiteral("Global")});
+
+    for (const QString &line : lines) {
+        auto headerMatch = headerRegex.match(line);
+        if (headerMatch.hasMatch()) {
+            int level = headerMatch.captured(1).length();
+            QString name = headerMatch.captured(2).trimmed();
+            // Clean up name (e.g. remove trailing tags like {#èwò})
+            name.remove(QRegularExpression(QStringLiteral("\\{.+\\}$"))).trimmed();
+
+            while (sectionStack.size() > 1 && sectionStack.last().level >= level) {
+                sectionStack.removeLast();
+            }
+            sectionStack.append({level, name});
+            continue;
+        }
+
+        auto kvMatch = kvRegex.match(line);
+        if (kvMatch.hasMatch()) {
+            QString key = kvMatch.captured(1).trimmed();
+            QString value = kvMatch.captured(2).trimmed();
+            
+            if (key.isEmpty() || key.toLower() == QStringLiteral("title") || key.toLower() == QStringLiteral("status")) continue;
+
+            // Build entity name from the stack, but skip generic ones like "STATISTICS" 
+            // if we have a parent.
+            QString entityName;
+            if (sectionStack.size() > 1) {
+                QString last = sectionStack.last().name;
+                if ((last.toUpper() == QStringLiteral("STATISTICS") || last.toUpper() == QStringLiteral("ABILITIES")) && sectionStack.size() > 2) {
+                    entityName = sectionStack[sectionStack.size() - 2].name;
+                } else {
+                    entityName = last;
+                }
+            } else {
+                entityName = sectionStack.last().name;
+            }
+
+            qint64 entityId = m_db->findEntity(entityName, QStringLiteral("property"), sourceFile);
+            if (entityId == -1) {
+                entityId = m_db->addEntity(entityName, QStringLiteral("property"), sourceFile);
+            }
+            m_db->setAttribute(entityId, key, value);
+            
+            qDebug() << "Librarian: Extracted" << entityName << "property" << key << "=" << value << "from" << sourceFile;
+            Q_EMIT entityUpdated(entityId);
+        }
     }
 }
 

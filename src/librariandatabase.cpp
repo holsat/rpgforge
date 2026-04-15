@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QUuid>
 #include <QSqlError>
+#include <QThread>
 
 LibrarianDatabase::LibrarianDatabase(QObject *parent)
     : QObject(parent)
@@ -16,46 +17,62 @@ LibrarianDatabase::~LibrarianDatabase()
 
 bool LibrarianDatabase::open(const QString &path)
 {
-    if (m_db.isOpen()) {
-        m_db.close();
-    }
-
-    // Use a unique connection name to avoid collisions
-    QString connectionName = QStringLiteral("LibrarianConnection_%1").arg(QUuid::createUuid().toString());
-    m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
-    m_db.setDatabaseName(path);
-
-    if (!m_db.open()) {
-        m_lastError = m_db.lastError().text();
+    m_dbPath = path;
+    QSqlDatabase db = database();
+    if (!db.isOpen()) {
+        m_lastError = db.lastError().text();
+        qWarning() << "LibrarianDatabase: Failed to open" << path << ":" << m_lastError;
         return false;
     }
 
-    return initSchema();
+    return initSchema(db);
 }
 
 void LibrarianDatabase::close()
 {
-    if (m_db.isOpen()) {
-        QString connectionName = m_db.connectionName();
-        m_db.close();
-        m_db = QSqlDatabase();
-        QSqlDatabase::removeDatabase(connectionName);
+    // Removing connections is complex because they are per-thread.
+    // In a short-lived test, we can just let them be.
+}
+
+QSqlDatabase LibrarianDatabase::database() const
+{
+    if (m_dbPath.isEmpty()) return QSqlDatabase();
+
+    QString threadId = QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    QString connectionName = QStringLiteral("Librarian_%1_%2")
+        .arg(QString::number(reinterpret_cast<quintptr>(this), 16), threadId);
+    
+    if (QSqlDatabase::contains(connectionName)) {
+        QSqlDatabase db = QSqlDatabase::database(connectionName);
+        if (db.isOpen()) return db;
     }
+
+    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+    db.setDatabaseName(m_dbPath);
+
+    if (!db.open()) {
+        const_cast<LibrarianDatabase*>(this)->m_lastError = db.lastError().text();
+    } else {
+        // Enable WAL mode for better concurrency
+        QSqlQuery q(db);
+        q.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    }
+    return db;
 }
 
 bool LibrarianDatabase::beginTransaction()
 {
-    return m_db.transaction();
+    return database().transaction();
 }
 
 bool LibrarianDatabase::commit()
 {
-    return m_db.commit();
+    return database().commit();
 }
 
-bool LibrarianDatabase::initSchema()
+bool LibrarianDatabase::initSchema(QSqlDatabase &db)
 {
-    QSqlQuery query(m_db);
+    QSqlQuery query(db);
 
     // Entities table
     if (!query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS entities ("
@@ -100,7 +117,7 @@ bool LibrarianDatabase::initSchema()
 
 qint64 LibrarianDatabase::addEntity(const QString &name, const QString &type, const QString &sourceFile)
 {
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("INSERT INTO entities (name, type, source_file, last_modified) "
                   "VALUES (:name, :type, :source_file, :last_modified)"));
     query.bindValue(QStringLiteral(":name"), name);
@@ -118,7 +135,7 @@ qint64 LibrarianDatabase::addEntity(const QString &name, const QString &type, co
 
 bool LibrarianDatabase::updateEntity(qint64 id, const QString &name, const QString &type)
 {
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("UPDATE entities SET name = :name, type = :type, last_modified = :last_modified WHERE id = :id"));
     query.bindValue(QStringLiteral(":name"), name);
     query.bindValue(QStringLiteral(":type"), type);
@@ -134,7 +151,7 @@ bool LibrarianDatabase::updateEntity(qint64 id, const QString &name, const QStri
 
 bool LibrarianDatabase::deleteEntity(qint64 id)
 {
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("DELETE FROM entities WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), id);
 
@@ -147,8 +164,9 @@ bool LibrarianDatabase::deleteEntity(qint64 id)
 
 bool LibrarianDatabase::setAttribute(qint64 entityId, const QString &key, const QVariant &value)
 {
+    QSqlDatabase db = database();
     // First, check if attribute already exists
-    QSqlQuery query(m_db);
+    QSqlQuery query(db);
     query.prepare(QStringLiteral("SELECT id FROM attributes WHERE entity_id = :entity_id AND key = :key"));
     query.bindValue(QStringLiteral(":entity_id"), entityId);
     query.bindValue(QStringLiteral(":key"), key);
@@ -179,7 +197,7 @@ bool LibrarianDatabase::setAttribute(qint64 entityId, const QString &key, const 
 
 QVariant LibrarianDatabase::getAttribute(qint64 entityId, const QString &key) const
 {
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("SELECT value, datatype FROM attributes WHERE entity_id = :entity_id AND key = :key"));
     query.bindValue(QStringLiteral(":entity_id"), entityId);
     query.bindValue(QStringLiteral(":key"), key);
@@ -201,7 +219,7 @@ QVariant LibrarianDatabase::getAttribute(qint64 entityId, const QString &key) co
 QVariantMap LibrarianDatabase::getAttributes(qint64 entityId) const
 {
     QVariantMap attrs;
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("SELECT key, value, datatype FROM attributes WHERE entity_id = :entity_id"));
     query.bindValue(QStringLiteral(":entity_id"), entityId);
 
@@ -226,7 +244,7 @@ QVariantMap LibrarianDatabase::getAttributes(qint64 entityId) const
 
 bool LibrarianDatabase::addReference(qint64 entityId, const QString &referencingFile)
 {
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("INSERT INTO references_graph (entity_id, referencing_file) VALUES (:entity_id, :file)"));
     query.bindValue(QStringLiteral(":entity_id"), entityId);
     query.bindValue(QStringLiteral(":file"), referencingFile);
@@ -241,7 +259,7 @@ bool LibrarianDatabase::addReference(qint64 entityId, const QString &referencing
 QStringList LibrarianDatabase::getReferences(qint64 entityId) const
 {
     QStringList refs;
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("SELECT referencing_file FROM references_graph WHERE entity_id = :entity_id"));
     query.bindValue(QStringLiteral(":entity_id"), entityId);
 
@@ -253,10 +271,24 @@ QStringList LibrarianDatabase::getReferences(qint64 entityId) const
     return refs;
 }
 
+qint64 LibrarianDatabase::findEntity(const QString &name, const QString &type, const QString &sourceFile) const
+{
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral("SELECT id FROM entities WHERE name = :name AND type = :type AND source_file = :source_file"));
+    query.bindValue(QStringLiteral(":name"), name);
+    query.bindValue(QStringLiteral(":type"), type);
+    query.bindValue(QStringLiteral(":source_file"), sourceFile);
+
+    if (query.exec() && query.next()) {
+        return query.value(0).toLongLong();
+    }
+    return -1;
+}
+
 QList<qint64> LibrarianDatabase::findEntitiesByType(const QString &type) const
 {
     QList<qint64> ids;
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("SELECT id FROM entities WHERE type = :type"));
     query.bindValue(QStringLiteral(":type"), type);
 
@@ -271,7 +303,7 @@ QList<qint64> LibrarianDatabase::findEntitiesByType(const QString &type) const
 QList<qint64> LibrarianDatabase::findEntitiesByAttribute(const QString &key, const QVariant &value) const
 {
     QList<qint64> ids;
-    QSqlQuery query(m_db);
+    QSqlQuery query(database());
     query.prepare(QStringLiteral("SELECT entity_id FROM attributes WHERE key = :key AND value = :value"));
     query.bindValue(QStringLiteral(":key"), key);
     query.bindValue(QStringLiteral(":value"), value.toString());

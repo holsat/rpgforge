@@ -25,9 +25,10 @@ This document tracks identified architectural debt, anti-patterns, and UX improv
 - **Priority:** Low.
 
 ### 5. Standardize JSON Keys
-- **Issue:** Raw string literals are used for JSON keys throughout `ProjectManager`.
+- **Status:** ✅ Implemented
+- **Issue:** Raw string literals were used for JSON keys throughout `ProjectManager`.
 - **Goal:** Define a `ProjectKeys` namespace with `static constexpr char*` or `QStringLiteral` constants.
-- **Priority:** Low.
+- **Resolution:** Created `src/projectkeys.h` and refactored `ProjectManager` and `ProjectTreeModel` to use the constants.
 
 ### 6. Robust YAML Parsing
 - **Issue:** `VariableManager::parseFrontMatter` uses a brittle regex that fails on nested objects or lists.
@@ -35,9 +36,10 @@ This document tracks identified architectural debt, anti-patterns, and UX improv
 - **Priority:** Medium.
 
 ### 7. Project Schema Migration
+- **Status:** ✅ Implemented
 - **Issue:** No framework for migrating `.project` files when the schema version changes.
 - **Goal:** Implement a migration system to upgrade older project files.
-- **Priority:** Medium.
+- **Resolution:** Implemented `ProjectManager::migrate()` and bumped schema to version 2 (refactored margins to a nested object).
 
 ### 8. LLM Error Propagation
 - **Issue:** Non-streaming LLM failures are logged but not reported to the UI.

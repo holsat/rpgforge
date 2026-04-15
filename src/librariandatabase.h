@@ -40,16 +40,17 @@ public:
     QStringList getReferences(qint64 entityId) const;
 
     // Querying
+    qint64 findEntity(const QString &name, const QString &type, const QString &sourceFile) const;
     QList<qint64> findEntitiesByType(const QString &type) const;
     QList<qint64> findEntitiesByAttribute(const QString &key, const QVariant &value) const;
 
-    QSqlDatabase database() const { return m_db; }
+    QSqlDatabase database() const;
     QString lastError() const { return m_lastError; }
 
 private:
-    bool initSchema();
+    bool initSchema(QSqlDatabase &db);
 
-    QSqlDatabase m_db;
+    QString m_dbPath;
     QString m_lastError;
 };
 

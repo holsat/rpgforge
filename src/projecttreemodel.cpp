@@ -18,6 +18,7 @@
 
 #include "projecttreemodel.h"
 #include "projectmanager.h"
+#include "projectkeys.h"
 #include <QMimeData>
 #include <QJsonDocument>
 #include <QFileInfo>
@@ -98,15 +99,15 @@ ProjectTreeItem* ProjectTreeModel::loadItem(const QJsonObject &obj, ProjectTreeI
 {
     auto *item = new ProjectTreeItem();
     item->parent = parent;
-    item->type = obj.value(QStringLiteral("type")).toString() == QStringLiteral("file") ? ProjectTreeItem::File : ProjectTreeItem::Folder;
+    item->type = obj.value(QLatin1String(ProjectKeys::Type)).toString() == QStringLiteral("file") ? ProjectTreeItem::File : ProjectTreeItem::Folder;
     item->category = stringToCategory(obj.value(QStringLiteral("category")).toString());
     item->name = obj.value(QStringLiteral("name")).toString();
-    item->path = obj.value(QStringLiteral("path")).toString();
+    item->path = obj.value(QLatin1String(ProjectKeys::Path)).toString();
     item->synopsis = obj.value(QStringLiteral("synopsis")).toString();
     item->status = obj.value(QStringLiteral("status")).toString();
     item->transient = obj.value(QStringLiteral("transient")).toBool(false);
 
-    QJsonArray children = obj.value(QStringLiteral("children")).toArray();
+    QJsonArray children = obj.value(QLatin1String(ProjectKeys::Children)).toArray();
     for (const QJsonValue &v : children) {
         item->children.append(loadItem(v.toObject(), item));
     }
@@ -118,10 +119,10 @@ QJsonObject ProjectTreeModel::saveItem(ProjectTreeItem *item) const
 {
     QJsonObject obj;
     if (!item) return obj;
-    obj[QStringLiteral("type")] = item->type == ProjectTreeItem::File ? QStringLiteral("file") : QStringLiteral("folder");
+    obj[QLatin1String(ProjectKeys::Type)] = item->type == ProjectTreeItem::File ? QStringLiteral("file") : QStringLiteral("folder");
     obj[QStringLiteral("category")] = categoryToString(item->category);
     obj[QStringLiteral("name")] = item->name;
-    obj[QStringLiteral("path")] = item->path;
+    obj[QLatin1String(ProjectKeys::Path)] = item->path;
     obj[QStringLiteral("synopsis")] = item->synopsis;
     obj[QStringLiteral("status")] = item->status;
     obj[QStringLiteral("transient")] = item->transient;
@@ -130,7 +131,7 @@ QJsonObject ProjectTreeModel::saveItem(ProjectTreeItem *item) const
     for (auto *child : item->children) {
         children.append(saveItem(child));
     }
-    obj[QStringLiteral("children")] = children;
+    obj[QLatin1String(ProjectKeys::Children)] = children;
 
     return obj;
 }

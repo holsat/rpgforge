@@ -103,6 +103,7 @@ private:
     explicit ProjectManager(QObject *parent = nullptr);
     
     void loadDefaults();
+    void migrate(QJsonObject &data);
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
     int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;

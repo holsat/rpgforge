@@ -191,18 +191,59 @@ add_executable(test_librariandatabase tests/test_librariandatabase.cpp src/libra
 target_link_libraries(test_librariandatabase Qt6::Test Qt6::Sql Qt6::Core)
 add_test(NAME librarian_database_test COMMAND test_librariandatabase)
 
+add_executable(test_librarian
+    tests/test_librarian.cpp
+    src/librarianservice.cpp
+    src/librariandatabase.cpp
+    src/llmservice.cpp
+    src/projectmanager.cpp
+    src/projecttreemodel.cpp
+    src/variablemanager.cpp
+    src/synopsisservice.cpp
+    src/mcpservice.cpp
+    src/analyzerservice.cpp
+    src/knowledgebase.cpp
+    src/agentgatekeeper.cpp
+    src/diceengine.cpp
+    src/simulationmanager.cpp
+    src/simulationstate.cpp
+    src/simarbiter.cpp
+    src/simgriot.cpp
+    src/simulationactor.cpp
+    src/charactergenerator.cpp
+    src/characterdossierservice.cpp
+)
+target_link_libraries(test_librarian
+    Qt6::Test
+    Qt6::Sql
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Network
+    Qt6::Gui
+    Qt6::Xml
+    KF6::I18n
+    KF6::Wallet
+    KF6::CoreAddons
+    KF6::TextEditor
+)
+add_test(NAME librarian_test COMMAND test_librarian)
+
 add_executable(test_librarianservice 
     tests/test_librarianservice.cpp 
     src/librarianservice.cpp 
     src/librariandatabase.cpp
+    src/llmservice.cpp
 )
 target_link_libraries(test_librarianservice 
     Qt6::Test 
     Qt6::Sql 
     Qt6::Core 
     Qt6::Concurrent
+    Qt6::Network
     KF6::I18n
+    KF6::Wallet
 )
+add_test(NAME librarian_service_test COMMAND test_librarianservice)
 add_executable(test_projectmanager 
     tests/test_projectmanager.cpp 
     src/projectmanager.cpp
