@@ -85,7 +85,7 @@ QWidget* SettingsDialog::createLLMTab()
     auto *layout = new QVBoxLayout(tab);
 
     m_activeProviderCombo = new QComboBox(this);
-    m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok (xAI)"), QStringLiteral("Gemini (Google)")});
+    m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok (xAI)"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
     
     auto *providerLayout = new QFormLayout();
     providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
@@ -148,8 +148,8 @@ QWidget* SettingsDialog::createLLMTab()
     grokLayout->addRow(i18n("Endpoint:"), m_grokEndpointEdit);
     layout->addWidget(grokGroup);
 
-    // Gemini Group
-    auto *geminiGroup = new QGroupBox(i18n("Gemini (Google)"), this);
+    // Google Group
+    auto *geminiGroup = new QGroupBox(i18n("Google"), this);
     auto *geminiLayout = new QFormLayout(geminiGroup);
     m_geminiKeyEdit = new QLineEdit(this);
     m_geminiKeyEdit->setEchoMode(QLineEdit::Password);
@@ -161,6 +161,20 @@ QWidget* SettingsDialog::createLLMTab()
     m_geminiEndpointEdit->setPlaceholderText(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"));
     geminiLayout->addRow(i18n("Endpoint:"), m_geminiEndpointEdit);
     layout->addWidget(geminiGroup);
+
+    // LM Studio Group
+    auto *lmstudioGroup = new QGroupBox(i18n("LM Studio"), this);
+    auto *lmstudioLayout = new QFormLayout(lmstudioGroup);
+    m_lmstudioKeyEdit = new QLineEdit(this);
+    m_lmstudioKeyEdit->setEchoMode(QLineEdit::Password);
+    lmstudioLayout->addRow(i18n("API Key (Optional):"), m_lmstudioKeyEdit);
+    m_lmstudioModelEdit = new QLineEdit(this);
+    m_lmstudioModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
+    lmstudioLayout->addRow(i18n("Default Model:"), m_lmstudioModelEdit);
+    m_lmstudioEndpointEdit = new QLineEdit(this);
+    m_lmstudioEndpointEdit->setPlaceholderText(QStringLiteral("http://localhost:1234/v1/chat/completions"));
+    lmstudioLayout->addRow(i18n("Endpoint:"), m_lmstudioEndpointEdit);
+    layout->addWidget(lmstudioGroup);
 
     layout->addStretch();
     return tab;
@@ -178,11 +192,11 @@ QWidget* SettingsDialog::createAgentsTab()
 
     auto createAgentRow = [&](const QString &id, const QString &label, const QString &prefix) {
         auto *prov = new QComboBox(this);
-        prov->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok"), QStringLiteral("Gemini")});
+        prov->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
         
         auto *model = new QComboBox(this);
         model->setEditable(true);
-        model->setMinimumWidth(200);
+        model->setMinimumWidth(350);
         
         auto *rowLayout = new QHBoxLayout();
         rowLayout->addWidget(prov);
@@ -197,6 +211,8 @@ QWidget* SettingsDialog::createAgentsTab()
     };
 
     createAgentRow(QStringLiteral("analyzer"), i18n("Game Analyzer"), QStringLiteral("analyzer"));
+    createAgentRow(QStringLiteral("chat"), i18n("AI Writing Assistant"), QStringLiteral("llm"));
+    createAgentRow(QStringLiteral("lorekeeper"), i18n("LoreKeeper"), QStringLiteral("lorekeeper"));
     createAgentRow(QStringLiteral("synopsis_file"), i18n("File Synopsis"), QStringLiteral("synopsis"));
     createAgentRow(QStringLiteral("synopsis_folder"), i18n("Folder Synopsis"), QStringLiteral("synopsis"));
     createAgentRow(QStringLiteral("chargen"), i18n("Character Generator"), QStringLiteral("chargen"));
@@ -315,6 +331,8 @@ QWidget* SettingsDialog::createPromptsTab()
     auto *coreLayout = new QFormLayout(coreGroup);
 
     setupEnginePromptRow(coreLayout, QStringLiteral("analyzer"), i18n("Game Analyzer"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("lorekeeper_discovery"), i18n("LoreKeeper Discovery"));
+    setupEnginePromptRow(coreLayout, QStringLiteral("lorekeeper_gen"), i18n("LoreKeeper Generation"));
     setupEnginePromptRow(coreLayout, QStringLiteral("synopsis_file"), i18n("File Synopsis"));
     setupEnginePromptRow(coreLayout, QStringLiteral("synopsis_folder"), i18n("Folder Synopsis"));
     setupEnginePromptRow(coreLayout, QStringLiteral("chargen"), i18n("Character Generator"));
@@ -371,12 +389,12 @@ QWidget* SettingsDialog::createAnalyzerTab()
     layout->addRow(i18n("Run Mode:"), m_analyzerRunModeCombo);
 
     m_analyzerProviderCombo = new QComboBox(this);
-    m_analyzerProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama")});
+    m_analyzerProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
     layout->addRow(i18n("Analyzer Provider:"), m_analyzerProviderCombo);
 
     m_analyzerModelCombo = new QComboBox(this);
     m_analyzerModelCombo->setEditable(true);
-    m_analyzerModelCombo->setMinimumWidth(250);
+    m_analyzerModelCombo->setMinimumWidth(350);
     layout->addRow(i18n("Analyzer Model:"), m_analyzerModelCombo);
 
     connect(m_analyzerProviderCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
@@ -427,9 +445,13 @@ void SettingsDialog::load()
     m_geminiEndpointEdit->setText(settings.value(QStringLiteral("llm/gemini/endpoint"), QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")).toString());
     m_geminiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Gemini));
 
+    m_lmstudioModelEdit->setText(settings.value(QStringLiteral("llm/lmstudio/model"), QString()).toString());
+    m_lmstudioEndpointEdit->setText(settings.value(QStringLiteral("llm/lmstudio/endpoint"), QStringLiteral("http://localhost:1234/v1/chat/completions")).toString());
+    m_lmstudioKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::LMStudio));
+
     m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
-    m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/provider"), 0).toInt());
-    m_analyzerModelCombo->setEditText(settings.value(QStringLiteral("analyzer/model")).toString());
+    m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/analyzer_provider"), 0).toInt());
+    m_analyzerModelCombo->setEditText(settings.value(QStringLiteral("analyzer/analyzer_model")).toString());
     updateModelCombos(static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()));
 
     // Load Agent Configurations
@@ -451,6 +473,7 @@ void SettingsDialog::load()
             case LLMProvider::Ollama: defaultModel = settings.value(QStringLiteral("llm/ollama/model")).toString(); break;
             case LLMProvider::Grok: defaultModel = settings.value(QStringLiteral("llm/grok/model")).toString(); break;
             case LLMProvider::Gemini: defaultModel = settings.value(QStringLiteral("llm/gemini/model")).toString(); break;
+            case LLMProvider::LMStudio: defaultModel = settings.value(QStringLiteral("llm/lmstudio/model")).toString(); break;
         }
 
         config.modelCombo->setEditText(settings.value(config.keyPrefix + QStringLiteral("/") + id + QStringLiteral("_model"), defaultModel).toString());
@@ -462,6 +485,12 @@ void SettingsDialog::load()
                        "Analyze the provided document for rule conflicts, ambiguities, and completeness gaps.\n"
                        "You must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\n"
                        "Format: [{\"line\": 0, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 0}]}]")).toString();
+
+    m_enginePrompts[QStringLiteral("lorekeeper_discovery")].content = settings.value(QStringLiteral("lorekeeper/discovery_prompt"),
+        QStringLiteral("You are a world-building assistant. Extract a list of entities of type '%1' from the provided text.")).toString();
+
+    m_enginePrompts[QStringLiteral("lorekeeper_gen")].content = settings.value(QStringLiteral("lorekeeper/gen_prompt"),
+        QStringLiteral("You are an expert world-builder. %1\n\nReturn ONLY the updated Markdown content.")).toString();
 
     m_enginePrompts[QStringLiteral("synopsis_file")].content = settings.value(QStringLiteral("synopsis/file_prompt"),
         QStringLiteral("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString();
@@ -565,9 +594,13 @@ void SettingsDialog::save()
     settings.setValue(QStringLiteral("llm/gemini/endpoint"), m_geminiEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Gemini, m_geminiKeyEdit->text());
 
+    settings.setValue(QStringLiteral("llm/lmstudio/model"), m_lmstudioModelEdit->text());
+    settings.setValue(QStringLiteral("llm/lmstudio/endpoint"), m_lmstudioEndpointEdit->text());
+    LLMService::instance().setApiKey(LLMProvider::LMStudio, m_lmstudioKeyEdit->text());
+
     settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
-    settings.setValue(QStringLiteral("analyzer/provider"), m_analyzerProviderCombo->currentIndex());
-    settings.setValue(QStringLiteral("analyzer/model"), m_analyzerModelCombo->currentText());
+    settings.setValue(QStringLiteral("analyzer/analyzer_provider"), m_analyzerProviderCombo->currentIndex());
+    settings.setValue(QStringLiteral("analyzer/analyzer_model"), m_analyzerModelCombo->currentText());
 
     // Save Agent Configurations
     for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
@@ -579,6 +612,8 @@ void SettingsDialog::save()
 
     // Save Core System Prompts
     settings.setValue(QStringLiteral("analyzer/system_prompt"), m_enginePrompts[QStringLiteral("analyzer")].content);
+    settings.setValue(QStringLiteral("lorekeeper/discovery_prompt"), m_enginePrompts[QStringLiteral("lorekeeper_discovery")].content);
+    settings.setValue(QStringLiteral("lorekeeper/gen_prompt"), m_enginePrompts[QStringLiteral("lorekeeper_gen")].content);
     settings.setValue(QStringLiteral("synopsis/file_prompt"), m_enginePrompts[QStringLiteral("synopsis_file")].content);
     settings.setValue(QStringLiteral("synopsis/folder_prompt"), m_enginePrompts[QStringLiteral("synopsis_folder")].content);
     settings.setValue(QStringLiteral("chargen/system_prompt"), m_enginePrompts[QStringLiteral("chargen")].content);

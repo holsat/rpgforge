@@ -71,15 +71,13 @@ private:
     void parseMarkdownTables(const QString &content, const QString &sourceFile);
     void parseMarkdownLists(const QString &content, const QString &sourceFile);
 
-    QSqlDatabase getDatabase() const;
-
     LLMService *m_llmService;
     LibrarianDatabase *m_db;
     QFileSystemWatcher *m_watcher;
     QString m_projectPath;
     QString m_dbPath;
     
-    QMutex m_mutex;
+    mutable QRecursiveMutex m_mutex;
     bool m_paused = false;
     QStringList m_pendingFiles;
     

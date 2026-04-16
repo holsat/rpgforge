@@ -3,13 +3,7 @@
 #include <QDir>
 #include <QFile>
 
-// MOCK LibrarianService that doesn't depend on LLMService
 #include "../src/librarianservice.h"
-#include "../src/llmservice.h"
-
-// Provide implementation for missing LLMService methods in test context
-void LLMService::sendNonStreamingRequest(const LLMRequest&, std::function<void(const QString&)>) {}
-LLMService& LLMService::instance() { static auto* inst = reinterpret_cast<LLMService*>(new QObject()); return *inst; }
 
 class TestLibrarianService : public QObject
 {
@@ -18,75 +12,70 @@ class TestLibrarianService : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
-        m_testDir.mkdir(QStringLiteral("test_project_service"));
-        m_service = new LibrarianService(&LLMService::instance(), this);
-        m_service->setProjectPath(QDir::current().filePath(QStringLiteral("test_project_service")));
+        QString testDirName = QStringLiteral("test_project_service");
+        QDir().mkdir(testDirName);
+        m_testPath = QDir::current().absoluteFilePath(testDirName);
+        
+        // Pass nullptr for LLMService as we only test heuristic extraction
+        m_service = new LibrarianService(nullptr, this);
+        m_service->setProjectPath(m_testPath);
     }
 
     void cleanupTestCase()
     {
         delete m_service;
-        QDir(QStringLiteral("test_project_service")).removeRecursively();
+        QDir(m_testPath).removeRecursively();
     }
 
     void testTableExtraction()
     {
         QString markdown = QStringLiteral(
-            "| Roll (1d10) | Class Description | Resilience | Whisper |\n"
-            "|:-----------:|-------------------|:----------:|:-------:|\n"
-            "|     1-6     | Slave             |     -2     |   +3    |\n"
-            "|     7-8     | Indentured        |     -1     |   +1    |\n");
+            "| Name | HP | AC |\n"
+            "|------|----|----|\n"
+            "| Orc  | 15 | 13 |\n"
+            "| Goblin | 7 | 15 |\n");
 
-        QString filePath = QDir::current().filePath(QStringLiteral("test_project_service/tables.md"));
+        QString filePath = m_testPath + QStringLiteral("/tables.md");
         QFile file(filePath);
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
         file.write(markdown.toUtf8());
         file.close();
 
         QSignalSpy spy(m_service, &LibrarianService::entityUpdated);
+        QSignalSpy scanSpy(m_service, &LibrarianService::scanningFinished);
         m_service->scanFile(filePath);
         
-        // Wait for signals
-        bool found = false;
-        for(int i=0; i<30; ++i) {
-            QTest::qWait(100);
-            if (spy.count() >= 2) {
-                found = true;
-                break;
-            }
-        }
-        QVERIFY(found);
+        // Wait for scanning to finish
+        QVERIFY(scanSpy.wait(3000));
+        QVERIFY(spy.count() >= 2);
     }
 
     void testListExtraction()
     {
         QString markdown = QStringLiteral(
+            "# Character Stats\n"
             "- Strength: 18\n"
-            "- Agility: 12\n");
+            "**Agility**: 12\n"
+            "__Intelligence__: 14\n"
+            "  Wisdom  : 10\n");
 
-        QString filePath = QDir::current().filePath(QStringLiteral("test_project_service/lists.md"));
+        QString filePath = m_testPath + QStringLiteral("/lists.md");
         QFile file(filePath);
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
         file.write(markdown.toUtf8());
         file.close();
 
         QSignalSpy spy(m_service, &LibrarianService::entityUpdated);
+        QSignalSpy scanSpy(m_service, &LibrarianService::scanningFinished);
         m_service->scanFile(filePath);
         
-        bool found = false;
-        for(int i=0; i<30; ++i) {
-            QTest::qWait(100);
-            if (spy.count() >= 2) {
-                found = true;
-                break;
-            }
-        }
-        QVERIFY(found);
+        QVERIFY(scanSpy.wait(3000));
+        QVERIFY(spy.count() >= 4);
     }
 
 private:
     LibrarianService *m_service;
-    QDir m_testDir;
+    QString m_testPath;
 };
 
 QTEST_MAIN(TestLibrarianService)

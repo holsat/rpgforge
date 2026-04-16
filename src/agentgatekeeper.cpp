@@ -3,7 +3,7 @@
 #include "librarianservice.h"
 #include "knowledgebase.h"
 #include "analyzerservice.h"
-#include "characterdossierservice.h"
+#include "lorekeeperservice.h"
 #include <QDebug>
 
 AgentGatekeeper& AgentGatekeeper::instance()
@@ -28,8 +28,11 @@ void AgentGatekeeper::pauseAll()
     SynopsisService::instance().pause();
     KnowledgeBase::instance().pause();
     AnalyzerService::instance().pause();
-    CharacterDossierService::instance().pause();
-    if (m_librarianService) m_librarianService->pause();
+    LoreKeeperService::instance().pause();
+    if (m_librarianService) {
+        qDebug() << "AgentGatekeeper: Pausing Data Extractor.";
+        m_librarianService->pause();
+    }
 }
 
 void AgentGatekeeper::resumeAll()
@@ -38,6 +41,9 @@ void AgentGatekeeper::resumeAll()
     SynopsisService::instance().resume();
     KnowledgeBase::instance().resume();
     AnalyzerService::instance().resume(); // Fixed: was pause()
-    CharacterDossierService::instance().resume();
-    if (m_librarianService) m_librarianService->resume();
+    LoreKeeperService::instance().resume();
+    if (m_librarianService) {
+        qDebug() << "AgentGatekeeper: Resuming Data Extractor.";
+        m_librarianService->resume();
+    }
 }

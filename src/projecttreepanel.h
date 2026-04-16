@@ -87,6 +87,7 @@ private:
     QToolButton *m_syncBtn = nullptr;
     QComboBox *m_explorationCombo = nullptr;
     QToolButton *m_newExplorationBtn = nullptr;
+    bool m_isSaving = false;
 };
 
 #endif // PROJECTTREEPANEL_H

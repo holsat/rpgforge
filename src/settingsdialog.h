@@ -84,6 +84,9 @@ private:
     QLineEdit *m_geminiKeyEdit;
     QLineEdit *m_geminiModelEdit;
     QLineEdit *m_geminiEndpointEdit;
+    QLineEdit *m_lmstudioKeyEdit;
+    QLineEdit *m_lmstudioModelEdit;
+    QLineEdit *m_lmstudioEndpointEdit;
     QLineEdit *m_embeddingModelEdit;
 
     // Prompts
