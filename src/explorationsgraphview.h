@@ -158,7 +158,8 @@ private:
     void drawLanePath(QPainter &p, const QString &branchName);
     void drawNode(QPainter &p, const NodeLayout &nl);
     void drawLandmarkLabel(QPainter &p, const NodeLayout &nl, const QColor &color);
-    void drawBranchLabel(QPainter &p, const QString &branchName, int laneX, int topY);
+    void drawBranchLabel(QPainter &p, const QString &branchName, int laneX, int topY,
+                         QList<QRect> &drawnLabelRects);
     void drawCurrentHeadRing(QPainter &p, const NodeLayout &nl);
     const NodeLayout *hitTest(const QPoint &pos) const;
     void showContextMenuForNode(const NodeLayout &nl, const QPoint &globalPos);

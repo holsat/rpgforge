@@ -157,7 +157,7 @@ void UnsavedChangesDialog::setupUi(const QString &currentBranch,
         const QString msg = i18n("Parked on '%1' — %2",
             currentBranch,
             QDateTime::currentDateTime().toString(QStringLiteral("MMM d, hh:mm")));
-        Q_EMIT stashRequested(msg);
+        Q_EMIT parkRequested(msg);
         accept();
     });
 

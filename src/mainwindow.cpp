@@ -2415,7 +2415,7 @@ void MainWindow::onSwitchExplorationRequested(const QString &branchName)
                         });
                 });
 
-        connect(dlg, &UnsavedChangesDialog::stashRequested,
+        connect(dlg, &UnsavedChangesDialog::parkRequested,
                 this, [this, repoPath, branchName](const QString &stashMsg) {
                     GitService::instance().stashChanges(repoPath, stashMsg)
                         .then(this, [this, repoPath, branchName](bool ok) {

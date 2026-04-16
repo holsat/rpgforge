@@ -68,9 +68,9 @@ Q_SIGNALS:
      * Fired on the main thread when the user confirms the "Park Changes"
      * action.  The caller should pass the message to GitService::stashChanges().
      *
-     * \param stashMessage User-supplied description for the stash entry.
+     * \param parkMessage User-supplied description for the parked changes.
      */
-    void stashRequested(const QString &stashMessage);
+    void parkRequested(const QString &parkMessage);
 
 private:
     void setupUi(const QString &currentBranch, const QString &targetBranch);

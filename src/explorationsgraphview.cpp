@@ -235,6 +235,9 @@ void ExplorationGraphView::paintEvent(QPaintEvent *)
 
     // Draw branch labels at top of each lane. Use the cached top-Y computed
     // during layoutNodes() instead of scanning all nodes per branch.
+    // UX-5: Track bounding rects of drawn labels to avoid visual collisions
+    // when several branches share the same top-Y.
+    QList<QRect> drawnLabelRects;
     for (auto it = m_laneMap.constBegin(); it != m_laneMap.constEnd(); ++it) {
         auto tyIt = m_branchTopY.constFind(it.key());
         if (tyIt == m_branchTopY.constEnd())
@@ -242,7 +245,21 @@ void ExplorationGraphView::paintEvent(QPaintEvent *)
         const int laneX = width() / 2 + it.value() * kLaneWidth;
         const int topY = tyIt.value() - m_scrollOffset;
         if (topY < height())
-            drawBranchLabel(p, it.key(), laneX, topY - 24);
+            drawBranchLabel(p, it.key(), laneX, topY - 24, drawnLabelRects);
+    }
+
+    // UX-3: Identify the HEAD node as the first (newest) layout entry whose
+    // branch matches m_currentBranch.  This avoids ambiguity when multiple
+    // branches share the same tip hash (e.g. after a fast-forward merge).
+    // If no node matches, no HEAD ring is drawn (silent).
+    int headLayoutIndex = -1;
+    if (!m_currentBranch.isEmpty()) {
+        for (int i = 0; i < m_layout.size(); ++i) {
+            if (m_layout[i].node->branchName == m_currentBranch) {
+                headLayoutIndex = i;
+                break;
+            }
+        }
     }
 
     // Draw nodes
@@ -261,9 +278,8 @@ void ExplorationGraphView::paintEvent(QPaintEvent *)
         if (!nl.node->tags.isEmpty())
             drawLandmarkLabel(p, screenNl, colorForBranchConst(nl.node->branchName));
 
-        // HEAD indicator: first node on the current branch is HEAD
-        if (nl.node->branchName == m_currentBranch && !m_nodes.isEmpty()
-            && nl.node->hash == m_nodes.first().hash)
+        // HEAD indicator: newest node on the current branch
+        if (i == headLayoutIndex)
             drawCurrentHeadRing(p, screenNl);
 
         // Keyboard selection ring
@@ -289,7 +305,23 @@ void ExplorationGraphView::drawLanePath(QPainter &p, const QString &branchName)
     // Nodes are newest-first (lowest y index = top), so they are already in y order
     QColor lineColor = colorForBranchConst(branchName);
     lineColor.setAlpha(200);
-    p.setPen(QPen(lineColor, 2));
+
+    // UX-1 (WCAG 1.4.1): Differentiate lanes by pen style in addition to color
+    // so users with deuteranopia/protanopia can distinguish branches.  Style
+    // varies with the lane index magnitude; primary lanes (0, ±1) remain solid.
+    const int laneIndex = m_laneMap.value(branchName, 0);
+    const int laneAbs = std::abs(laneIndex);
+    Qt::PenStyle laneStyle;
+    if (laneAbs <= 1) {
+        laneStyle = Qt::SolidLine;
+    } else if (laneAbs == 2) {
+        laneStyle = Qt::DashLine;
+    } else if (laneAbs == 3) {
+        laneStyle = Qt::DotLine;
+    } else {
+        laneStyle = Qt::DashDotLine;
+    }
+    p.setPen(QPen(lineColor, 2, laneStyle));
     p.setBrush(Qt::NoBrush);
 
     QPainterPath path;
@@ -395,7 +427,8 @@ void ExplorationGraphView::drawLandmarkLabel(QPainter &p, const NodeLayout &nl,
 }
 
 void ExplorationGraphView::drawBranchLabel(QPainter &p, const QString &branchName,
-                                            int laneX, int topY)
+                                            int laneX, int topY,
+                                            QList<QRect> &drawnLabelRects)
 {
     QFont labelFont = font();
     labelFont.setPointSize(8);
@@ -407,10 +440,33 @@ void ExplorationGraphView::drawBranchLabel(QPainter &p, const QString &branchNam
         label = label.left(13) + QStringLiteral("\u2026");
     }
 
-    p.setPen(colorForBranchConst(branchName));
     const QFontMetrics fm(labelFont);
     const int textWidth = fm.horizontalAdvance(label);
-    p.drawText(QPoint(laneX - textWidth / 2, topY), label);
+    const int lineHeight = fm.height();
+    const int drawX = laneX - textWidth / 2;
+
+    // UX-5: Nudge the baseline down until its bounding rect no longer
+    // overlaps any previously drawn label within this paintEvent.
+    int drawY = topY;
+    auto boundsFor = [&](int baselineY) {
+        return fm.boundingRect(label).translated(drawX, baselineY);
+    };
+    bool collides = true;
+    while (collides) {
+        collides = false;
+        const QRect candidate = boundsFor(drawY);
+        for (const QRect &taken : std::as_const(drawnLabelRects)) {
+            if (candidate.intersects(taken)) {
+                drawY += lineHeight + 4;
+                collides = true;
+                break;
+            }
+        }
+    }
+
+    p.setPen(colorForBranchConst(branchName));
+    p.drawText(QPoint(drawX, drawY), label);
+    drawnLabelRects.append(boundsFor(drawY));
 }
 
 void ExplorationGraphView::drawCurrentHeadRing(QPainter &p, const NodeLayout &nl)
@@ -465,6 +521,30 @@ void ExplorationGraphView::mousePressEvent(QMouseEvent *event)
 
 void ExplorationGraphView::mouseMoveEvent(QMouseEvent *event)
 {
+    // UX-4: Show a rich tooltip for nodes first (message, date, word count).
+    // Falls through to the branch-label tooltip below if no node is hit.
+    if (const NodeLayout *hit = hitTest(event->pos())) {
+        const ExplorationNode *node = hit->node;
+        // Skip the tooltip when the word count is still being computed in the
+        // background; showing "0 words" would be misleading.
+        if (node->wordCount > 0) {
+            const QString dateStr =
+                node->date.toString(QStringLiteral("MMM d, hh:mm"));
+            const QString deltaStr = (node->wordCountDelta >= 0)
+                ? QStringLiteral("+%1").arg(node->wordCountDelta)
+                : QString::number(node->wordCountDelta);
+            const QString tip = i18nc(
+                "Exploration node tooltip: commit message, timestamp, word count and delta",
+                "%1\n%2\n%3 words (%4)",
+                node->message,
+                dateStr,
+                QString::number(node->wordCount),
+                deltaStr);
+            QToolTip::showText(event->globalPosition().toPoint(), tip, this);
+            return;
+        }
+    }
+
     // Show tooltip for branch labels when hovering near them. Use the cached
     // top-Y computed during layoutNodes() instead of scanning all nodes.
     for (auto it = m_laneMap.constBegin(); it != m_laneMap.constEnd(); ++it) {
