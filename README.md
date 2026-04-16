@@ -33,9 +33,9 @@ Built on high-performance editing technology, RPG Forge provides a clean, distra
 
 ## Why RPG Forge?
 
-*   **Privacy First:** Your notes and manuscript remain on your computer. You choose which AI providers to connect to, and we never use your creative work to train external models without your explicit configuration.
+*   **Privacy First:** Your notes and manuscript remain on your computer. You choose which AI providers to connect to. We are not an QI provider and RPG forge has no access to and can neven use your creative work to train and AI models. If you configure and use cloud based AI providers check with your AI providers regarding their privacy and copyright policies, that is something we have no control over. If you have the ability to run a local model, because you have an apple silicon Mac or a very beefy computer, then your content never leaves your home.
 *   **Built for Professional Performance:** A native Linux experience that respects your system theme and provides the responsiveness that serious creators demand.
-*   **One Workspace, Total Control:** No more switching between word processors, spreadsheets, and wiki software. Everything you need to build a universe is in one place.
+*   **One Workspace, Total Control:** No more switching between word processors, spreadsheets, and wiki software. No more worrying about saving multiple versions of your files, and then manually merging and chasing down all changes. Everything you need to build a universe, track its' development and apply polish, or simulate play testing is in one place.
 *   **Scrivener Import:** The only linux native tool that I know of that will import your scrivener project for you and allow you to continue to work on it on Linux.
 
 ---
