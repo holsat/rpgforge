@@ -216,6 +216,7 @@ void MainWindow::setupEditor()
     m_editorSplitter = new QSplitter(Qt::Horizontal, this);
     m_editorSplitter->addWidget(m_editorView);
     m_editorSplitter->addWidget(m_researchView);
+    m_editorView->show();
     m_researchView->hide(); // hidden until a research file is opened
 
     // Shared signals for both editors
@@ -412,10 +413,9 @@ void MainWindow::setupSidebar()
     m_centralViewLayout->addWidget(m_pdfViewer);
 
     // Only show the editor view initially; hide the rest
-    m_corkboardView->hide();
-    m_imagePreview->hide();
-    m_diffView->hide();
-    m_pdfViewer->hide();
+    showCentralView(m_editorSplitter);
+    m_editorView->show();
+
     vbox->addWidget(viewContainer);
 
     m_mainSplitter->addWidget(m_sidebar);
@@ -827,6 +827,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 {
     if (!url.isEmpty() && url.isLocalFile()) {
         QString path = url.toLocalFile();
+        qDebug() << "MainWindow: openFileFromUrl request for:" << path;
         QString suffix = QFileInfo(path).suffix().toLower();
 
         static const QStringList imgSuffixes = {
@@ -867,8 +868,9 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         bool isResearch = false;
         if (ProjectManager::instance().isProjectOpen()) {
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
-            ProjectTreeItem *item = m_projectTree->model()->findItem(relPath);
+            ProjectTreeItem *item = ProjectManager::instance().findItem(relPath);
             if (item) {
+                qDebug() << "MainWindow: Found item in tree for" << relPath << "category:" << item->category;
                 ProjectTreeItem *p = item;
                 while (p) {
                     if (p->category == ProjectTreeItem::LoreKeeper || 
@@ -888,28 +890,33 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         }
 
         if (isResearch) {
+            qDebug() << "MainWindow: Opening as Research file.";
+            m_researchView->show();
+            m_editorView->show();
             if (m_researchDocument->url() == url) {
+                qDebug() << "MainWindow: Research file already open, bringing to front.";
                 showCentralView(m_editorSplitter);
                 return;
             }
             m_researchDocument->openUrl(url);
-            m_researchView->show();
-            m_editorView->show();
             m_researchDocument->setReadWrite(true);
         } else {
+            qDebug() << "MainWindow: Opening as Manuscript/General file.";
+            m_editorView->show();
+            m_researchView->hide();
             if (m_document->url() == url) {
+                qDebug() << "MainWindow: File already open, bringing to front.";
                 showCentralView(m_editorSplitter);
                 return;
             }
             m_document->openUrl(url);
-            m_editorView->show();
-            m_researchView->hide();
             m_document->setReadWrite(!isLoreKeeper);
         }
 
+        qDebug() << "MainWindow: Showing editor splitter.";
         showCentralView(m_editorSplitter);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
-            m_previewPanel->show();
+            togglePreview();
             m_previewPanel->setBaseUrl(url);
         }
         const QString fileName = url.fileName();
@@ -1228,9 +1235,28 @@ void MainWindow::navigateToLine(int line)
 void MainWindow::togglePreview()
 {
     if (m_previewPanel) {
-        m_previewPanel->setVisible(m_togglePreviewAction->isChecked());
-        if (m_previewPanel->isVisible()) {
+        bool visible = m_togglePreviewAction->isChecked();
+        m_previewPanel->setVisible(visible);
+        
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (visible) {
+            // Give it some reasonable space if it was hidden (size 0)
+            if (sizes.size() >= 3 && sizes[2] < 50) {
+                int total = 0;
+                for (int s : sizes) total += s;
+                int previewSize = total * 0.3; // 30% for preview
+                sizes[2] = previewSize;
+                sizes[1] = total - sizes[0] - previewSize;
+                m_mainSplitter->setSizes(sizes);
+            }
             syncScroll();
+        } else {
+            // Hide it completely in the splitter
+            if (sizes.size() >= 3) {
+                sizes[1] += sizes[2];
+                sizes[2] = 0;
+                m_mainSplitter->setSizes(sizes);
+            }
         }
     }
 }
@@ -1266,11 +1292,24 @@ void MainWindow::updateTitle()
 }
 void MainWindow::showCentralView(QWidget *widget)
 {
-    m_editorSplitter->setVisible(widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
+    // The splitter should be visible if any of its children are the requested widget
+    bool showSplitter = (widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
+    m_editorSplitter->setVisible(showSplitter);
+    
     m_corkboardView->setVisible(widget == m_corkboardView);
     m_imagePreview->setVisible(widget == m_imagePreview);
     m_diffView->setVisible(widget == m_diffView);
     m_pdfViewer->setVisible(widget == m_pdfViewer);
+
+    if (showSplitter) {
+        // Ensure the splitter has size
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 2 && sizes[1] < 100) {
+            int total = sizes[0] + sizes[1] + (sizes.size() > 2 ? sizes[2] : 0);
+            sizes[1] = total - sizes[0] - (sizes.size() > 2 ? sizes[2] : 0);
+            m_mainSplitter->setSizes(sizes);
+        }
+    }
 
     // Add the Kompare part's toolbar only while the diff view is visible,
     // so its actions never pollute the primary toolbar.

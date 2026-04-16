@@ -95,13 +95,18 @@ QString ProjectManager::projectPath() const
 
 bool ProjectManager::openProject(const QString &filePath)
 {
+    qDebug() << "ProjectManager: Authoritative request to open project:" << filePath;
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "ProjectManager: Failed to open file for reading:" << filePath;
         return false;
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (!doc.isObject()) return false;
+    if (!doc.isObject()) {
+        qWarning() << "ProjectManager: Invalid project file format (not a JSON object):" << filePath;
+        return false;
+    }
 
     m_projectFilePath = filePath;
     m_data = doc.object();
@@ -109,8 +114,11 @@ bool ProjectManager::openProject(const QString &filePath)
     // Migrate old project files to current schema version
     migrate(m_data);
 
+    qDebug() << "ProjectManager: Project data loaded. Syncing model.";
     // Sync authoritative model
     m_treeModel->setProjectData(m_data.value(QLatin1String(ProjectKeys::Tree)).toObject());
+    
+    qDebug() << "ProjectManager: Model synced. Root children:" << m_treeModel->rowCount(QModelIndex());
 
     Q_EMIT projectOpened();
     return true;
@@ -352,16 +360,70 @@ void ProjectManager::migrate(QJsonObject &data)
 {
     int version = data.value(QLatin1String(ProjectKeys::Version)).toInt(1);
     bool changed = false;
+    qDebug() << "ProjectManager: Checking migration for project version" << version;
 
-    // Standard migration logic
     if (version < 3) {
+        qDebug() << "ProjectManager: Upgrading project schema to v3.";
         version = 3;
+        changed = true;
+    }
+
+    QJsonObject tree = data.value(QLatin1String(ProjectKeys::Tree)).toObject();
+    
+    // Recursive helper to ensure categories are set for standard folders
+    std::function<bool(QJsonObject&)> migrateNode = [&](QJsonObject &node) -> bool {
+        bool nodeChanged = false;
+        QString name = node.value(QLatin1String(ProjectKeys::Name)).toString();
+        int cat = node.value(QLatin1String(ProjectKeys::Category)).toInt();
+
+        // If category is missing or None, try to identify by name
+        if (cat == static_cast<int>(ProjectTreeItem::None)) {
+            if (name.compare(QLatin1String(ProjectKeys::FolderManuscript), Qt::CaseInsensitive) == 0 || 
+                name == i18n(ProjectKeys::FolderManuscript)) {
+                node[QLatin1String(ProjectKeys::Category)] = static_cast<int>(ProjectTreeItem::Manuscript);
+                nodeChanged = true;
+            } else if (name.compare(QLatin1String(ProjectKeys::FolderResearch), Qt::CaseInsensitive) == 0 || 
+                       name == i18n(ProjectKeys::FolderResearch)) {
+                node[QLatin1String(ProjectKeys::Category)] = static_cast<int>(ProjectTreeItem::Research);
+                nodeChanged = true;
+            } else if (name.compare(QLatin1String(ProjectKeys::FolderLoreKeeper), Qt::CaseInsensitive) == 0 || 
+                       name == i18n(ProjectKeys::FolderLoreKeeper)) {
+                node[QLatin1String(ProjectKeys::Category)] = static_cast<int>(ProjectTreeItem::LoreKeeper);
+                nodeChanged = true;
+            } else if (name.compare(QLatin1String(ProjectKeys::FolderMedia), Qt::CaseInsensitive) == 0 || 
+                       name == i18n(ProjectKeys::FolderMedia)) {
+                node[QLatin1String(ProjectKeys::Category)] = static_cast<int>(ProjectTreeItem::Media);
+                nodeChanged = true;
+            }
+        }
+
+        // Recurse into children
+        QJsonArray children = node.value(QLatin1String(ProjectKeys::Children)).toArray();
+        bool childrenChanged = false;
+        for (int i = 0; i < children.size(); ++i) {
+            QJsonObject child = children[i].toObject();
+            if (migrateNode(child)) {
+                children[i] = child;
+                childrenChanged = true;
+            }
+        }
+
+        if (childrenChanged) {
+            node[QLatin1String(ProjectKeys::Children)] = children;
+            nodeChanged = true;
+        }
+
+        return nodeChanged;
+    };
+
+    if (migrateNode(tree)) {
+        qDebug() << "ProjectManager: Successfully categorized standard folders during migration.";
+        data[QLatin1String(ProjectKeys::Tree)] = tree;
         changed = true;
     }
 
     if (changed) {
         data[QLatin1String(ProjectKeys::Version)] = version;
-        saveProject();
     }
 }
 
@@ -432,6 +494,7 @@ void ProjectManager::triggerWordCountUpdate()
 
 void ProjectManager::requestTreeUpdate(const QString &category, const QString &entityName, const QString &relativePath)
 {
+    qDebug() << "ProjectManager: Received tree update request for" << entityName << "in" << category;
     QMutexLocker locker(&m_queueMutex);
     m_treeUpdateQueue.enqueue({category, entityName, relativePath});
     m_treeUpdateTimer->start();
@@ -447,20 +510,22 @@ void ProjectManager::processTreeUpdateQueue()
     bool changed = false;
     while (!m_treeUpdateQueue.isEmpty()) {
         TreeUpdateRequest req = m_treeUpdateQueue.dequeue();
+        qDebug() << "ProjectManager: Processing request for" << req.entityName << "in category" << req.category;
         
+        // Find LoreKeeper root using a robust breadth-first search
         ProjectTreeItem *loreRoot = nullptr;
-        std::function<void(ProjectTreeItem*)> findLore = [&](ProjectTreeItem *item) {
-            if (!item) return;
-            if (item->category == ProjectTreeItem::LoreKeeper) {
-                loreRoot = item;
-                return;
+        QQueue<ProjectTreeItem*> searchQueue;
+        searchQueue.enqueue(m_treeModel->rootItem());
+
+        while (!searchQueue.isEmpty()) {
+            ProjectTreeItem *current = searchQueue.dequeue();
+            if (!current) continue;
+            if (current->category == ProjectTreeItem::LoreKeeper) {
+                loreRoot = current;
+                break;
             }
-            for (auto *c : item->children) {
-                if (loreRoot) break;
-                findLore(c);
-            }
-        };
-        findLore(m_treeModel->rootItem());
+            for (auto *c : current->children) searchQueue.enqueue(c);
+        }
         
         if (loreRoot) {
             ProjectTreeItem *catFolder = nullptr;
@@ -472,6 +537,7 @@ void ProjectManager::processTreeUpdateQueue()
             }
             
             if (!catFolder) {
+                qDebug() << "ProjectManager: Category folder" << req.category << "not found, creating it.";
                 m_treeModel->addFolder(req.category, QStringLiteral("lorekeeper/") + req.category, m_treeModel->indexForItem(loreRoot));
                 catFolder = loreRoot->children.last();
             }
@@ -485,13 +551,19 @@ void ProjectManager::processTreeUpdateQueue()
             }
             
             if (!found) {
+                qDebug() << "ProjectManager: Adding new file to model:" << req.entityName << "at" << req.relativePath;
                 m_treeModel->addFile(req.entityName, req.relativePath, m_treeModel->indexForItem(catFolder));
                 changed = true;
+            } else {
+                qDebug() << "ProjectManager: Entity" << req.entityName << "already exists in tree.";
             }
+        } else {
+            qWarning() << "ProjectManager: CRITICAL - Could not find LoreKeeper root node in authoritative tree!";
         }
     }
     
     if (changed) {
+        qDebug() << "ProjectManager: Tree structure changed, saving and emitting signal.";
         saveProject();
         Q_EMIT treeChanged();
     }

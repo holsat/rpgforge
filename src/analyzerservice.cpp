@@ -43,11 +43,20 @@ AnalyzerService::~AnalyzerService() = default;
 
 void AnalyzerService::analyzeDocument(const QString &filePath, const QString &content)
 {
-    if (!ProjectManager::instance().getActiveFiles().contains(filePath)) {
+    qDebug() << "Analyzer AI: Requested analysis for" << filePath;
+    
+    QStringList activeFiles = ProjectManager::instance().getActiveFiles();
+    if (!activeFiles.contains(filePath)) {
+        qWarning() << "Analyzer AI: Skipping analysis - file is NOT in authoritative project tree:" << filePath;
+        // Print first 5 active files for debugging
+        if (!activeFiles.isEmpty()) {
+            qDebug() << "Analyzer AI: First few active files:" << activeFiles.mid(0, 5);
+        }
         return;
     }
 
     if (m_paused) {
+        qDebug() << "Analyzer AI: Service is paused. Queuing request.";
         // Keep only the latest content for each file in the queue
         auto it = std::find_if(m_queue.begin(), m_queue.end(), [&](const PendingAnalysis &p) {
             return p.filePath == filePath;
@@ -61,23 +70,31 @@ void AnalyzerService::analyzeDocument(const QString &filePath, const QString &co
     }
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    // Default to "Paused" if not set
-    int runMode = settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt(); 
-    if (runMode == 2) { // 2 = Paused
+    int runMode = settings.value(QStringLiteral("analyzer/run_mode"), 0).toInt(); // 0 = Auto, 1 = Manual, 2 = Paused
+    qDebug() << "Analyzer AI: Current run mode:" << runMode;
+    
+    if (runMode == 2) { 
+        qDebug() << "Analyzer AI: Run mode is set to 'Paused'. Skipping.";
         return;
     }
 
-    if (m_activeAnalysisFile == filePath) return;
+    if (m_activeAnalysisFile == filePath) {
+        qDebug() << "Analyzer AI: Analysis already in progress for this file. Skipping duplicate request.";
+        return;
+    }
+    
     m_activeAnalysisFile = filePath;
-
     Q_EMIT analysisStarted(filePath);
 
-    // Step 1: Query KnowledgeBase for RAG context
+    qDebug() << "Analyzer AI: Starting RAG context search...";
     QString queryText = content.left(1000);
     
     QPointer<AnalyzerService> weakThis(this);
     KnowledgeBase::instance().search(queryText, 3, filePath, [weakThis, filePath, content](const QList<SearchResult> &results) {
-        if (weakThis) weakThis->onRagSearchCompleted(filePath, content, results);
+        if (weakThis) {
+            qDebug() << "Analyzer AI: RAG search returned" << results.size() << "chunks.";
+            weakThis->onRagSearchCompleted(filePath, content, results);
+        }
     });
 }
 
@@ -161,20 +178,24 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     LLMService::instance().sendNonStreamingRequest(req, [weakThis, filePath](const QString &response) {
         if (!weakThis) return;
         
+        qDebug() << "Analyzer AI: Received response from LLM for" << filePath << "(length:" << response.length() << ")";
         weakThis->m_activeAnalysisFile.clear();
         
         if (response.isEmpty()) {
+            qWarning() << "Analyzer AI: Received EMPTY response from LLM.";
             Q_EMIT weakThis->analysisFailed(filePath, i18n("Empty response from LLM."));
             return;
         }
 
         QList<Diagnostic> diagnostics = parseDiagnostics(response);
+        qDebug() << "Analyzer AI: Successfully parsed" << diagnostics.size() << "diagnostics.";
         Q_EMIT weakThis->diagnosticsUpdated(filePath, diagnostics);
     });
 }
 
 QList<Diagnostic> AnalyzerService::parseDiagnostics(const QString &jsonResponse)
 {
+    qDebug() << "Analyzer AI: Parsing raw JSON response:" << jsonResponse.left(500);
     QList<Diagnostic> results;
     
     // Simple JSON cleanup if LLM included fences

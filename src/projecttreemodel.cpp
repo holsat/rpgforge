@@ -98,7 +98,7 @@ QVariant ProjectTreeModel::data(const QModelIndex &index, int role) const
             switch(item->category) {
                 case ProjectTreeItem::Manuscript: return QIcon::fromTheme(QStringLiteral("document-edit"));
                 case ProjectTreeItem::Research: return QIcon::fromTheme(QStringLiteral("system-search"));
-                case ProjectTreeItem::LoreKeeper: return QIcon::fromTheme(QStringLiteral("dragonplayer"));
+                case ProjectTreeItem::LoreKeeper: return QIcon(QStringLiteral(":/icons/lorekeeper.png"));
                 case ProjectTreeItem::Media: return QIcon::fromTheme(QStringLiteral("folder-videos"));
                 case ProjectTreeItem::Chapter: return QIcon::fromTheme(QStringLiteral("folder-text"));
                 default: return QIcon::fromTheme(QStringLiteral("folder"));
@@ -292,6 +292,7 @@ QModelIndex ProjectTreeModel::addFolder(const QString &name, const QString &path
     parentItem->children.append(item);
     if (!m_bulkImporting) endInsertRows();
 
+    qDebug() << "ProjectTreeModel: [INSERT] Folder" << name << "at" << path << "under" << parentItem->name;
     return index(row, 0, parent);
 }
 
@@ -312,6 +313,7 @@ QModelIndex ProjectTreeModel::addFile(const QString &name, const QString &path, 
     parentItem->children.append(item);
     if (!m_bulkImporting) endInsertRows();
 
+    qDebug() << "ProjectTreeModel: [INSERT] File" << name << "at" << path << "under" << parentItem->name;
     return index(row, 0, parent);
 }
 

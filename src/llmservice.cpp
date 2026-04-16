@@ -200,6 +200,7 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
                                            std::function<void(const QString&)> nonStreamCallback)
 {
     const QString model = resolvedModel(request);
+    qDebug() << "LLM Service: Validating model" << model << "for provider" << static_cast<int>(request.provider) << "Service:" << request.serviceName;
     if (model.isEmpty()) {
         if (nonStreamCallback) {
             qWarning() << "LLM: no model configured — aborting request";

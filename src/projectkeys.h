@@ -44,6 +44,7 @@ namespace ProjectKeys {
     // Tree Node keys
     inline constexpr auto Type = "type";
     inline constexpr auto Path = "path";
+    inline constexpr auto Category = "category";
     inline constexpr auto Children = "children";
 
     // Current schema version

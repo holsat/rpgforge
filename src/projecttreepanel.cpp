@@ -178,12 +178,13 @@ void ProjectTreePanel::setupUi()
 
 void ProjectTreePanel::onProjectOpened()
 {
+    qDebug() << "ProjectTreePanel: Handling project update/opened. Model root children:" << m_model->rowCount(QModelIndex());
     if (m_isSaving) {
-        qDebug() << "ProjectTreePanel: Skipping model reset due to self-save.";
+        qDebug() << "ProjectTreePanel: Skipping view reset during self-save.";
         return;
     }
     
-    qDebug() << "ProjectTreePanel: Refreshing authoritative tree view.";
+    qDebug() << "ProjectTreePanel: Refreshing tree view and expanding all.";
 
     m_refreshTimer->stop();
     m_activeFolderIndex = QPersistentModelIndex();
