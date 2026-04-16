@@ -1387,6 +1387,26 @@ void MainWindow::showCentralView(QWidget *widget)
     }
 }
 
+QString MainWindow::currentViewId() const
+{
+    if (m_diffView && m_diffView->isVisible()) {
+        return QStringLiteral("diff");
+    }
+    if (m_corkboardView && m_corkboardView->isVisible()) {
+        return QStringLiteral("corkboard");
+    }
+    if (m_imagePreview && m_imagePreview->isVisible()) {
+        return QStringLiteral("imagepreview");
+    }
+    if (m_pdfViewer && m_pdfViewer->isVisible()) {
+        return QStringLiteral("pdf");
+    }
+    if (m_editorSplitter && m_editorSplitter->isVisible()) {
+        return QStringLiteral("editor");
+    }
+    return QString();
+}
+
 void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2)
 {
     // If path2OrHash1 looks like a file path (starts with /), compare files.

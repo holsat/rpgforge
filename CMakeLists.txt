@@ -13,7 +13,7 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml DBus)
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -154,6 +154,8 @@ add_executable(rpgforge
     src/corkboardcard.h
     src/pdfexporter.cpp
     src/pdfexporter.h
+    src/rpgforgedbus.cpp
+    src/rpgforgedbus.h
     src/resources.qrc
 )
 
@@ -166,6 +168,7 @@ target_link_libraries(rpgforge
     Qt6::Concurrent
     Qt6::Sql
     Qt6::Xml
+    Qt6::DBus
     KF6::CoreAddons
     KF6::I18n
     KF6::XmlGui

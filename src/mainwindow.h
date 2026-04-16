@@ -133,6 +133,28 @@ public:
     KTextEditor::View* activeView() const;
     KTextEditor::Document* activeDocument() const;
 
+    /**
+     * @brief Returns the KTextEditor document currently open in the main editor,
+     *        or nullptr if no document is loaded. Used by the DBus adaptor.
+     */
+    KTextEditor::Document* currentDocument() const { return m_document; }
+
+    /**
+     * @brief Returns the identifier of the central view that is currently visible.
+     *
+     * The returned value is one of: "editor", "diff", "corkboard",
+     * "imagepreview", "pdf", or an empty string if no central widget is
+     * visible. Used by the DBus adaptor.
+     */
+    QString currentViewId() const;
+
+    /**
+     * @brief Returns the application's sidebar widget (non-owning pointer).
+     *
+     * Used by the DBus adaptor to enumerate and switch panels.
+     */
+    Sidebar* sidebar() const { return m_sidebar; }
+
 private Q_SLOTS:
     void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
 
