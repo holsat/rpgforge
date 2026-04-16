@@ -1,4 +1,5 @@
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -269,7 +270,7 @@ void MainWindow::setupEditor()
 
     // Step 1: Seamless Version Control (Auto-Sync)
     auto setupAutoSync = [this](KTextEditor::Document *doc) {
-        connect(doc, &KTextEditor::Document::documentSavedOrUploaded, this, [this](KTextEditor::Document *d) {
+        connect(doc, &KTextEditor::Document::documentSavedOrUploaded, this, [](KTextEditor::Document *d) {
             if (ProjectManager::instance().isProjectOpen() && ProjectManager::instance().autoSync()) {
                 GitService::instance().autoCommit(d->url().toLocalFile());
             }
@@ -521,6 +522,8 @@ void MainWindow::setupSidebar()
     SynopsisService::instance().setModel(m_projectTree->model());
 
     connect(m_projectTree->model(), &ProjectTreeModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
+        Q_UNUSED(topLeft);
+        Q_UNUSED(bottomRight);
         if (roles.contains(ProjectTreeModel::SynopsisRole) || roles.contains(ProjectTreeModel::StatusRole)) {
             // If the corkboard is showing a folder that contains one of these items, refresh it
             // Simple approach: if corkboard is visible, just refresh it.
@@ -1486,7 +1489,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         QWidget *popup = qobject_cast<QWidget*>(watched);
         if (popup && popup->parentWidget()) {
             // Defer repositioning to after the Show event is fully processed
-            QTimer::singleShot(0, this, [this, popup, view]() {
+            QTimer::singleShot(0, this, [popup, view]() {
                 if (!popup->isVisible() || !view) return;
 
                 KTextEditor::Cursor cursor = view->cursorPosition();
@@ -1890,7 +1893,7 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
     // Check if we've already added the AI menu to this specific QMenu object.
     // KTextEditor sometimes reuses the menu or different plugins add to it.
     for (auto *action : menu->actions()) {
-        if (action->text() == i18n("AI Assistant") || action->menu() && action->menu()->title() == i18n("AI Assistant")) {
+        if (action->text() == i18n("AI Assistant") || (action->menu() && action->menu()->title() == i18n("AI Assistant"))) {
             return;
         }
     }
@@ -2005,7 +2008,7 @@ void MainWindow::importScrivener()
     // Explicitly keep them paused
     AgentGatekeeper::instance().pauseAll();
 
-    QtConcurrent::run([importer, scrivPath, projectPath, this]() {
+    QThreadPool::globalInstance()->start([importer, scrivPath, projectPath, this]() {
         ProjectTreeModel backgroundModel;
         bool success = importer->import(scrivPath, projectPath, &backgroundModel);
         auto resultData = backgroundModel.projectData();
