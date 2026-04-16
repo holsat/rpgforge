@@ -623,6 +623,14 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
                 dialog->show();
             });
+
+            QString fullPathForRecall = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(itemPath);
+            QAction *recallAct = menu.addAction(
+                QIcon::fromTheme(QStringLiteral("document-revert")),
+                i18n("Recall Version..."));
+            connect(recallAct, &QAction::triggered, this, [fullPathForRecall, this] {
+                Q_EMIT recallVersionRequested(fullPathForRecall);
+            });
         }
         menu.addSeparator();
         menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);

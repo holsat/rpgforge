@@ -20,6 +20,8 @@
 #include "githubservice.h"
 #include <git2.h>
 #include <QtConcurrent>
+#include <QThreadPool>
+#include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QDateTime>
@@ -60,6 +62,7 @@ GitService::GitService(QObject *parent)
     : QObject(parent)
 {
     git_libgit2_init();
+    m_pendingCommit = QtConcurrent::run([]{ return true; });
 }
 
 GitService::~GitService()
@@ -85,14 +88,16 @@ QFuture<bool> GitService::autoCommit(const QString &filePath, const QString &mes
         ? QStringLiteral("Auto-save: %1").arg(QFileInfo(filePath).fileName())
         : message;
 
-    return QtConcurrent::run([this, filePath, msg]() {
+    m_pendingCommit = QtConcurrent::run([this, filePath, msg]() {
         return internalCommit(filePath, msg);
     });
+    return m_pendingCommit;
 }
 
 QFuture<bool> GitService::commitAll(const QString &repoPath, const QString &message)
 {
-    return QtConcurrent::run([repoPath, message]() {
+    m_pendingCommit = QtConcurrent::run([this, repoPath, message]() {
+        QMutexLocker locker(&m_commitMutex);
         git_repository *repo = nullptr;
         git_index *index = nullptr;
         git_oid tree_oid, parent_oid, commit_oid;
@@ -129,6 +134,7 @@ QFuture<bool> GitService::commitAll(const QString &repoPath, const QString &mess
 
         return success;
     });
+    return m_pendingCommit;
 }
 
 bool GitService::initRepo(const QString &path)
@@ -388,18 +394,65 @@ bool GitService::mergeBranch(const QString &path, const QString &sourceBranch)
     git_annotated_commit *source_commit = nullptr;
     bool success = false;
 
-    if (git_branch_lookup(&source_ref, repo, sourceBranch.toUtf8().constData(), GIT_BRANCH_LOCAL) == 0) {
-        if (git_annotated_commit_from_ref(&source_commit, repo, source_ref) == 0) {
-            git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
-            git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
-            checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_branch_lookup(&source_ref, repo, sourceBranch.toUtf8().constData(), GIT_BRANCH_LOCAL) != 0)
+        goto merge_cleanup;
 
-            if (git_merge(repo, (const git_annotated_commit **)&source_commit, 1, &merge_opts, &checkout_opts) == 0) {
-                success = true;
+    if (git_annotated_commit_from_ref(&source_commit, repo, source_ref) != 0)
+        goto merge_cleanup;
+
+    {
+        // Analyze merge shape before attempting work.
+        git_merge_analysis_t analysis = GIT_MERGE_ANALYSIS_NONE;
+        git_merge_preference_t preference = GIT_MERGE_PREFERENCE_NONE;
+        const git_annotated_commit *heads[] = { source_commit };
+        if (git_merge_analysis(&analysis, &preference, repo, heads, 1) != 0)
+            goto merge_cleanup;
+
+        // Nothing to do.
+        if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE) {
+            success = true;
+            goto merge_cleanup;
+        }
+
+        // Fast-forward: advance HEAD to source tip and check out its tree.
+        if (analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) {
+            const git_oid *targetOid = git_annotated_commit_id(source_commit);
+            git_commit *targetCommit = nullptr;
+            if (git_commit_lookup(&targetCommit, repo, targetOid) == 0) {
+                git_tree *targetTree = nullptr;
+                if (git_commit_tree(&targetTree, targetCommit) == 0) {
+                    git_checkout_options co = GIT_CHECKOUT_OPTIONS_INIT;
+                    co.checkout_strategy = GIT_CHECKOUT_SAFE;
+                    if (git_checkout_tree(repo, reinterpret_cast<git_object*>(targetTree), &co) == 0) {
+                        git_reference *head = nullptr;
+                        if (git_repository_head(&head, repo) == 0) {
+                            git_reference *newHead = nullptr;
+                            if (git_reference_set_target(&newHead, head, targetOid, "ff merge") == 0) {
+                                success = true;
+                            }
+                            if (newHead) git_reference_free(newHead);
+                            git_reference_free(head);
+                        }
+                    }
+                    git_tree_free(targetTree);
+                }
+                git_commit_free(targetCommit);
             }
+            goto merge_cleanup;
+        }
+
+        // Normal merge: leaves index/workdir with conflicts to resolve, MERGE_HEAD is set,
+        // and the merge commit is finalised by integrateExploration.
+        git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
+        git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+        checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+
+        if (git_merge(repo, heads, 1, &merge_opts, &checkout_opts) == 0) {
+            success = true;
         }
     }
 
+merge_cleanup:
     if (source_commit) git_annotated_commit_free(source_commit);
     if (source_ref) git_reference_free(source_ref);
     git_repository_free(repo);
@@ -475,6 +528,35 @@ QFuture<bool> GitService::extractVersion(const QString &filePath, const QString 
     });
 }
 
+QFuture<bool> GitService::extractBlob(const QString &repoPath, const QString &blobOid, const QString &outputPath)
+{
+    return QtConcurrent::run([repoPath, blobOid, outputPath]() -> bool {
+        git_repository *repo = nullptr;
+        git_blob *blob = nullptr;
+        bool ok = false;
+
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return false;
+
+        git_oid oid;
+        if (git_oid_fromstr(&oid, blobOid.toUtf8().constData()) != 0) goto blob_cleanup;
+        if (git_blob_lookup(&blob, repo, &oid) != 0) goto blob_cleanup;
+
+        {
+            QFile f(outputPath);
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) goto blob_cleanup;
+            const void *data = git_blob_rawcontent(blob);
+            qint64 size = static_cast<qint64>(git_blob_rawsize(blob));
+            if (f.write(static_cast<const char*>(data), size) == size) ok = true;
+            f.close();
+        }
+
+    blob_cleanup:
+        if (blob) git_blob_free(blob);
+        if (repo) git_repository_free(repo);
+        return ok;
+    });
+}
+
 QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
 {
     return QtConcurrent::run([filePath]() {
@@ -496,11 +578,13 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
                 git_reference *ref = nullptr;
                 git_branch_t type;
                 while (git_branch_next(&ref, &type, branchIter) == 0) {
-                    git_oid target;
-                    if (git_reference_peel((git_object **)&target, ref, GIT_OBJECT_COMMIT) == 0) {
+                    git_object *peeled = nullptr;
+                    if (git_reference_peel(&peeled, ref, GIT_OBJECT_COMMIT) == 0) {
+                        const git_oid *target = git_object_id(peeled);
                         char oid_str[GIT_OID_HEXSZ + 1];
-                        git_oid_tostr(oid_str, sizeof(oid_str), &target);
+                        git_oid_tostr(oid_str, sizeof(oid_str), target);
                         commitBranches[QString::fromLatin1(oid_str)] << QString::fromUtf8(git_reference_shorthand(ref));
+                        git_object_free(peeled);
                     }
                     git_reference_free(ref);
                 }
@@ -612,7 +696,7 @@ bool GitService::internalCommit(const QString &filePath, const QString &message)
         if (git_commit_lookup(&parent, repo, &parent_oid) != 0) goto cleanup;
     }
 
-    if (git_signature_now(&signature, "RPG Forge", "rpgforge@example.com") != 0) goto cleanup;
+    if (makeSignature(&signature, repo) != 0) goto cleanup;
 
     if (git_commit_create(&commit_oid, repo, "HEAD", signature, signature,
                           nullptr, message.toUtf8().constData(), tree,
@@ -751,4 +835,556 @@ bool GitService::createTag(const QString &path, const QString &tagName, const QS
     if (target) git_object_free(target);
     git_repository_free(repo);
     return success;
+}
+
+// ---------------------------------------------------------------------------
+// Exploration graph
+// ---------------------------------------------------------------------------
+
+int GitService::getWordCountAtCommit(git_repository *repo, const QString &hash)
+{
+    git_oid oid;
+    if (git_oid_fromstr(&oid, hash.toUtf8().constData()) != 0) return 0;
+
+    git_commit *commit = nullptr;
+    if (git_commit_lookup(&commit, repo, &oid) != 0) return 0;
+
+    git_tree *tree = nullptr;
+    if (git_commit_tree(&tree, commit) != 0) {
+        git_commit_free(commit);
+        return 0;
+    }
+
+    // Look for the "manuscript" subtree
+    git_tree_entry *msEntry = nullptr;
+    if (git_tree_entry_bypath(&msEntry, tree, "manuscript") != 0) {
+        git_tree_free(tree);
+        git_commit_free(commit);
+        return 0;
+    }
+
+    git_tree *msTree = nullptr;
+    if (git_tree_entry_type(msEntry) != GIT_OBJECT_TREE ||
+        git_tree_lookup(&msTree, repo, git_tree_entry_id(msEntry)) != 0) {
+        git_tree_entry_free(msEntry);
+        git_tree_free(tree);
+        git_commit_free(commit);
+        return 0;
+    }
+    git_tree_entry_free(msEntry);
+
+    struct WalkPayload {
+        git_repository *repo;
+        int totalWords;
+    } payload{repo, 0};
+
+    git_tree_walk(msTree, GIT_TREEWALK_PRE, [](const char * /*root*/, const git_tree_entry *entry, void *data) -> int {
+        auto *p = static_cast<WalkPayload *>(data);
+        if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return 0;
+
+        git_blob *blob = nullptr;
+        if (git_blob_lookup(&blob, p->repo, git_tree_entry_id(entry)) != 0) return 0;
+
+        const char *content = static_cast<const char *>(git_blob_rawcontent(blob));
+        git_object_size_t size = git_blob_rawsize(blob);
+
+        bool inWord = false;
+        for (git_object_size_t i = 0; i < size; ++i) {
+            char c = content[i];
+            bool ws = (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+            if (!ws && !inWord) {
+                ++p->totalWords;
+                inWord = true;
+            } else if (ws) {
+                inWord = false;
+            }
+        }
+
+        git_blob_free(blob);
+        return 0;
+    }, &payload);
+
+    git_tree_free(msTree);
+    git_tree_free(tree);
+    git_commit_free(commit);
+    return payload.totalWords;
+}
+
+QFuture<QList<ExplorationNode>> GitService::getExplorationGraph(const QString &repoPath)
+{
+    return QtConcurrent::run([this, repoPath]() -> QList<ExplorationNode> {
+        QList<ExplorationNode> nodes;
+        git_repository *repo = nullptr;
+        git_revwalk *walker = nullptr;
+
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return nodes;
+        if (git_revwalk_new(&walker, repo) != 0) {
+            git_repository_free(repo);
+            return nodes;
+        }
+
+        git_revwalk_sorting(walker, GIT_SORT_TIME | GIT_SORT_TOPOLOGICAL);
+        git_revwalk_push_glob(walker, "refs/heads/*");
+
+        // Pass 1: walk all commits
+        QMap<QString, int> hashToIndex;
+        git_oid oid;
+        while (git_revwalk_next(&oid, walker) == 0) {
+            git_commit *commit = nullptr;
+            if (git_commit_lookup(&commit, repo, &oid) != 0) continue;
+
+            ExplorationNode node;
+            char oid_str[GIT_OID_HEXSZ + 1];
+            git_oid_tostr(oid_str, sizeof(oid_str), &oid);
+            node.hash = QString::fromLatin1(oid_str);
+            node.message = QString::fromUtf8(git_commit_message(commit));
+            node.date = QDateTime::fromSecsSinceEpoch(git_commit_time(commit));
+
+            unsigned int parentCount = git_commit_parentcount(commit);
+            if (parentCount >= 1) {
+                char parent_str[GIT_OID_HEXSZ + 1];
+                git_oid_tostr(parent_str, sizeof(parent_str), git_commit_parent_id(commit, 0));
+                node.primaryParentHash = QString::fromLatin1(parent_str);
+            }
+            if (parentCount >= 2) {
+                char parent_str[GIT_OID_HEXSZ + 1];
+                git_oid_tostr(parent_str, sizeof(parent_str), git_commit_parent_id(commit, 1));
+                node.mergeParentHash = QString::fromLatin1(parent_str);
+            }
+
+            hashToIndex[node.hash] = nodes.size();
+            nodes.append(node);
+            git_commit_free(commit);
+        }
+        git_revwalk_free(walker);
+        walker = nullptr;
+
+        // Pass 2: assign branch names (main/master first)
+        QStringList branchOrder;
+        git_branch_iterator *branchIter = nullptr;
+        if (git_branch_iterator_new(&branchIter, repo, GIT_BRANCH_LOCAL) == 0) {
+            git_reference *ref = nullptr;
+            git_branch_t type;
+            while (git_branch_next(&ref, &type, branchIter) == 0) {
+                QString name = QString::fromUtf8(git_reference_shorthand(ref));
+                if (name == QLatin1String("main") || name == QLatin1String("master")) {
+                    branchOrder.prepend(name);
+                } else {
+                    branchOrder.append(name);
+                }
+                git_reference_free(ref);
+            }
+            git_branch_iterator_free(branchIter);
+        }
+
+        for (const QString &branch : std::as_const(branchOrder)) {
+            git_reference *ref = nullptr;
+            if (git_branch_lookup(&ref, repo, branch.toUtf8().constData(), GIT_BRANCH_LOCAL) != 0) continue;
+
+            git_object *peeled = nullptr;
+            if (git_reference_peel(&peeled, ref, GIT_OBJECT_COMMIT) != 0) {
+                git_reference_free(ref);
+                continue;
+            }
+            const git_oid *tipOid = git_object_id(peeled);
+            char tip_str[GIT_OID_HEXSZ + 1];
+            git_oid_tostr(tip_str, sizeof(tip_str), tipOid);
+            QString tipHash = QString::fromLatin1(tip_str);
+            git_object_free(peeled);
+            git_reference_free(ref);
+
+            // Walk back from tip assigning branch name
+            QString current = tipHash;
+            while (!current.isEmpty()) {
+                auto it = hashToIndex.constFind(current);
+                if (it == hashToIndex.constEnd()) break;
+                ExplorationNode &n = nodes[it.value()];
+                if (!n.branchName.isEmpty()) break; // already claimed
+                n.branchName = branch;
+                current = n.primaryParentHash;
+            }
+        }
+
+        // Pass 3: assign tags
+        struct TagPayload {
+            QMap<QString, int> *hashToIndex;
+            QList<ExplorationNode> *nodes;
+            git_repository *repo;
+        } tagPayload{&hashToIndex, &nodes, repo};
+
+        git_tag_foreach(repo, [](const char *name, git_oid *oid, void *data) -> int {
+            auto *p = static_cast<TagPayload *>(data);
+            QString tagName = QString::fromUtf8(name);
+            if (tagName.startsWith(QLatin1String("refs/tags/")))
+                tagName = tagName.mid(10);
+
+            // Peel to commit (handles both lightweight and annotated tags)
+            git_object *obj = nullptr;
+            if (git_object_lookup(&obj, p->repo, oid, GIT_OBJECT_ANY) != 0) return 0;
+
+            git_object *peeled = nullptr;
+            if (git_object_peel(&peeled, obj, GIT_OBJECT_COMMIT) != 0) {
+                git_object_free(obj);
+                return 0;
+            }
+
+            const git_oid *commitOid = git_object_id(peeled);
+            char oid_str[GIT_OID_HEXSZ + 1];
+            git_oid_tostr(oid_str, sizeof(oid_str), commitOid);
+            QString commitHash = QString::fromLatin1(oid_str);
+
+            auto it = p->hashToIndex->constFind(commitHash);
+            if (it != p->hashToIndex->constEnd()) {
+                (*p->nodes)[it.value()].tags.append(tagName);
+            }
+
+            git_object_free(peeled);
+            git_object_free(obj);
+            return 0;
+        }, &tagPayload);
+
+        // Pass 4: word counts
+        for (int i = 0; i < nodes.size(); ++i) {
+            ExplorationNode &n = nodes[i];
+            {
+                QMutexLocker locker(&m_cacheMutex);
+                auto cit = m_wordCountCache.constFind(n.hash);
+                if (cit != m_wordCountCache.constEnd()) {
+                    n.wordCount = cit.value();
+                    continue;
+                }
+            }
+            n.wordCount = getWordCountAtCommit(repo, n.hash);
+            {
+                QMutexLocker locker(&m_cacheMutex);
+                m_wordCountCache[n.hash] = n.wordCount;
+            }
+        }
+
+        // Compute wordCountDelta
+        for (int i = 0; i < nodes.size(); ++i) {
+            ExplorationNode &n = nodes[i];
+            if (!n.primaryParentHash.isEmpty()) {
+                auto it = hashToIndex.constFind(n.primaryParentHash);
+                if (it != hashToIndex.constEnd()) {
+                    n.wordCountDelta = n.wordCount - nodes[it.value()].wordCount;
+                }
+            }
+        }
+
+        git_repository_free(repo);
+        return nodes;
+    });
+}
+
+void GitService::scheduleWordCountForCommit(const QString &repoPath, const QString &hash)
+{
+    QThreadPool::globalInstance()->start([this, repoPath, hash]() {
+        {
+            QMutexLocker locker(&m_cacheMutex);
+            if (m_wordCountCache.contains(hash)) return;
+        }
+
+        git_repository *repo = nullptr;
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return;
+
+        int count = getWordCountAtCommit(repo, hash);
+        git_repository_free(repo);
+
+        QMetaObject::invokeMethod(this, [this, hash, count] {
+            QMutexLocker locker(&m_cacheMutex);
+            m_wordCountCache[hash] = count;
+        }, Qt::QueuedConnection);
+    });
+}
+
+void GitService::loadWordCountCache(const QVariantMap &data)
+{
+    QMutexLocker locker(&m_cacheMutex);
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+        m_wordCountCache[it.key()] = it.value().toInt();
+    }
+}
+
+QVariantMap GitService::saveWordCountCache() const
+{
+    QMutexLocker locker(&m_cacheMutex);
+    QVariantMap data;
+    for (auto it = m_wordCountCache.constBegin(); it != m_wordCountCache.constEnd(); ++it) {
+        data[it.key()] = it.value();
+    }
+    return data;
+}
+
+// ---------------------------------------------------------------------------
+// Conflict detection
+// ---------------------------------------------------------------------------
+
+QFuture<QList<ConflictFile>> GitService::getConflictingFiles(const QString &repoPath)
+{
+    return QtConcurrent::run([repoPath]() -> QList<ConflictFile> {
+        QList<ConflictFile> result;
+        git_repository *repo = nullptr;
+        git_index *index = nullptr;
+        git_index_conflict_iterator *iter = nullptr;
+
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) goto conflict_cleanup;
+        if (git_repository_index(&index, repo) != 0) goto conflict_cleanup;
+        if (git_index_read(index, 0) != 0) goto conflict_cleanup;
+        if (git_index_conflict_iterator_new(&iter, index) != 0) goto conflict_cleanup;
+
+        {
+            const git_index_entry *ancestor = nullptr;
+            const git_index_entry *ours = nullptr;
+            const git_index_entry *theirs = nullptr;
+
+            while (git_index_conflict_next(&ancestor, &ours, &theirs, iter) == 0) {
+                ConflictFile cf;
+                if (ours) cf.path = QString::fromUtf8(ours->path);
+                else if (theirs) cf.path = QString::fromUtf8(theirs->path);
+                else if (ancestor) cf.path = QString::fromUtf8(ancestor->path);
+
+                char oid_str[GIT_OID_HEXSZ + 1];
+                if (ancestor) {
+                    git_oid_tostr(oid_str, sizeof(oid_str), &ancestor->id);
+                    cf.ancestorHash = QString::fromLatin1(oid_str);
+                }
+                if (ours) {
+                    git_oid_tostr(oid_str, sizeof(oid_str), &ours->id);
+                    cf.oursHash = QString::fromLatin1(oid_str);
+                }
+                if (theirs) {
+                    git_oid_tostr(oid_str, sizeof(oid_str), &theirs->id);
+                    cf.theirsHash = QString::fromLatin1(oid_str);
+                }
+                result.append(cf);
+            }
+        }
+
+    conflict_cleanup:
+        if (iter) git_index_conflict_iterator_free(iter);
+        if (index) git_index_free(index);
+        if (repo) git_repository_free(repo);
+        return result;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Stash operations
+// ---------------------------------------------------------------------------
+
+QFuture<bool> GitService::stashChanges(const QString &repoPath, const QString &message)
+{
+    return QtConcurrent::run([repoPath, message]() -> bool {
+        git_repository *repo = nullptr;
+        git_signature *stasher = nullptr;
+        git_oid stash_oid;
+        bool success = false;
+
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) goto stash_cleanup;
+        if (makeSignature(&stasher, repo) != 0) goto stash_cleanup;
+
+        if (git_stash_save(&stash_oid, repo, stasher, message.toUtf8().constData(), GIT_STASH_DEFAULT) == 0) {
+            success = true;
+        }
+
+    stash_cleanup:
+        if (stasher) git_signature_free(stasher);
+        if (repo) git_repository_free(repo);
+        return success;
+    });
+}
+
+QList<StashEntry> GitService::listStashes(const QString &repoPath)
+{
+    QList<StashEntry> entries;
+    git_repository *repo = nullptr;
+
+    if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return entries;
+
+    struct StashPayload {
+        QList<StashEntry> *entries;
+        git_repository *repo;
+    } payload{&entries, repo};
+
+    git_stash_foreach(repo, [](size_t index, const char *message, const git_oid *stash_id, void *data) -> int {
+        auto *p = static_cast<StashPayload *>(data);
+        StashEntry entry;
+        entry.index = static_cast<int>(index);
+        entry.message = QString::fromUtf8(message);
+
+        char oid_str[GIT_OID_HEXSZ + 1];
+        git_oid_tostr(oid_str, sizeof(oid_str), stash_id);
+        entry.hash = QString::fromLatin1(oid_str);
+
+        // Extract date from the stash commit
+        git_commit *stashCommit = nullptr;
+        if (git_commit_lookup(&stashCommit, p->repo, stash_id) == 0) {
+            entry.date = QDateTime::fromSecsSinceEpoch(git_commit_time(stashCommit));
+            git_commit_free(stashCommit);
+        }
+
+        // Parse onBranch from message pattern "Parked on '<branch>' — ..."
+        int startIdx = entry.message.indexOf(QLatin1String("Parked on '"));
+        if (startIdx >= 0) {
+            startIdx += 11; // length of "Parked on '"
+            int endIdx = entry.message.indexOf(QLatin1Char('\''), startIdx);
+            if (endIdx > startIdx) {
+                entry.onBranch = entry.message.mid(startIdx, endIdx - startIdx);
+            }
+        }
+
+        p->entries->append(entry);
+        return 0;
+    }, &payload);
+
+    git_repository_free(repo);
+    return entries;
+}
+
+QFuture<bool> GitService::applyStash(const QString &repoPath, int stashIndex)
+{
+    return QtConcurrent::run([this, repoPath, stashIndex]() -> bool {
+        if (hasUncommittedChanges(repoPath)) {
+            Q_EMIT stashApplyBlockedByDirtyTree();
+            return false;
+        }
+
+        git_repository *repo = nullptr;
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return false;
+
+        git_stash_apply_options opts = GIT_STASH_APPLY_OPTIONS_INIT;
+        opts.flags = GIT_STASH_APPLY_REINSTATE_INDEX;
+
+        bool success = false;
+        if (git_stash_apply(repo, static_cast<size_t>(stashIndex), &opts) == 0) {
+            git_stash_drop(repo, static_cast<size_t>(stashIndex));
+            success = true;
+        }
+
+        git_repository_free(repo);
+        return success;
+    });
+}
+
+QFuture<bool> GitService::dropStash(const QString &repoPath, int stashIndex)
+{
+    return QtConcurrent::run([repoPath, stashIndex]() -> bool {
+        git_repository *repo = nullptr;
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return false;
+
+        bool success = (git_stash_drop(repo, static_cast<size_t>(stashIndex)) == 0);
+        git_repository_free(repo);
+        return success;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Exploration switching / creation / integration
+// ---------------------------------------------------------------------------
+
+QFuture<bool> GitService::switchExploration(const QString &repoPath, const QString &branchName)
+{
+    return m_pendingCommit.then(QtFuture::Launch::Async, [this, repoPath, branchName](bool commitOk) -> bool {
+        if (!commitOk) {
+            Q_EMIT explorationSwitchFailed(tr("Auto-save failed before switching explorations."));
+            return false;
+        }
+        return checkoutBranch(repoPath, branchName);
+    });
+}
+
+bool GitService::createExploration(const QString &repoPath, const QString &name)
+{
+    if (!createBranch(repoPath, name)) return false;
+    return checkoutBranch(repoPath, name);
+}
+
+QFuture<bool> GitService::integrateExploration(const QString &repoPath, const QString &sourceBranch)
+{
+    return QtConcurrent::run([this, repoPath, sourceBranch]() -> bool {
+        if (!mergeBranch(repoPath, sourceBranch)) return false;
+
+        git_repository *repo = nullptr;
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return false;
+
+        bool success = true;
+        int state = git_repository_state(repo);
+
+        if (state == GIT_REPOSITORY_STATE_MERGE) {
+            git_index *index = nullptr;
+            if (git_repository_index(&index, repo) != 0) {
+                // Cannot read index - merge state is broken; surface as failure.
+                success = false;
+            } else if (git_index_has_conflicts(index)) {
+                // Caller resolves conflicts; integration is not successful yet.
+                git_index_free(index);
+                git_repository_free(repo);
+                return false;
+            } else {
+                // Create merge commit.
+                git_oid tree_oid, commit_oid;
+                git_tree *tree = nullptr;
+                git_signature *signature = nullptr;
+                git_commit *headCommit = nullptr;
+                git_commit *mergeCommit = nullptr;
+                git_oid head_oid, merge_oid;
+
+                if (git_index_write_tree(&tree_oid, index) != 0) { success = false; goto integrate_cleanup; }
+                if (git_tree_lookup(&tree, repo, &tree_oid) != 0) { success = false; goto integrate_cleanup; }
+                if (makeSignature(&signature, repo) != 0) { success = false; goto integrate_cleanup; }
+
+                if (git_reference_name_to_id(&head_oid, repo, "HEAD") != 0) { success = false; goto integrate_cleanup; }
+                if (git_commit_lookup(&headCommit, repo, &head_oid) != 0) { success = false; goto integrate_cleanup; }
+
+                {
+                    // Read MERGE_HEAD.
+                    QByteArray mergeHeadPath = QByteArray(git_repository_path(repo)) + "MERGE_HEAD";
+                    QFile mergeHeadFile(QString::fromUtf8(mergeHeadPath));
+                    if (!mergeHeadFile.open(QIODevice::ReadOnly)) { success = false; goto integrate_cleanup; }
+                    QByteArray mergeHeadHex = mergeHeadFile.readAll().trimmed();
+                    mergeHeadFile.close();
+
+                    if (git_oid_fromstr(&merge_oid, mergeHeadHex.constData()) != 0) { success = false; goto integrate_cleanup; }
+                    if (git_commit_lookup(&mergeCommit, repo, &merge_oid) != 0) { success = false; goto integrate_cleanup; }
+
+                    QString msg = QStringLiteral("Integrated: %1").arg(sourceBranch);
+                    const git_commit *parents[2] = {headCommit, mergeCommit};
+
+                    if (git_commit_create(&commit_oid, repo, "HEAD", signature, signature,
+                                          nullptr, msg.toUtf8().constData(), tree,
+                                          2, parents) != 0) {
+                        success = false;
+                    }
+                }
+
+            integrate_cleanup:
+                if (mergeCommit) git_commit_free(mergeCommit);
+                if (headCommit) git_commit_free(headCommit);
+                if (signature) git_signature_free(signature);
+                if (tree) git_tree_free(tree);
+                git_index_free(index);
+            }
+
+            // Always clear MERGE_HEAD and friends for the MERGE state, regardless of success,
+            // so the working copy doesn't remain stuck in a half-merged state.
+            git_repository_state_cleanup(repo);
+        }
+
+        // Schedule word count for the new HEAD commit
+        if (success) {
+            git_oid head_oid;
+            if (git_reference_name_to_id(&head_oid, repo, "HEAD") == 0) {
+                char oid_str[GIT_OID_HEXSZ + 1];
+                git_oid_tostr(oid_str, sizeof(oid_str), &head_oid);
+                QString newHash = QString::fromLatin1(oid_str);
+                git_repository_free(repo);
+                scheduleWordCountForCommit(repoPath, newHash);
+                return true;
+            }
+        }
+
+        git_repository_free(repo);
+        return success;
+    });
 }

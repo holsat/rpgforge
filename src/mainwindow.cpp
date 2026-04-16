@@ -60,9 +60,14 @@
 #include "onboardingwizard.h"
 #include "scrivenerimporter.h"
 #include "documentconverter.h"
+#include "explorationspanel.h"
+#include "explorationsgraphview.h"
+#include "versionrecallbrowser.h"
+#include "unsavedchangesdialog.h"
 
 #include <KActionCollection>
 #include <KLocalizedString>
+#include <KMessageBox>
 #include <KStandardAction>
 #include <KToolBar>
 #include <KTextEditor/MovingRange>
@@ -90,6 +95,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -97,6 +103,7 @@
 #include <QLineEdit>
 #include <QWebEngineView>
 
+#include <QFrame>
 #include <QLabel>
 #include <QStatusBar>
 
@@ -308,6 +315,7 @@ void MainWindow::setupSidebar()
     
     m_outlinePanel = new OutlinePanel(this);
     m_gitPanel = new GitPanel(this);
+    m_explorationsPanel = new ExplorationsPanel(this);
     m_breadcrumbBar = new BreadcrumbBar(this);
     m_previewPanel = new PreviewPanel(this);
     m_variablesPanel = new VariablesPanel(this);
@@ -336,6 +344,10 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("media-playback-start-symbolic")),
         i18n("Rule Simulation"),
         m_simulationPanel);
+    m_explorationsId = m_sidebar->addPanel(
+        QIcon::fromTheme(QStringLiteral("vcs-branch")),
+        i18n("Explorations"),
+        m_explorationsPanel);
 
     connect(m_chatPanel, &ChatPanel::insertTextAtCursor, this, [this](const QString &text) {
         if (m_document && m_editorView) {
@@ -362,6 +374,29 @@ void MainWindow::setupSidebar()
 
     connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
 
+    // Explorations panel connections
+    connect(m_explorationsPanel, &ExplorationsPanel::switchRequested,
+            this, &MainWindow::onSwitchExplorationRequested);
+    connect(m_explorationsPanel, &ExplorationsPanel::integrateRequested,
+            this, &MainWindow::onIntegrateExplorationRequested);
+    connect(m_explorationsPanel, &ExplorationsPanel::createLandmarkRequested,
+            this, &MainWindow::onCreateLandmarkRequested);
+
+    connect(&GitService::instance(), &GitService::explorationSwitchFailed,
+            this, [this](const QString &reason) {
+                KMessageBox::error(this, reason, i18n("Switch Failed"));
+            });
+    connect(&GitService::instance(), &GitService::stashApplyBlockedByDirtyTree,
+            this, [this] {
+                KMessageBox::information(this,
+                    i18n("Please save or park your current changes before restoring parked changes."),
+                    i18n("Cannot Restore"));
+            });
+
+    // ProjectTreePanel recall version
+    connect(m_projectTree, &ProjectTreePanel::recallVersionRequested,
+            this, &MainWindow::onRecallVersionRequested);
+
     // Show explorer by default
     m_sidebar->showPanel(m_fileExplorerId);
 
@@ -378,7 +413,62 @@ void MainWindow::setupSidebar()
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
     vbox->addWidget(m_breadcrumbBar);
-    
+
+    // Conflict resolution banner (hidden by default). Uses palette tokens so it
+    // adapts to the active theme and meets WCAG 2.1 AA contrast requirements.
+    m_conflictBanner = new QFrame(this);
+    m_conflictBanner->setFrameShape(QFrame::StyledPanel);
+    m_conflictBanner->setStyleSheet(
+        QStringLiteral("QFrame { background: palette(alternate-base); "
+                       "border-left: 3px solid #FF8F00; padding: 4px; }"));
+    m_conflictBanner->setVisible(false);
+    {
+        auto *bl = new QHBoxLayout(m_conflictBanner);
+        bl->setContentsMargins(8, 4, 8, 4);
+        m_conflictBannerLabel = new QLabel(m_conflictBanner);
+        m_conflictBannerLabel->setStyleSheet(
+            QStringLiteral("color: palette(text); font-weight: bold;"));
+        const QString buttonStyle = QStringLiteral(
+            "QPushButton { color: palette(button-text); background: palette(button); "
+            "border: 1px solid palette(mid); border-radius: 3px; padding: 4px 12px; "
+            "font-weight: bold; }"
+            "QPushButton:hover { background: palette(light); }");
+        m_conflictNextBtn = new QPushButton(i18n("Next Conflict →"), m_conflictBanner);
+        m_conflictNextBtn->setStyleSheet(buttonStyle);
+        auto *resolveAllBtn = new QPushButton(i18n("Complete Integration"), m_conflictBanner);
+        resolveAllBtn->setStyleSheet(buttonStyle);
+        bl->addWidget(m_conflictBannerLabel, 1);
+        bl->addWidget(m_conflictNextBtn);
+        bl->addWidget(resolveAllBtn);
+
+        connect(m_conflictNextBtn, &QPushButton::clicked, this, [this] {
+            ++m_conflictIndex;
+            showNextConflict();
+        });
+        connect(resolveAllBtn, &QPushButton::clicked, this, [this] {
+            QString repoPath = ProjectManager::instance().projectPath();
+            GitService::instance().getConflictingFiles(repoPath)
+                .then(this, [this, repoPath](QList<ConflictFile> remaining) {
+                    if (!remaining.isEmpty()) {
+                        KMessageBox::information(this,
+                            i18n("There are still %1 unresolved conflicts. "
+                                 "Please resolve all conflicts before completing the integration.",
+                                 remaining.size()),
+                            i18n("Conflicts Remaining"));
+                        return;
+                    }
+                    GitService::instance().commitAll(repoPath, i18n("Integrated exploration"))
+                        .then(this, [this](bool) {
+                            m_conflictBanner->setVisible(false);
+                            m_conflictFiles.clear();
+                            m_conflictIndex = 0;
+                            m_explorationsPanel->refresh();
+                        });
+                });
+        });
+    }
+    vbox->addWidget(m_conflictBanner);
+
     // Use a plain container with QVBoxLayout instead of QStackedWidget.
     // QStackedWidget interferes with KateCompletionWidget popup positioning
     // because it clips child widgets and affects coordinate mapping.
@@ -583,20 +673,42 @@ void MainWindow::setupSidebar()
         navigateToLine(line);
     });
 
+    // When exploration color map changes, persist it
+    connect(m_explorationsPanel->graphView(), &ExplorationGraphView::colorMapChanged,
+            this, [this] {
+                ProjectManager::instance().saveExplorationData(
+                    GitService::instance().saveWordCountCache(),
+                    m_explorationsPanel->graphView()->saveColorMap());
+            });
+
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
         if (m_corkboardView) m_corkboardView->setFolder(QString());
         QString projectDir = ProjectManager::instance().projectPath();
         KnowledgeBase::instance().initForProject(projectDir);
         CharacterDossierService::instance().setProjectPath(projectDir);
-        
+
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();
 
         m_projectStatsStatus->show();
         updateProjectStats();
         SynopsisService::instance().scanProject();
+
+        // Explorations panel
+        m_explorationsPanel->setRootPath(projectDir);
+
+        // Load cached exploration data
+        QVariantMap wordCountCache, explorationColors;
+        ProjectManager::instance().loadExplorationData(wordCountCache, explorationColors);
+        GitService::instance().loadWordCountCache(wordCountCache);
+        m_explorationsPanel->graphView()->loadColorMap(explorationColors);
     });
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
+        // Save exploration data before closing
+        ProjectManager::instance().saveExplorationData(
+            GitService::instance().saveWordCountCache(),
+            m_explorationsPanel->graphView()->saveColorMap());
+
         // PAUSE ALL AGENTS
         AgentGatekeeper::instance().pauseAll();
 
@@ -2242,4 +2354,199 @@ void MainWindow::updateLibrarianHighlights()
             m_librarianRanges.append(range);
         }
     }
+}
+
+// --- Explorations slots ---
+
+void MainWindow::onSwitchExplorationRequested(const QString &branchName)
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    if (repoPath.isEmpty()) return;
+
+    if (GitService::instance().hasUncommittedChanges(repoPath)) {
+        QString currentBranch = GitService::instance().currentBranch(repoPath);
+        auto *dlg = new UnsavedChangesDialog(currentBranch, branchName, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+        connect(dlg, &UnsavedChangesDialog::saveRequested,
+                this, [this, repoPath, branchName](const QString &msg) {
+                    GitService::instance().commitAll(repoPath, msg)
+                        .then(this, [this, repoPath, branchName](bool ok) {
+                            if (!ok) {
+                                KMessageBox::error(this,
+                                    i18n("Could not save your changes. Switch cancelled."),
+                                    i18n("Save Failed"));
+                                return;
+                            }
+                            GitService::instance().switchExploration(repoPath, branchName)
+                                .then(this, [this](bool) {
+                                    m_explorationsPanel->refresh();
+                                });
+                        });
+                });
+
+        connect(dlg, &UnsavedChangesDialog::stashRequested,
+                this, [this, repoPath, branchName](const QString &stashMsg) {
+                    GitService::instance().stashChanges(repoPath, stashMsg)
+                        .then(this, [this, repoPath, branchName](bool ok) {
+                            if (!ok) {
+                                KMessageBox::error(this,
+                                    i18n("Could not park your changes. Switch cancelled."),
+                                    i18n("Park Failed"));
+                                return;
+                            }
+                            GitService::instance().switchExploration(repoPath, branchName)
+                                .then(this, [this](bool) {
+                                    m_explorationsPanel->refresh();
+                                });
+                        });
+                });
+
+        dlg->open();
+    } else {
+        GitService::instance().switchExploration(repoPath, branchName)
+            .then(this, [this](bool ok) {
+                if (ok) m_explorationsPanel->refresh();
+            });
+    }
+}
+
+void MainWindow::onIntegrateExplorationRequested(const QString &sourceBranch)
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    if (repoPath.isEmpty()) return;
+
+    GitService::instance().integrateExploration(repoPath, sourceBranch)
+        .then(this, [this](bool ok) {
+            if (ok) {
+                m_explorationsPanel->refresh();
+            } else {
+                onIntegrateFailed();
+            }
+        });
+}
+
+void MainWindow::onIntegrateFailed()
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    GitService::instance().getConflictingFiles(repoPath)
+        .then(this, [this](QList<ConflictFile> conflicts) {
+            if (conflicts.isEmpty()) return;
+            m_conflictFiles = conflicts;
+            m_conflictIndex = 0;
+            m_conflictBanner->setVisible(true);
+            showNextConflict();
+        });
+}
+
+void MainWindow::showNextConflict()
+{
+    if (m_conflictIndex >= m_conflictFiles.size()) {
+        m_conflictBanner->setVisible(false);
+        return;
+    }
+    const ConflictFile &cf = m_conflictFiles.at(m_conflictIndex);
+    m_conflictBannerLabel->setText(
+        i18n("Resolving conflict %1 of %2 — %3",
+             m_conflictIndex + 1,
+             m_conflictFiles.size(),
+             QFileInfo(cf.path).fileName()));
+    m_conflictNextBtn->setEnabled(m_conflictIndex + 1 < m_conflictFiles.size());
+    const QString repoPath = ProjectManager::instance().projectPath();
+    m_diffView->setConflict(repoPath, cf.path, cf.ancestorHash, cf.oursHash, cf.theirsHash);
+    showCentralView(m_diffView);
+}
+
+void MainWindow::onCreateLandmarkRequested(const QString &hash)
+{
+    bool ok = false;
+    QString name = QInputDialog::getText(
+        this, i18n("Create Landmark"),
+        i18n("Landmark name:"), QLineEdit::Normal, QString(), &ok);
+    if (!ok || name.trimmed().isEmpty()) return;
+
+    QString repoPath = ProjectManager::instance().projectPath();
+    GitService::instance().createTag(repoPath, name.trimmed(), hash);
+    m_explorationsPanel->refresh();
+}
+
+void MainWindow::onRecallVersionRequested(const QString &hashOrPath)
+{
+    QString filePath = hashOrPath;
+    QString repoPath = ProjectManager::instance().projectPath();
+    QVariantMap colors = m_explorationsPanel->graphView()->saveColorMap();
+
+    auto *dlg = new VersionRecallBrowser(filePath, repoPath, colors, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &VersionRecallBrowser::versionSelected,
+            this, &MainWindow::onVersionSelected);
+    dlg->open();
+}
+
+void MainWindow::onVersionSelected(const QString &filePath, const QString &commitHash)
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    if (repoPath.isEmpty()) return;
+
+    // Step 1: commit any uncommitted changes first so the current draft is preserved
+    // as a Milestone before overwriting with the historical version.
+    QFuture<bool> commitFuture;
+    if (GitService::instance().hasUncommittedChanges(repoPath)) {
+        commitFuture = GitService::instance().commitAll(repoPath,
+            i18n("Auto-saved before recalling version"));
+    } else {
+        commitFuture = QtFuture::makeReadyValueFuture(true);
+    }
+
+    commitFuture.then(this, [this, filePath, commitHash](bool commitOk) {
+        if (!commitOk) {
+            KMessageBox::error(this,
+                i18n("Could not save the current draft. Version recall aborted."),
+                i18n("Recall Failed"));
+            return;
+        }
+
+        // Step 2: extract the historical version into a unique temp file.
+        auto *temp = new QTemporaryFile(QDir::tempPath() + QStringLiteral("/rpgforge_recall_XXXXXX.md"));
+        temp->setAutoRemove(false);
+        if (!temp->open()) {
+            KMessageBox::error(this, i18n("Could not create temp file for recall."),
+                               i18n("Recall Failed"));
+            delete temp;
+            return;
+        }
+        const QString tempPath = temp->fileName();
+        temp->close();
+        delete temp;
+
+        GitService::instance().extractVersion(filePath, commitHash, tempPath)
+            .then(this, [this, filePath, tempPath](bool ok) {
+                if (!ok) {
+                    KMessageBox::error(this,
+                        i18n("Failed to extract the selected version."),
+                        i18n("Recall Failed"));
+                    QFile::remove(tempPath);
+                    return;
+                }
+
+                // Step 3: install atomically. On Linux rename(2) atomically replaces
+                // an existing destination; no prior remove needed (removing first would
+                // open a data-loss window if rename/copy subsequently fail).
+                if (!QFile::rename(tempPath, filePath)) {
+                    // Fall back to copy-over-existing if tmp is on a different filesystem.
+                    QFile::remove(filePath);
+                    if (!QFile::copy(tempPath, filePath)) {
+                        KMessageBox::error(this,
+                            i18n("Failed to install the recalled version."),
+                            i18n("Recall Failed"));
+                    }
+                    QFile::remove(tempPath);
+                }
+
+                if (m_document && m_document->url().toLocalFile() == filePath) {
+                    m_document->openUrl(QUrl::fromLocalFile(filePath));
+                }
+                m_explorationsPanel->refresh();
+            });
+    });
 }

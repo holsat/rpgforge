@@ -35,6 +35,11 @@ public:
 
     void setDiff(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
     void setFiles(const QString &file1, const QString &file2);
+    void setConflict(const QString &repoPath,
+                     const QString &filePath,
+                     const QString &ancestorHash,
+                     const QString &oursHash,
+                     const QString &theirsHash);
     
     KParts::ReadWritePart* part() const { return m_part; }
 
@@ -57,6 +62,9 @@ private:
     QString m_file2;
     QString m_tempOld;
     QString m_tempNew;
+    QString m_tempAncestor;
+    QString m_tempOurs;
+    QString m_tempTheirs;
     bool m_swapped = false;
 
     KParts::ReadWritePart *m_part = nullptr;

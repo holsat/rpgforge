@@ -297,3 +297,20 @@ void ProjectManager::triggerWordCountUpdate()
         Q_EMIT totalWordCountUpdated(count);
     });
 }
+
+void ProjectManager::saveExplorationData(const QVariantMap &wordCountCache,
+                                          const QVariantMap &explorationColors)
+{
+    if (m_projectFilePath.isEmpty()) return;
+
+    m_data[QStringLiteral("wordCountCache")] = QJsonObject::fromVariantMap(wordCountCache);
+    m_data[QStringLiteral("explorationColors")] = QJsonObject::fromVariantMap(explorationColors);
+    saveProject();
+}
+
+void ProjectManager::loadExplorationData(QVariantMap &wordCountCache,
+                                          QVariantMap &explorationColors) const
+{
+    wordCountCache = m_data.value(QStringLiteral("wordCountCache")).toObject().toVariantMap();
+    explorationColors = m_data.value(QStringLiteral("explorationColors")).toObject().toVariantMap();
+}

@@ -92,6 +92,11 @@ public:
     int calculateTotalWordCount() const;
     void triggerWordCountUpdate();
 
+    void saveExplorationData(const QVariantMap &wordCountCache,
+                              const QVariantMap &explorationColors);
+    void loadExplorationData(QVariantMap &wordCountCache,
+                              QVariantMap &explorationColors) const;
+
 Q_SIGNALS:
     void projectOpened();
     void projectClosed();

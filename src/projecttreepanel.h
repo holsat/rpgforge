@@ -47,6 +47,7 @@ Q_SIGNALS:
     void fileActivated(const QString &relativePath);
     void folderActivated(const QString &relativeFolderPath);
     void diffRequested(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
+    void recallVersionRequested(const QString &filePath);
     void syncStarted();
     void syncProgress(int value, const QString &message);
     void syncFinished(bool success, const QString &message);

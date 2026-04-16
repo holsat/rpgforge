@@ -38,10 +38,19 @@ VisualDiffView::VisualDiffView(QWidget *parent)
 {
     m_tempOld = QDir::tempPath() + QStringLiteral("/rpgforge_diff_old.md");
     m_tempNew = QDir::tempPath() + QStringLiteral("/rpgforge_diff_new.md");
+    m_tempAncestor = QDir::tempPath() + QStringLiteral("/rpgforge_diff_ancestor.md");
+    m_tempOurs = QDir::tempPath() + QStringLiteral("/rpgforge_diff_ours.md");
+    m_tempTheirs = QDir::tempPath() + QStringLiteral("/rpgforge_diff_theirs.md");
     setupUi();
 }
 
-VisualDiffView::~VisualDiffView() = default;
+VisualDiffView::~VisualDiffView()
+{
+    for (const QString &path : {m_tempOld, m_tempNew, m_tempAncestor, m_tempOurs, m_tempTheirs}) {
+        if (!path.isEmpty() && QFile::exists(path))
+            QFile::remove(path);
+    }
+}
 
 void VisualDiffView::setupUi()
 {
@@ -179,6 +188,48 @@ void VisualDiffView::swapDiff()
         m_file2 = f1;
         setFiles(m_file1, m_file2);
     }
+}
+
+void VisualDiffView::setConflict(const QString &repoPath,
+                                  const QString &filePath,
+                                  const QString &ancestorHash,
+                                  const QString &oursHash,
+                                  const QString &theirsHash)
+{
+    // filePath from the index is repo-relative; resolve to absolute for display/save-back.
+    const QString absoluteFilePath = QDir(repoPath).absoluteFilePath(filePath);
+    m_filePath = absoluteFilePath;
+    m_oldHash.clear();
+    m_newHash.clear();
+    m_file1.clear();
+    m_file2.clear();
+
+    if (!m_kompareInterface) return;
+
+    // The hashes here are BLOB OIDs from the index (stages 1/2/3), not commit OIDs.
+    // Use extractBlob which resolves a blob by its OID directly.
+    GitService::instance().extractBlob(repoPath, ancestorHash, m_tempAncestor)
+        .then(this, [this, repoPath, oursHash, theirsHash](bool ok) {
+            if (!ok) return;
+            GitService::instance().extractBlob(repoPath, oursHash, m_tempOurs)
+                .then(this, [this, repoPath, theirsHash](bool ok2) {
+                    if (!ok2) return;
+                    GitService::instance().extractBlob(repoPath, theirsHash, m_tempTheirs)
+                        .then(this, [this](bool ok3) {
+                            if (!ok3) return;
+                            // Ancestor is read-only
+                            QFile(m_tempAncestor).setPermissions(QFileDevice::ReadOwner);
+                            // Ours is editable
+                            QFile(m_tempOurs).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+                            // Theirs is read-only
+                            QFile(m_tempTheirs).setPermissions(QFileDevice::ReadOwner);
+                            m_kompareInterface->compare3Files(
+                                QUrl::fromLocalFile(m_tempAncestor),
+                                QUrl::fromLocalFile(m_tempOurs),
+                                QUrl::fromLocalFile(m_tempTheirs));
+                        });
+                });
+        });
 }
 
 void VisualDiffView::saveChanges()

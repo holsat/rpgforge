@@ -51,6 +51,14 @@ add_executable(rpgforge
     src/githubonboardingdialog.h
     src/historydialog.cpp
     src/historydialog.h
+    src/versionrecallbrowser.cpp
+    src/versionrecallbrowser.h
+    src/unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.h
+    src/explorationsgraphview.cpp
+    src/explorationsgraphview.h
+    src/explorationspanel.cpp
+    src/explorationspanel.h
     src/visualdiffview.cpp
     src/visualdiffview.h
     src/clonedialog.cpp

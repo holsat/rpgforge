@@ -34,6 +34,7 @@ class ImagePreview;
 class VisualDiffView;
 class FileExplorer;
 class GitPanel;
+class ExplorationsPanel;
 class OutlinePanel;
 class PreviewPanel;
 class ProjectTreePanel;
@@ -51,6 +52,7 @@ class QSplitter;
 class QAction;
 class QVBoxLayout;
 class QLabel;
+class QFrame;
 class QProgressBar;
 class QLineEdit;
 #include <QPair>
@@ -58,6 +60,7 @@ class QLineEdit;
 #include <QUrl>
 #include "analyzerservice.h"
 #include "llmservice.h"
+#include "gitservice.h"
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -116,6 +119,15 @@ private Q_SLOTS:
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
     void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
 
+    // Explorations slots
+    void onSwitchExplorationRequested(const QString &branchName);
+    void onIntegrateExplorationRequested(const QString &sourceBranch);
+    void onCreateLandmarkRequested(const QString &hash);
+    void onRecallVersionRequested(const QString &hashOrPath);
+    void onIntegrateFailed();
+    void showNextConflict();
+    void onVersionSelected(const QString &filePath, const QString &commitHash);
+
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }
     KTextEditor::View* activeView() const;
@@ -153,6 +165,7 @@ private:
     ProjectTreePanel *m_projectTree = nullptr;
     OutlinePanel *m_outlinePanel = nullptr;
     GitPanel *m_gitPanel = nullptr;
+    ExplorationsPanel *m_explorationsPanel = nullptr;
     BreadcrumbBar *m_breadcrumbBar = nullptr;
     PreviewPanel *m_previewPanel = nullptr;
     VariablesPanel *m_variablesPanel = nullptr;
@@ -179,6 +192,7 @@ private:
     int m_projectTreeId = -1;
     int m_outlineId = -1;
     int m_gitId = -1;
+    int m_explorationsId = -1;
     int m_variablesId = -1;
     int m_chatId = -1;
     int m_simulationId = -1;
@@ -190,6 +204,13 @@ private:
     QUrl m_currentUrl;
     LibrarianService *m_librarianService = nullptr;
     QString m_lastSearchText;
+
+    // Conflict resolution state
+    QList<ConflictFile> m_conflictFiles;
+    int m_conflictIndex = 0;
+    QFrame *m_conflictBanner = nullptr;
+    QLabel *m_conflictBannerLabel = nullptr;
+    QPushButton *m_conflictNextBtn = nullptr;
 };
 
 #endif // MAINWINDOW_H

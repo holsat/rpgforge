@@ -24,6 +24,9 @@
 #include <QFuture>
 #include <QDateTime>
 #include <QMutex>
+#include <QMap>
+
+typedef struct git_repository git_repository;
 
 struct VersionInfo {
     QString hash;
@@ -51,6 +54,33 @@ struct DiffHunk {
     int newStart;
     int newLines;
     QList<DiffLine> lines;
+};
+
+struct ExplorationNode {
+    QString hash;
+    QString primaryParentHash;   // first parent OID as hex string, empty if root
+    QString mergeParentHash;     // second parent OID (merge commits only), else empty
+    QString branchName;          // which branch this node belongs to
+    QDateTime date;
+    QString message;
+    QStringList tags;            // landmark names if this commit is tagged
+    int wordCount = 0;           // total word count of manuscript/ at this commit
+    int wordCountDelta = 0;      // word count difference vs primaryParentHash
+};
+
+struct ConflictFile {
+    QString path;
+    QString ancestorHash;        // stage 1
+    QString oursHash;            // stage 2
+    QString theirsHash;          // stage 3
+};
+
+struct StashEntry {
+    int index = 0;               // 0-based index into stash list
+    QString message;
+    QString hash;                // commit hash of the stash object
+    QDateTime date;
+    QString onBranch;            // parsed from message: "Parked on 'X' — ..."
 };
 
 /**
@@ -92,6 +122,11 @@ public:
      * @brief Extracts a specific version of a file to an output path.
      */
     QFuture<bool> extractVersion(const QString &filePath, const QString &hash, const QString &outputPath);
+
+    /**
+     * @brief Extracts a raw git blob by OID to the given absolute output path.
+     */
+    QFuture<bool> extractBlob(const QString &repoPath, const QString &blobOid, const QString &outputPath);
 
     /**
      * @brief Computes the difference between two versions of a file.
@@ -158,6 +193,70 @@ public:
      */
     QFuture<bool> cloneRepo(const QString &url, const QString &localPath);
 
+    /**
+     * @brief Returns the full exploration graph for a repository.
+     */
+    QFuture<QList<ExplorationNode>> getExplorationGraph(const QString &repoPath);
+
+    /**
+     * @brief Returns a list of conflicting files in the index.
+     */
+    QFuture<QList<ConflictFile>> getConflictingFiles(const QString &repoPath);
+
+    /**
+     * @brief Stashes all uncommitted changes.
+     */
+    QFuture<bool> stashChanges(const QString &repoPath, const QString &message);
+
+    /**
+     * @brief Lists all stash entries.
+     */
+    QList<StashEntry> listStashes(const QString &repoPath);
+
+    /**
+     * @brief Applies and drops a stash entry.
+     */
+    QFuture<bool> applyStash(const QString &repoPath, int stashIndex);
+
+    /**
+     * @brief Drops a stash entry without applying.
+     */
+    QFuture<bool> dropStash(const QString &repoPath, int stashIndex);
+
+    /**
+     * @brief Switches to an exploration branch, chaining after any pending commit.
+     */
+    QFuture<bool> switchExploration(const QString &repoPath, const QString &branchName);
+
+    /**
+     * @brief Creates a new exploration branch and checks it out.
+     */
+    bool createExploration(const QString &repoPath, const QString &name);
+
+    /**
+     * @brief Merges a source branch into the current branch, creating a merge commit if needed.
+     */
+    QFuture<bool> integrateExploration(const QString &repoPath, const QString &sourceBranch);
+
+    /**
+     * @brief Schedules async word-count computation for a single commit.
+     */
+    void scheduleWordCountForCommit(const QString &repoPath, const QString &hash);
+
+    /**
+     * @brief Loads word-count cache from a previously saved QVariantMap.
+     */
+    void loadWordCountCache(const QVariantMap &data);
+
+    /**
+     * @brief Saves word-count cache to a QVariantMap for persistence.
+     */
+    QVariantMap saveWordCountCache() const;
+
+Q_SIGNALS:
+    void stashApplyBlockedByDirtyTree();
+    void explorationSwitchFailed(const QString &reason);
+
 private:
     explicit GitService(QObject *parent = nullptr);
     ~GitService() override;
@@ -167,10 +266,15 @@ private:
     GitService& operator=(const GitService&) = delete;
 
     bool internalCommit(const QString &filePath, const QString &message);
+    int getWordCountAtCommit(git_repository *repo, const QString &hash);
 
     // Serializes concurrent internalCommit calls from QtConcurrent threads to
     // prevent races on the libgit2 repository index.
     QMutex m_commitMutex;
+
+    QMap<QString, int> m_wordCountCache;   // commit hash → word count
+    mutable QMutex m_cacheMutex;           // protects m_wordCountCache
+    QFuture<bool> m_pendingCommit;         // tracks last autoCommit future
 };
 
 #endif // GITSERVICE_H
