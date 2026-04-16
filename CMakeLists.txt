@@ -266,3 +266,60 @@ target_link_libraries(test_projecttreemodel
 )
 add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
 
+# --- GitService integration tests (libgit2-backed) ---
+add_executable(test_gitservice
+    tests/test_gitservice.cpp
+    src/gitservice.cpp
+    src/githubservice.cpp
+)
+target_link_libraries(test_gitservice
+    Qt6::Test
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Network
+    KF6::I18n
+    KF6::Wallet
+    PkgConfig::LIBGIT2
+)
+add_test(NAME git_service_test COMMAND test_gitservice)
+
+# --- ExplorationGraphView widget tests ---
+add_executable(test_explorationgraphview
+    tests/test_explorationgraphview.cpp
+    src/explorationsgraphview.cpp
+    src/gitservice.cpp
+    src/githubservice.cpp
+)
+target_link_libraries(test_explorationgraphview
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Concurrent
+    Qt6::Network
+    KF6::I18n
+    KF6::Wallet
+    PkgConfig::LIBGIT2
+)
+add_test(NAME exploration_graph_view_test COMMAND test_explorationgraphview)
+set_tests_properties(exploration_graph_view_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# --- UnsavedChangesDialog tests ---
+add_executable(test_unsavedchangesdialog
+    tests/test_unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.cpp
+)
+target_link_libraries(test_unsavedchangesdialog
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    KF6::I18n
+)
+add_test(NAME unsaved_changes_dialog_test COMMAND test_unsavedchangesdialog)
+set_tests_properties(unsaved_changes_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
