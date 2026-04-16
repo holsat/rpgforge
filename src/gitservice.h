@@ -25,6 +25,7 @@
 #include <QDateTime>
 #include <QMutex>
 #include <QMap>
+#include <QSemaphore>
 
 typedef struct git_repository git_repository;
 
@@ -463,6 +464,10 @@ private:
     QMap<QString, int> m_wordCountCache;   // commit hash → word count
     mutable QMutex m_cacheMutex;           // protects m_wordCountCache
     QFuture<bool> m_pendingCommit;         // tracks last autoCommit future
+
+    // Throttles scheduleWordCountForCommit() so that large histories do not
+    // swamp QThreadPool with concurrent libgit2 repository opens.
+    QSemaphore m_wordCountSemaphore{4};
 };
 
 #endif // GITSERVICE_H

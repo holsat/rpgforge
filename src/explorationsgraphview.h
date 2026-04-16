@@ -169,6 +169,7 @@ private:
 
     QList<NodeLayout> m_layout;
     QMap<QString, int> m_laneMap;
+    QMap<QString, int> m_branchTopY;   // branch name -> minimum content-space Y
 
     QMap<QString, QColor> m_laneColor;
     static const QList<QColor> kColorPalette;

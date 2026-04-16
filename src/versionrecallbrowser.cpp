@@ -83,7 +83,7 @@ void VersionRecallBrowser::setupUi()
         i18n("Date"),
         i18n("Exploration Path"),
         i18n("Milestone / Tag"),
-        i18n("Word Count")
+        i18nc("column header: version index (1-based row number)", "#")
     });
 
     m_table = new QTableView(this);
@@ -94,6 +94,8 @@ void VersionRecallBrowser::setupUi()
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_table->verticalHeader()->setVisible(false);
+    m_table->setSortingEnabled(true);
+    m_table->sortByColumn(0, Qt::DescendingOrder);
     mainLayout->addWidget(m_table, 1);
 
     connect(m_table->selectionModel(), &QItemSelectionModel::currentRowChanged,
@@ -160,15 +162,14 @@ void VersionRecallBrowser::loadHistory()
             // Column 2: Milestone / Tag
             auto *tagItem = new QStandardItem(info.tags.join(QStringLiteral(", ")));
 
-            // Column 3: Word Count — formatted with thousands separator
-            // Word count is stored in message or computed separately;
-            // use a heuristic: count words from the message field if numeric,
-            // otherwise show the index field as a stand-in.
-            const QString wordCountStr = locale.toString(info.index);
-            auto *wcItem = new QStandardItem(wordCountStr);
-            wcItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            // Column 3: 1-based version index. VersionInfo does not carry a
+            // word count, and the previous "Word Count" column was actually
+            // showing this index — the header now accurately reflects that.
+            const QString indexStr = locale.toString(i + 1);
+            auto *idxItem = new QStandardItem(indexStr);
+            idxItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-            m_model->appendRow({dateItem, branchItem, tagItem, wcItem});
+            m_model->appendRow({dateItem, branchItem, tagItem, idxItem});
         }
 
         // Select the first row (most recent) by default
@@ -188,8 +189,7 @@ void VersionRecallBrowser::onRowSelected(const QModelIndex &index)
     m_recallBtn->setEnabled(true);
 
     const QString dateText = m_model->item(row, 0)->text();
-    const QString wcText = m_model->item(row, 3)->text();
-    m_previewLabel->setText(i18n("Version Preview: %1 (%2 words)", dateText, wcText));
+    m_previewLabel->setText(i18n("Version Preview: %1", dateText));
 
     loadPreview(m_selectedHash);
 }

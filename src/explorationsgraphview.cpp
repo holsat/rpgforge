@@ -107,8 +107,10 @@ void ExplorationGraphView::setCurrentBranch(const QString &branch)
 
 void ExplorationGraphView::refresh()
 {
+    m_selectedIndex = -1;
     m_nodes.clear();
     m_layout.clear();
+    m_branchTopY.clear();
     update();
 
     GitService::instance().getExplorationGraph(m_repoPath)
@@ -121,8 +123,10 @@ void ExplorationGraphView::refresh()
 
 void ExplorationGraphView::layoutNodes()
 {
+    m_selectedIndex = -1;
     m_layout.clear();
     m_laneMap.clear();
+    m_branchTopY.clear();
 
     if (m_nodes.isEmpty())
         return;
@@ -194,6 +198,12 @@ void ExplorationGraphView::layoutNodes()
         }
 
         m_layout.append(NodeLayout{&node, QPoint(x, y), radius});
+
+        // Track the minimum Y for each branch so paintEvent/mouseMoveEvent
+        // can position the branch label without re-scanning all nodes.
+        auto bit = m_branchTopY.find(node.branchName);
+        if (bit == m_branchTopY.end() || y < bit.value())
+            m_branchTopY.insert(node.branchName, y);
     }
 
     m_contentHeight = kTopPad + m_nodes.size() * kNodeSpacing + 20;
@@ -223,16 +233,14 @@ void ExplorationGraphView::paintEvent(QPaintEvent *)
         drawLanePath(p, it.key());
     }
 
-    // Draw branch labels at top of each lane
+    // Draw branch labels at top of each lane. Use the cached top-Y computed
+    // during layoutNodes() instead of scanning all nodes per branch.
     for (auto it = m_laneMap.constBegin(); it != m_laneMap.constEnd(); ++it) {
+        auto tyIt = m_branchTopY.constFind(it.key());
+        if (tyIt == m_branchTopY.constEnd())
+            continue;
         const int laneX = width() / 2 + it.value() * kLaneWidth;
-        int topY = height();
-        for (const NodeLayout &nl : std::as_const(m_layout)) {
-            if (nl.node->branchName == it.key()) {
-                const int screenY = nl.center.y() - m_scrollOffset;
-                topY = qMin(topY, screenY);
-            }
-        }
+        const int topY = tyIt.value() - m_scrollOffset;
         if (topY < height())
             drawBranchLabel(p, it.key(), laneX, topY - 24);
     }
@@ -457,17 +465,14 @@ void ExplorationGraphView::mousePressEvent(QMouseEvent *event)
 
 void ExplorationGraphView::mouseMoveEvent(QMouseEvent *event)
 {
-    // Show tooltip for branch labels when hovering near them
+    // Show tooltip for branch labels when hovering near them. Use the cached
+    // top-Y computed during layoutNodes() instead of scanning all nodes.
     for (auto it = m_laneMap.constBegin(); it != m_laneMap.constEnd(); ++it) {
+        auto tyIt = m_branchTopY.constFind(it.key());
+        if (tyIt == m_branchTopY.constEnd())
+            continue;
         const int laneX = width() / 2 + it.value() * kLaneWidth;
-
-        int topY = height();
-        for (const NodeLayout &nl : std::as_const(m_layout)) {
-            if (nl.node->branchName == it.key()) {
-                const int screenY = nl.center.y() - m_scrollOffset;
-                topY = qMin(topY, screenY);
-            }
-        }
+        const int topY = tyIt.value() - m_scrollOffset;
         const int labelY = topY - 24;
         const QRect labelRegion(laneX - 40, labelY - 10, 80, 20);
 

@@ -673,12 +673,22 @@ void MainWindow::setupSidebar()
         navigateToLine(line);
     });
 
-    // When exploration color map changes, persist it
+    // Debounce saveExplorationData() to coalesce bursts of colorMapChanged
+    // signals (e.g. multiple branches inserted during a single layoutNodes()).
+    m_saveExplorationDataTimer = new QTimer(this);
+    m_saveExplorationDataTimer->setSingleShot(true);
+    m_saveExplorationDataTimer->setInterval(1000);
+    connect(m_saveExplorationDataTimer, &QTimer::timeout, this, [this] {
+        if (!m_explorationsPanel) return;
+        ProjectManager::instance().saveExplorationData(
+            GitService::instance().saveWordCountCache(),
+            m_explorationsPanel->graphView()->saveColorMap());
+    });
+
+    // When exploration color map changes, schedule a debounced persistence.
     connect(m_explorationsPanel->graphView(), &ExplorationGraphView::colorMapChanged,
             this, [this] {
-                ProjectManager::instance().saveExplorationData(
-                    GitService::instance().saveWordCountCache(),
-                    m_explorationsPanel->graphView()->saveColorMap());
+                m_saveExplorationDataTimer->start();
             });
 
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
@@ -2360,12 +2370,32 @@ void MainWindow::updateLibrarianHighlights()
 
 void MainWindow::onSwitchExplorationRequested(const QString &branchName)
 {
-    QString repoPath = ProjectManager::instance().projectPath();
+    const QString repoPath = ProjectManager::instance().projectPath();
     if (repoPath.isEmpty()) return;
 
-    if (GitService::instance().hasUncommittedChanges(repoPath)) {
-        QString currentBranch = GitService::instance().currentBranch(repoPath);
-        auto *dlg = new UnsavedChangesDialog(currentBranch, branchName, this);
+    // Run the blocking libgit2 queries off the main thread; on large repos
+    // hasUncommittedChanges() and currentBranch() can stall the UI.
+    struct DirtyCheckResult {
+        bool dirty;
+        QString currentBranch;
+    };
+    auto fut = QtConcurrent::run([repoPath]() {
+        DirtyCheckResult r;
+        r.dirty = GitService::instance().hasUncommittedChanges(repoPath);
+        r.currentBranch = GitService::instance().currentBranch(repoPath);
+        return r;
+    });
+
+    fut.then(this, [this, repoPath, branchName](DirtyCheckResult r) {
+        if (!r.dirty) {
+            GitService::instance().switchExploration(repoPath, branchName)
+                .then(this, [this](bool ok) {
+                    if (ok) m_explorationsPanel->refresh();
+                });
+            return;
+        }
+
+        auto *dlg = new UnsavedChangesDialog(r.currentBranch, branchName, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
 
         connect(dlg, &UnsavedChangesDialog::saveRequested,
@@ -2403,12 +2433,7 @@ void MainWindow::onSwitchExplorationRequested(const QString &branchName)
                 });
 
         dlg->open();
-    } else {
-        GitService::instance().switchExploration(repoPath, branchName)
-            .then(this, [this](bool ok) {
-                if (ok) m_explorationsPanel->refresh();
-            });
-    }
+    });
 }
 
 void MainWindow::onIntegrateExplorationRequested(const QString &sourceBranch)

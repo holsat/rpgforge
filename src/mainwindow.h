@@ -187,6 +187,7 @@ private:
     QTimer *m_cursorDebounce = nullptr;
     QTimer *m_textChangeDebounce = nullptr;
     QTimer *m_analyzerDebounce = nullptr;
+    QTimer *m_saveExplorationDataTimer = nullptr; // debounces colorMapChanged -> disk persistence
 
     int m_fileExplorerId = -1;
     int m_projectTreeId = -1;

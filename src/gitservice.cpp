@@ -28,6 +28,7 @@
 #include <QDebug>
 #include <QMap>
 #include <QMutexLocker>
+#include <QSemaphore>
 #include <QSettings>
 #include <kwallet.h>
 
@@ -248,7 +249,11 @@ QFuture<QList<DiffHunk>> GitService::computeDiff(const QString &filePath, const 
         {
             git_diff_options opts = GIT_DIFF_OPTIONS_INIT;
             QString relativePath = QDir(QString::fromUtf8(git_repository_workdir(repo))).relativeFilePath(filePath);
-            const char *p = relativePath.toUtf8().constData();
+            // Bind the UTF-8 byte array to a named local so the backing storage
+            // for the pathspec pointer lives until git_diff_tree_to_tree/workdir
+            // returns. Using .toUtf8().constData() inline would dangle.
+            QByteArray relBytes = relativePath.toUtf8();
+            const char *p = relBytes.constData();
             opts.pathspec.strings = (char **)&p;
             opts.pathspec.count = 1;
             opts.context_lines = 0;
@@ -609,6 +614,11 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
             git_revwalk_push_glob(walker, "refs/heads/*");
 
             QString relativePath = QDir(QString::fromUtf8(git_repository_workdir(repo))).relativeFilePath(filePath);
+            // Bind the UTF-8 byte array once and reuse it across iterations;
+            // the pathspec pointer must remain valid for each
+            // git_diff_tree_to_tree() call.
+            QByteArray relBytes = relativePath.toUtf8();
+            const char *pPathspec = relBytes.constData();
             git_oid oid;
             while (git_revwalk_next(&oid, walker) == 0) {
                 git_commit *commit = nullptr;
@@ -618,16 +628,15 @@ QFuture<QList<VersionInfo>> GitService::getHistory(const QString &filePath)
                         git_commit *parent = nullptr;
                         git_tree *tree = nullptr, *parentTree = nullptr;
                         git_diff *diff = nullptr;
-                        
+
                         git_commit_parent(&parent, commit, 0);
                         git_commit_tree(&tree, commit);
                         git_commit_tree(&parentTree, parent);
-                        
+
                         git_diff_options opts = GIT_DIFF_OPTIONS_INIT;
-                        const char *p = relativePath.toUtf8().constData();
-                        opts.pathspec.strings = (char **)&p;
+                        opts.pathspec.strings = (char **)&pPathspec;
                         opts.pathspec.count = 1;
-                        
+
                         git_diff_tree_to_tree(&diff, repo, parentTree, tree, &opts);
                         if (git_diff_num_deltas(diff) > 0) modified = true;
                         
@@ -1085,8 +1094,15 @@ void GitService::scheduleWordCountForCommit(const QString &repoPath, const QStri
             if (m_wordCountCache.contains(hash)) return;
         }
 
+        // Throttle concurrent libgit2 repository opens. Without this, a large
+        // history can queue hundreds of tasks all opening the repo at once.
+        m_wordCountSemaphore.acquire();
+
         git_repository *repo = nullptr;
-        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return;
+        if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) {
+            m_wordCountSemaphore.release();
+            return;
+        }
 
         int count = getWordCountAtCommit(repo, hash);
         git_repository_free(repo);
@@ -1095,6 +1111,8 @@ void GitService::scheduleWordCountForCommit(const QString &repoPath, const QStri
             QMutexLocker locker(&m_cacheMutex);
             m_wordCountCache[hash] = count;
         }, Qt::QueuedConnection);
+
+        m_wordCountSemaphore.release();
     });
 }
 
@@ -1366,9 +1384,13 @@ QFuture<bool> GitService::integrateExploration(const QString &repoPath, const QS
                 git_index_free(index);
             }
 
-            // Always clear MERGE_HEAD and friends for the MERGE state, regardless of success,
-            // so the working copy doesn't remain stuck in a half-merged state.
-            git_repository_state_cleanup(repo);
+            // Only clear MERGE_HEAD/MERGE_MSG on success. On failure we leave
+            // the repository in its merge state so the user can manually
+            // resolve via the conflict banner; discarding the markers here
+            // would strand a merged index without any way to finish the merge.
+            if (success) {
+                git_repository_state_cleanup(repo);
+            }
         }
 
         // Schedule word count for the new HEAD commit

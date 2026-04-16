@@ -189,15 +189,26 @@ void ExplorationsPanel::buildStashEntry(QVBoxLayout *layout, const StashEntry &e
     rowLayout->setContentsMargins(0, 0, 0, 0);
     rowLayout->setSpacing(4);
 
+    // Prefer a themed icon over an inline emoji — emoji fonts are
+    // inconsistent across Linux distros and can render as tofu.
+    QIcon icon = QIcon::fromTheme(QStringLiteral("package"));
+    if (icon.isNull())
+        icon = QIcon::fromTheme(QStringLiteral("folder-temp"));
+    if (!icon.isNull()) {
+        auto *iconLabel = new QLabel(row);
+        iconLabel->setPixmap(icon.pixmap(16, 16));
+        rowLayout->addWidget(iconLabel);
+    }
+
     QString labelText;
     if (!entry.onBranch.isEmpty()) {
         const QString dateStr = entry.date.toString(QStringLiteral("MMM d, hh:mm"));
-        labelText = QStringLiteral("\xF0\x9F\x93\xA6 %1 \u2014 %2").arg(entry.onBranch, dateStr);
+        labelText = QStringLiteral("%1 \u2014 %2").arg(entry.onBranch, dateStr);
     } else {
         QString msg = entry.message;
         if (msg.length() > 40)
             msg = msg.left(37) + QStringLiteral("\u2026");
-        labelText = QStringLiteral("\xF0\x9F\x93\xA6 %1").arg(msg);
+        labelText = msg;
     }
 
     auto *label = new QLabel(labelText, row);
