@@ -21,6 +21,7 @@
 #include "projecttreemodel.h"
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QDebug>
@@ -112,12 +113,18 @@ bool ProjectManager::openProject(const QString &filePath)
     m_data = doc.object();
 
     // Migrate old project files to current schema version
-    migrate(m_data);
+    bool migrated = migrate(m_data);
 
     qDebug() << "ProjectManager: Project data loaded. Syncing model.";
     // Sync authoritative model
     m_treeModel->setProjectData(m_data.value(QLatin1String(ProjectKeys::Tree)).toObject());
-    
+    validateTree();
+
+    // Persist migration changes to disk
+    if (migrated) {
+        saveProject();
+    }
+
     qDebug() << "ProjectManager: Model synced. Root children:" << m_treeModel->rowCount(QModelIndex());
 
     Q_EMIT projectOpened();
@@ -356,7 +363,7 @@ ProjectTreeItem* ProjectManager::findItem(const QString &path) const
     return m_treeModel->findItem(path);
 }
 
-void ProjectManager::migrate(QJsonObject &data)
+bool ProjectManager::migrate(QJsonObject &data)
 {
     int version = data.value(QLatin1String(ProjectKeys::Version)).toInt(1);
     bool changed = false;
@@ -397,6 +404,48 @@ void ProjectManager::migrate(QJsonObject &data)
             }
         }
 
+        // Fix type field: handle string values and misclassified files
+        QJsonValue typeVal = node.value(QLatin1String(ProjectKeys::Type));
+        if (typeVal.isString()) {
+            QString typeStr = typeVal.toString().toLower();
+            node[QLatin1String(ProjectKeys::Type)] = (typeStr == QLatin1String("file")) ? 1 : 0;
+            nodeChanged = true;
+        } else {
+            int nodeType = typeVal.toInt();
+            QString nodePath = node.value(QLatin1String(ProjectKeys::Path)).toString();
+            if (nodeType == 0 && !nodePath.isEmpty()) {
+                QString suffix = QFileInfo(nodePath).suffix().toLower();
+                static const QStringList fileSuffixes = {
+                    QStringLiteral("md"), QStringLiteral("markdown"), QStringLiteral("mkd"),
+                    QStringLiteral("txt"), QStringLiteral("css"), QStringLiteral("yaml"),
+                    QStringLiteral("yml"), QStringLiteral("json"), QStringLiteral("html"),
+                    QStringLiteral("htm"), QStringLiteral("xml"), QStringLiteral("rpgvars"),
+                    QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                    QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+                    QStringLiteral("bmp"), QStringLiteral("pdf")
+                };
+                if (fileSuffixes.contains(suffix)) {
+                    node[QLatin1String(ProjectKeys::Type)] = 1;
+                    nodeChanged = true;
+                }
+            }
+        }
+
+        // Handle string-valued category (for projects with string enum values)
+        QJsonValue catJsonVal = node.value(QLatin1String(ProjectKeys::Category));
+        if (catJsonVal.isString()) {
+            static const QHash<QString, int> catStrMap = {
+                {QStringLiteral("none"), 0}, {QStringLiteral("manuscript"), 1},
+                {QStringLiteral("research"), 2}, {QStringLiteral("lorekeeper"), 3},
+                {QStringLiteral("media"), 4}, {QStringLiteral("chapter"), 5},
+                {QStringLiteral("scene"), 6}, {QStringLiteral("characters"), 7},
+                {QStringLiteral("places"), 8}, {QStringLiteral("cultures"), 9},
+                {QStringLiteral("stylesheet"), 10}, {QStringLiteral("notes"), 11}
+            };
+            node[QLatin1String(ProjectKeys::Category)] = catStrMap.value(catJsonVal.toString().toLower(), 0);
+            nodeChanged = true;
+        }
+
         // Recurse into children
         QJsonArray children = node.value(QLatin1String(ProjectKeys::Children)).toArray();
         bool childrenChanged = false;
@@ -425,6 +474,7 @@ void ProjectManager::migrate(QJsonObject &data)
     if (changed) {
         data[QLatin1String(ProjectKeys::Version)] = version;
     }
+    return changed;
 }
 
 void ProjectManager::setupDefaultProject(const QString &dir, const QString &name)
@@ -566,6 +616,77 @@ void ProjectManager::processTreeUpdateQueue()
         qDebug() << "ProjectManager: Tree structure changed, saving and emitting signal.";
         saveProject();
         Q_EMIT treeChanged();
+    }
+}
+
+void ProjectManager::validateTree()
+{
+    if (!m_treeModel || !m_treeModel->rootItem()) return;
+
+    bool changed = false;
+
+    static const QStringList fileSuffixes = {
+        QStringLiteral("md"), QStringLiteral("markdown"), QStringLiteral("mkd"),
+        QStringLiteral("txt"), QStringLiteral("css"), QStringLiteral("yaml"),
+        QStringLiteral("yml"), QStringLiteral("json"), QStringLiteral("html"),
+        QStringLiteral("htm"), QStringLiteral("xml"), QStringLiteral("rpgvars"),
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+        QStringLiteral("bmp"), QStringLiteral("pdf")
+    };
+
+    std::function<void(ProjectTreeItem*)> validate = [&](ProjectTreeItem *item) {
+        if (!item) return;
+
+        // Fix type: file extension but typed as Folder
+        if (item->type == ProjectTreeItem::Folder && !item->path.isEmpty()) {
+            QString suffix = QFileInfo(item->path).suffix().toLower();
+            if (!suffix.isEmpty() && fileSuffixes.contains(suffix)) {
+                qDebug() << "ProjectManager: validateTree: Correcting type Folder->File for" << item->path;
+                item->type = ProjectTreeItem::File;
+                changed = true;
+            }
+        }
+
+        // Fix type: has children but typed as File
+        if (item->type == ProjectTreeItem::File && !item->children.isEmpty()) {
+            qDebug() << "ProjectManager: validateTree: Correcting type File->Folder for" << item->name << "(has children)";
+            item->type = ProjectTreeItem::Folder;
+            changed = true;
+        }
+
+        // Fix Research folder with empty path
+        if (item->category == ProjectTreeItem::Research && item->type == ProjectTreeItem::Folder && item->path.isEmpty()) {
+            qDebug() << "ProjectManager: validateTree: Setting empty Research folder path to 'research'";
+            item->path = QStringLiteral("research");
+            changed = true;
+        }
+
+        // Fix LoreKeeper folder with empty path
+        if (item->category == ProjectTreeItem::LoreKeeper && item->type == ProjectTreeItem::Folder && item->path.isEmpty()) {
+            qDebug() << "ProjectManager: validateTree: Setting empty LoreKeeper folder path to 'lorekeeper'";
+            item->path = QStringLiteral("lorekeeper");
+            changed = true;
+        }
+
+        // Fix Manuscript folder with empty path
+        if (item->category == ProjectTreeItem::Manuscript && item->type == ProjectTreeItem::Folder && item->path.isEmpty()) {
+            qDebug() << "ProjectManager: validateTree: Setting empty Manuscript folder path to 'manuscript'";
+            item->path = QStringLiteral("manuscript");
+            changed = true;
+        }
+
+        for (auto *child : item->children) {
+            validate(child);
+        }
+    };
+
+    validate(m_treeModel->rootItem());
+
+    if (changed) {
+        qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";
+        m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
+        saveProject();
     }
 }
 
