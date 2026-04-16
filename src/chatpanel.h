@@ -72,6 +72,7 @@ private Q_SLOTS:
     void clearChat();
     void updateModelList();
     void onProviderChanged();
+    void onModelChanged(const QString &model);
 
 Q_SIGNALS:
     void insertTextAtCursor(const QString &text);

@@ -69,8 +69,8 @@ The document outlines a clear vision for the `ProjectManager` as the absolute "S
 
 ### Phase 3: The Source of Truth Migration
 1.  **Implementation:**
-    *   Implement `ProjectManager::getActiveFiles()`, which traverses the logical JSON project tree, resolves the relative file links into absolute physical file paths on the user's hard drive, and returns a flat list.
-    *   Refactor `LibrarianService`, `LoreKeeperService`, and `AnalyzerService` to **only** process the real file paths returned by this method.
+    *   Implement `ProjectManager::getActiveFiles()`, which parses the JSON tree and returns a flat list of all absolute file paths currently registered.
+    *   Refactor `LibrarianService`, `LoreKeeperService`, and `AnalyzerService` to **only** process files returned by this method.
 2.  **Code Quality:** Comment the `getActiveFiles` tree traversal. Add debug logging in the services to output the number of files they are processing.
 3.  **Testing:**
     *   *Unit Test:* Add a test in `test_projectmanager.cpp` verifying `getActiveFiles()` returns the correct absolute physical paths and ignores physical files placed in the directory but not added to the logical tree.

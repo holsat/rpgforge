@@ -115,6 +115,7 @@ private Q_SLOTS:
     void aiSummarize();
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
     void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
+    void onForceLoreScan();
 
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }

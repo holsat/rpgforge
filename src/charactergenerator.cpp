@@ -181,7 +181,14 @@ void CharacterGenerator::generateCharacter()
         req.serviceName = i18n("Character Generator");
         req.settingsKey = QStringLiteral("chargen/chargen_model");
         if (req.model.isEmpty()) {
-            req.model = (req.provider == LLMProvider::OpenAI) ? settings.value(QStringLiteral("llm/openai/model")).toString() : settings.value(QStringLiteral("llm/ollama/model")).toString();
+            switch(req.provider) {
+                case LLMProvider::OpenAI: req.model = settings.value(QStringLiteral("llm/openai/model")).toString(); break;
+                case LLMProvider::Anthropic: req.model = settings.value(QStringLiteral("llm/anthropic/model")).toString(); break;
+                case LLMProvider::Ollama: req.model = settings.value(QStringLiteral("llm/ollama/model")).toString(); break;
+                case LLMProvider::Grok: req.model = settings.value(QStringLiteral("llm/grok/model")).toString(); break;
+                case LLMProvider::Gemini: req.model = settings.value(QStringLiteral("llm/gemini/model")).toString(); break;
+                case LLMProvider::LMStudio: req.model = settings.value(QStringLiteral("llm/lmstudio/model")).toString(); break;
+            }
         }
         
         req.messages.append({QStringLiteral("system"), systemPrompt});

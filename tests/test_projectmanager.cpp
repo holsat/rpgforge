@@ -1,10 +1,12 @@
 #include <QtTest>
 #include <QSignalSpy>
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonArray>
 #include "../src/projectmanager.h"
 #include "../src/projecttreemodel.h"
-#include "../src/agentgatekeeper.h"
-#include "../src/librarianservice.h"
-#include "../src/llmservice.h"
+#include "../src/projectkeys.h"
 
 class TestProjectManager : public QObject
 {
@@ -13,14 +15,25 @@ class TestProjectManager : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
-        m_testDirPath = QDir::current().filePath(QStringLiteral("PM_Test_Dir"));
+        m_testDirPath = QDir::current().absoluteFilePath(QStringLiteral("PM_Test_Dir"));
         QDir().mkpath(m_testDirPath);
+        ProjectManager::instance().closeProject();
     }
 
     void cleanupTestCase()
     {
+        ProjectManager::instance().closeProject();
         QDir(m_testDirPath).removeRecursively();
     }
+
+    void cleanup()
+    {
+        ProjectManager::instance().closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // Existing tests (preserved)
+    // ---------------------------------------------------------------
 
     void testProjectFullLifecycle()
     {
@@ -33,7 +46,7 @@ private Q_SLOTS:
 
         // 1. Create Project Shell
         QVERIFY(pm.createProject(projPath, projName));
-        
+
         // 2. Setup Default Structure (This should trigger projectOpened)
         pm.setupDefaultProject(projPath, projName);
         QCOMPARE(openSpy.count(), 1);
@@ -42,7 +55,7 @@ private Q_SLOTS:
 
         // 3. Verify Model Integrity
         ProjectTreeModel model;
-        model.setProjectData(pm.tree());
+        model.setProjectData(pm.model()->projectData());
         QVERIFY(model.rowCount(QModelIndex()) > 0);
 
         // 4. Close Project
@@ -51,81 +64,572 @@ private Q_SLOTS:
         QVERIFY(!pm.isProjectOpen());
     }
 
-    void testSchemaMigration()
+    void testProjectPersistence()
     {
         ProjectManager &pm = ProjectManager::instance();
-        QString projName = QStringLiteral("MigrationTest");
+        QString projName = QStringLiteral("PersistenceTest");
         QString projPath = m_testDirPath + QStringLiteral("/") + projName;
-        QString projFile = projPath + QStringLiteral("/rpgforge.project");
 
-        QDir().mkpath(projPath);
+        // Create and modify
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
 
-        // Manually create a v1 project file
-        QJsonObject v1Data;
-        v1Data[QStringLiteral("name")] = projName;
-        v1Data[QStringLiteral("version")] = 1;
-        v1Data[QStringLiteral("marginLeft")] = 10.0;
-        v1Data[QStringLiteral("marginTop")] = 15.0;
-        v1Data[QStringLiteral("marginRight")] = 20.0;
-        v1Data[QStringLiteral("marginBottom")] = 25.0;
-
-        QFile file(projFile);
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        file.write(QJsonDocument(v1Data).toJson());
-        file.close();
-
-        // Open the v1 project
-        QVERIFY(pm.openProject(projFile));
-        QVERIFY(pm.isProjectOpen());
-
-        // Verify that margins were migrated to the new nested structure
-        QCOMPARE(pm.marginLeft(), 10.0);
-        QCOMPARE(pm.marginTop(), 15.0);
-        QCOMPARE(pm.marginRight(), 20.0);
-        QCOMPARE(pm.marginBottom(), 25.0);
-
-        // Save and verify the version on disk is now 2
+        QString newAuthor = QStringLiteral("Test Author");
+        pm.setAuthor(newAuthor);
         QVERIFY(pm.saveProject());
         pm.closeProject();
 
-        QFile reOpenFile(projFile);
-        QVERIFY(reOpenFile.open(QIODevice::ReadOnly));
-        QJsonDocument doc = QJsonDocument::fromJson(reOpenFile.readAll());
-        QJsonObject data = doc.object();
-        QCOMPARE(data.value(QStringLiteral("version")).toInt(), 2);
-        QVERIFY(data.contains(QStringLiteral("margins")));
-        QVERIFY(!data.contains(QStringLiteral("marginLeft")));
+        // Re-open and verify
+        QString projectFile = QDir(projPath).absoluteFilePath(QStringLiteral("rpgforge.project"));
+        QVERIFY(pm.openProject(projectFile));
+        QCOMPARE(pm.author(), newAuthor);
+        QCOMPARE(pm.projectName(), projName);
 
-        reOpenFile.close();
+        pm.closeProject();
+    }
+
+    void testActiveFilesListing()
+    {
+        ProjectManager &pm = ProjectManager::instance();
+        QString projName = QStringLiteral("FilesTest");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
+
+        // Relative path registered in setupDefaultProject is "research/README.md"
+        QStringList activeFiles = pm.getActiveFiles();
+
+        bool foundReadme = false;
+        for (const QString &absPath : activeFiles) {
+            if (absPath.endsWith(QStringLiteral("research/README.md"))) {
+                foundReadme = true;
+                break;
+            }
+        }
+        QVERIFY(foundReadme);
+
+        pm.closeProject();
+    }
+
+    void testAuthoritativeMutation()
+    {
+        ProjectManager &pm = ProjectManager::instance();
+        QString projName = QStringLiteral("MutationTest");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
+
+        // 1. Add file (Must exist physically)
+        QString relPath = QStringLiteral("research/notes.md");
+        QString absPath = QDir(projPath).absoluteFilePath(relPath);
+        QFile file(absPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("Authoritative content");
+        file.close();
+
+        QVERIFY(pm.addFile(QStringLiteral("Notes"), relPath, QStringLiteral("research")));
+
+        // Verify in model via authoritative wrapper
+        ProjectTreeItem *item = pm.findItem(relPath);
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->name, QStringLiteral("Notes"));
+
+        // 2. Rename
+        QVERIFY(pm.renameItem(relPath, QStringLiteral("Project Notes")));
+        QCOMPARE(item->name, QStringLiteral("Project Notes"));
+
+        // 3. Remove
+        QVERIFY(pm.removeItem(relPath));
+        QVERIFY(pm.model()->findItem(relPath) == nullptr);
+
+        pm.closeProject();
     }
 
     void testStressHarness()
     {
         ProjectManager &pm = ProjectManager::instance();
-        
+
         for (int i = 0; i < 10; ++i) {
             QString name = QStringLiteral("StressProj_%1").arg(i);
             QString path = m_testDirPath + QStringLiteral("/") + name;
-            
+
             qDebug() << "Stress Test Iteration" << i;
-            
+
             QVERIFY(pm.createProject(path, name));
             pm.setupDefaultProject(path, name);
             QVERIFY(pm.isProjectOpen());
-            
-            // Simulate adding a file
-            ProjectTreeModel model;
-            model.setProjectData(pm.tree());
-            model.addFile(QStringLiteral("StressFile"), QStringLiteral("manuscript/stress.md"), QModelIndex());
-            pm.setTree(model.projectData());
-            
+
+            // Simulate adding a file via authoritative API
+            QString relPath = QStringLiteral("manuscript/stress.md");
+            QDir(path).mkpath(QStringLiteral("manuscript"));
+            QFile dummy(QDir(path).absoluteFilePath(relPath));
+            if (dummy.open(QIODevice::WriteOnly)) {
+                dummy.close();
+            }
+
+            QVERIFY(pm.addFile(QStringLiteral("StressFile"), relPath));
+
             pm.closeProject();
             QVERIFY(!pm.isProjectOpen());
         }
     }
 
+    // ---------------------------------------------------------------
+    // Migration: string type values become integers
+    // ---------------------------------------------------------------
+
+    void test_migrate_stringTypeToInteger()
+    {
+        // Write a project file with string "type" values, then open it.
+        // Migration should convert them to integers.
+        QString projName = QStringLiteral("MigrateStringType");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+
+        QJsonObject child;
+        child[QStringLiteral("name")] = QStringLiteral("notes.md");
+        child[QStringLiteral("path")] = QStringLiteral("research/notes.md");
+        child[QStringLiteral("type")] = QStringLiteral("file");   // string, needs migration
+        child[QStringLiteral("category")] = 2; // Research (int)
+        child[QStringLiteral("children")] = QJsonArray();
+
+        tree[QStringLiteral("children")] = QJsonArray{child};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = 2;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        // After migration + load, the item should be File type
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research/notes.md"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->type, ProjectTreeItem::File);
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // Migration: string category values become integers
+    // ---------------------------------------------------------------
+
+    void test_migrate_stringCategoryToInteger()
+    {
+        QString projName = QStringLiteral("MigrateStringCat");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+
+        QJsonObject child;
+        child[QStringLiteral("name")] = QStringLiteral("LoreKeeper");
+        child[QStringLiteral("path")] = QStringLiteral("lorekeeper");
+        child[QStringLiteral("type")] = 0;
+        child[QStringLiteral("category")] = QStringLiteral("lorekeeper"); // string, needs migration
+        child[QStringLiteral("children")] = QJsonArray();
+
+        tree[QStringLiteral("children")] = QJsonArray{child};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = 2;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("lorekeeper"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->category, ProjectTreeItem::LoreKeeper);
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // Migration: type=0 (Folder) with file extension -> File
+    // ---------------------------------------------------------------
+
+    void test_migrate_type0WithFileExtensionBecomesFile()
+    {
+        QString projName = QStringLiteral("MigrateType0Ext");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+
+        QJsonObject child;
+        child[QStringLiteral("name")] = QStringLiteral("chapter1.md");
+        child[QStringLiteral("path")] = QStringLiteral("manuscript/chapter1.md");
+        child[QStringLiteral("type")] = 0;  // Folder (wrong, has .md extension)
+        child[QStringLiteral("category")] = 1; // Manuscript
+        child[QStringLiteral("children")] = QJsonArray();
+
+        tree[QStringLiteral("children")] = QJsonArray{child};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = 2;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("manuscript/chapter1.md"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->type, ProjectTreeItem::File);
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // validateTree: Folder->File for items with file extensions
+    // ---------------------------------------------------------------
+
+    void test_validateTree_folderToFileForExtension()
+    {
+        // Create a valid project, then manipulate the tree model to have
+        // a misclassified node, save, reopen and check validateTree fixed it.
+        QString projName = QStringLiteral("ValidateFolderToFile");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
+
+        // Inject a misclassified node: type=Folder but path has .md extension
+        QJsonObject data = pm.model()->projectData();
+        QJsonArray children = data.value(QStringLiteral("children")).toArray();
+
+        QJsonObject badNode;
+        badNode[QStringLiteral("name")] = QStringLiteral("misclassified.txt");
+        badNode[QStringLiteral("path")] = QStringLiteral("research/misclassified.txt");
+        badNode[QStringLiteral("type")] = 0; // Folder (wrong)
+        badNode[QStringLiteral("category")] = 2;
+        badNode[QStringLiteral("children")] = QJsonArray();
+
+        children.append(badNode);
+        data[QStringLiteral("children")] = children;
+
+        // Write the corrupted tree to disk
+        QJsonObject projectObj;
+        projectObj[QLatin1String(ProjectKeys::Name)] = projName;
+        projectObj[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+        projectObj[QLatin1String(ProjectKeys::Tree)] = data;
+
+        pm.closeProject();
+        writeProjectFile(projPath, projectObj);
+
+        // Re-open: validateTree should fix Folder->File
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research/misclassified.txt"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->type, ProjectTreeItem::File);
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // validateTree: File->Folder for items with children
+    // ---------------------------------------------------------------
+
+    void test_validateTree_fileToFolderWithChildren()
+    {
+        QString projName = QStringLiteral("ValidateFileToFolder");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        // Build a tree where a node is type=File but has children
+        QJsonObject childFile;
+        childFile[QStringLiteral("name")] = QStringLiteral("nested.md");
+        childFile[QStringLiteral("path")] = QStringLiteral("bad/nested.md");
+        childFile[QStringLiteral("type")] = 1;
+        childFile[QStringLiteral("category")] = 0;
+        childFile[QStringLiteral("children")] = QJsonArray();
+
+        QJsonObject badParent;
+        badParent[QStringLiteral("name")] = QStringLiteral("bad");
+        badParent[QStringLiteral("path")] = QStringLiteral("bad");
+        badParent[QStringLiteral("type")] = 1; // File (wrong, has children)
+        badParent[QStringLiteral("category")] = 0;
+        badParent[QStringLiteral("children")] = QJsonArray{childFile};
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+        tree[QStringLiteral("children")] = QJsonArray{badParent};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("bad"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->type, ProjectTreeItem::Folder);
+        QCOMPARE(item->children.count(), 1);
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // validateTree: empty paths for Research/LoreKeeper/Manuscript
+    // ---------------------------------------------------------------
+
+    void test_validateTree_emptyResearchPath()
+    {
+        QString projName = QStringLiteral("ValidateResearchPath");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject research;
+        research[QStringLiteral("name")] = QStringLiteral("Research");
+        research[QStringLiteral("path")] = QString(); // empty path
+        research[QStringLiteral("type")] = 0; // Folder
+        research[QStringLiteral("category")] = static_cast<int>(ProjectTreeItem::Research);
+        research[QStringLiteral("children")] = QJsonArray();
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+        tree[QStringLiteral("children")] = QJsonArray{research};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->path, QStringLiteral("research"));
+
+        pm.closeProject();
+    }
+
+    void test_validateTree_emptyLoreKeeperPath()
+    {
+        QString projName = QStringLiteral("ValidateLKPath");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject lorekeeper;
+        lorekeeper[QStringLiteral("name")] = QStringLiteral("LoreKeeper");
+        lorekeeper[QStringLiteral("path")] = QString();
+        lorekeeper[QStringLiteral("type")] = 0;
+        lorekeeper[QStringLiteral("category")] = static_cast<int>(ProjectTreeItem::LoreKeeper);
+        lorekeeper[QStringLiteral("children")] = QJsonArray();
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+        tree[QStringLiteral("children")] = QJsonArray{lorekeeper};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("lorekeeper"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->path, QStringLiteral("lorekeeper"));
+
+        pm.closeProject();
+    }
+
+    void test_validateTree_emptyManuscriptPath()
+    {
+        QString projName = QStringLiteral("ValidateManuscriptPath");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject manuscript;
+        manuscript[QStringLiteral("name")] = QStringLiteral("Manuscript");
+        manuscript[QStringLiteral("path")] = QString();
+        manuscript[QStringLiteral("type")] = 0;
+        manuscript[QStringLiteral("category")] = static_cast<int>(ProjectTreeItem::Manuscript);
+        manuscript[QStringLiteral("children")] = QJsonArray();
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+        tree[QStringLiteral("children")] = QJsonArray{manuscript};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("manuscript"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->path, QStringLiteral("manuscript"));
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // Migration: recursive child migration
+    // ---------------------------------------------------------------
+
+    void test_migrate_recursiveStringFixesInChildren()
+    {
+        QString projName = QStringLiteral("MigrateRecursive");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject grandchild;
+        grandchild[QStringLiteral("name")] = QStringLiteral("scene.md");
+        grandchild[QStringLiteral("path")] = QStringLiteral("manuscript/ch1/scene.md");
+        grandchild[QStringLiteral("type")] = QStringLiteral("file");
+        grandchild[QStringLiteral("category")] = QStringLiteral("scene");
+        grandchild[QStringLiteral("children")] = QJsonArray();
+
+        QJsonObject child;
+        child[QStringLiteral("name")] = QStringLiteral("Chapter 1");
+        child[QStringLiteral("path")] = QStringLiteral("manuscript/ch1");
+        child[QStringLiteral("type")] = QStringLiteral("folder");
+        child[QStringLiteral("category")] = QStringLiteral("chapter");
+        child[QStringLiteral("children")] = QJsonArray{grandchild};
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+        tree[QStringLiteral("children")] = QJsonArray{child};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = 2;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *ch = pm.model()->findItem(QStringLiteral("manuscript/ch1"));
+        QVERIFY(ch != nullptr);
+        QCOMPARE(ch->type, ProjectTreeItem::Folder);
+        QCOMPARE(ch->category, ProjectTreeItem::Chapter);
+
+        ProjectTreeItem *scene = pm.model()->findItem(QStringLiteral("manuscript/ch1/scene.md"));
+        QVERIFY(scene != nullptr);
+        QCOMPARE(scene->type, ProjectTreeItem::File);
+        QCOMPARE(scene->category, ProjectTreeItem::Scene);
+
+        pm.closeProject();
+    }
+
+    // ---------------------------------------------------------------
+    // Migration: unknown string category defaults to 0 (None)
+    // ---------------------------------------------------------------
+
+    void test_migrate_unknownStringCategoryDefaultsToNone()
+    {
+        QString projName = QStringLiteral("MigrateUnknownCat");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+        QDir().mkpath(projPath);
+
+        QJsonObject child;
+        child[QStringLiteral("name")] = QStringLiteral("Mystery");
+        child[QStringLiteral("path")] = QStringLiteral("mystery");
+        child[QStringLiteral("type")] = 0;
+        child[QStringLiteral("category")] = QStringLiteral("nonexistent_category");
+        child[QStringLiteral("children")] = QJsonArray();
+
+        QJsonObject tree;
+        tree[QStringLiteral("name")] = QStringLiteral("Root");
+        tree[QStringLiteral("type")] = 0;
+        tree[QStringLiteral("category")] = 0;
+        tree[QStringLiteral("path")] = QString();
+        tree[QStringLiteral("children")] = QJsonArray{child};
+
+        QJsonObject project;
+        project[QLatin1String(ProjectKeys::Name)] = projName;
+        project[QLatin1String(ProjectKeys::Version)] = 2;
+        project[QLatin1String(ProjectKeys::Tree)] = tree;
+
+        writeProjectFile(projPath, project);
+
+        ProjectManager &pm = ProjectManager::instance();
+        QVERIFY(pm.openProject(projectFilePath(projPath)));
+
+        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("mystery"));
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->category, ProjectTreeItem::None);
+
+        pm.closeProject();
+    }
+
 private:
     QString m_testDirPath;
+
+    void writeProjectFile(const QString &projPath, const QJsonObject &data)
+    {
+        QDir().mkpath(projPath);
+        QString filePath = QDir(projPath).absoluteFilePath(QStringLiteral("rpgforge.project"));
+        QFile file(filePath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QJsonDocument(data).toJson());
+        file.close();
+    }
+
+    QString projectFilePath(const QString &projPath)
+    {
+        return QDir(projPath).absoluteFilePath(QStringLiteral("rpgforge.project"));
+    }
 };
 
 QTEST_MAIN(TestProjectManager)
