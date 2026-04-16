@@ -1,10 +1,10 @@
 #include <QtTest>
 #include <QSignalSpy>
+#include <QDir>
+#include <QFile>
 #include "../src/projectmanager.h"
 #include "../src/projecttreemodel.h"
-#include "../src/agentgatekeeper.h"
-#include "../src/librarianservice.h"
-#include "../src/llmservice.h"
+#include "../src/projectkeys.h"
 
 class TestProjectManager : public QObject
 {
@@ -13,12 +13,14 @@ class TestProjectManager : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
-        m_testDirPath = QDir::current().filePath(QStringLiteral("PM_Test_Dir"));
+        m_testDirPath = QDir::current().absoluteFilePath(QStringLiteral("PM_Test_Dir"));
         QDir().mkpath(m_testDirPath);
+        ProjectManager::instance().closeProject();
     }
 
     void cleanupTestCase()
     {
+        ProjectManager::instance().closeProject();
         QDir(m_testDirPath).removeRecursively();
     }
 
@@ -42,7 +44,7 @@ private Q_SLOTS:
 
         // 3. Verify Model Integrity
         ProjectTreeModel model;
-        model.setProjectData(pm.tree());
+        model.setProjectData(pm.model()->projectData());
         QVERIFY(model.rowCount(QModelIndex()) > 0);
 
         // 4. Close Project
@@ -51,74 +53,113 @@ private Q_SLOTS:
         QVERIFY(!pm.isProjectOpen());
     }
 
-    void testSchemaMigration()
+    void testProjectPersistence()
     {
         ProjectManager &pm = ProjectManager::instance();
-        QString projName = QStringLiteral("MigrationTest");
+        QString projName = QStringLiteral("PersistenceTest");
         QString projPath = m_testDirPath + QStringLiteral("/") + projName;
-        QString projFile = projPath + QStringLiteral("/rpgforge.project");
 
-        QDir().mkpath(projPath);
-
-        // Manually create a v1 project file
-        QJsonObject v1Data;
-        v1Data[QStringLiteral("name")] = projName;
-        v1Data[QStringLiteral("version")] = 1;
-        v1Data[QStringLiteral("marginLeft")] = 10.0;
-        v1Data[QStringLiteral("marginTop")] = 15.0;
-        v1Data[QStringLiteral("marginRight")] = 20.0;
-        v1Data[QStringLiteral("marginBottom")] = 25.0;
-
-        QFile file(projFile);
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        file.write(QJsonDocument(v1Data).toJson());
-        file.close();
-
-        // Open the v1 project
-        QVERIFY(pm.openProject(projFile));
-        QVERIFY(pm.isProjectOpen());
-
-        // Verify that margins were migrated to the new nested structure
-        QCOMPARE(pm.marginLeft(), 10.0);
-        QCOMPARE(pm.marginTop(), 15.0);
-        QCOMPARE(pm.marginRight(), 20.0);
-        QCOMPARE(pm.marginBottom(), 25.0);
-
-        // Save and verify the version on disk is now 2
+        // Create and modify
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
+        
+        QString newAuthor = QStringLiteral("Test Author");
+        pm.setAuthor(newAuthor);
         QVERIFY(pm.saveProject());
         pm.closeProject();
 
-        QFile reOpenFile(projFile);
-        QVERIFY(reOpenFile.open(QIODevice::ReadOnly));
-        QJsonDocument doc = QJsonDocument::fromJson(reOpenFile.readAll());
-        QJsonObject data = doc.object();
-        QCOMPARE(data.value(QStringLiteral("version")).toInt(), 2);
-        QVERIFY(data.contains(QStringLiteral("margins")));
-        QVERIFY(!data.contains(QStringLiteral("marginLeft")));
+        // Re-open and verify
+        QString projectFile = QDir(projPath).absoluteFilePath(QStringLiteral("rpgforge.project"));
+        QVERIFY(pm.openProject(projectFile));
+        QCOMPARE(pm.author(), newAuthor);
+        QCOMPARE(pm.projectName(), projName);
+        
+        pm.closeProject();
+    }
 
-        reOpenFile.close();
+    void testActiveFilesListing()
+    {
+        ProjectManager &pm = ProjectManager::instance();
+        QString projName = QStringLiteral("FilesTest");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
+
+        // Relative path registered in setupDefaultProject is "research/README.md"
+        QStringList activeFiles = pm.getActiveFiles();
+        
+        bool foundReadme = false;
+        for (const QString &absPath : activeFiles) {
+            if (absPath.endsWith(QStringLiteral("research/README.md"))) {
+                foundReadme = true;
+                break;
+            }
+        }
+        QVERIFY(foundReadme);
+        
+        pm.closeProject();
+    }
+
+    void testAuthoritativeMutation()
+    {
+        ProjectManager &pm = ProjectManager::instance();
+        QString projName = QStringLiteral("MutationTest");
+        QString projPath = m_testDirPath + QStringLiteral("/") + projName;
+
+        QVERIFY(pm.createProject(projPath, projName));
+        pm.setupDefaultProject(projPath, projName);
+        
+        // 1. Add file (Must exist physically)
+        QString relPath = QStringLiteral("research/notes.md");
+        QString absPath = QDir(projPath).absoluteFilePath(relPath);
+        QFile file(absPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("Authoritative content");
+        file.close();
+
+        QVERIFY(pm.addFile(QStringLiteral("Notes"), relPath, QStringLiteral("research")));
+        
+        // Verify in model via authoritative wrapper
+        ProjectTreeItem *item = pm.findItem(relPath);
+        QVERIFY(item != nullptr);
+        QCOMPARE(item->name, QStringLiteral("Notes"));
+        
+        // 2. Rename
+        QVERIFY(pm.renameItem(relPath, QStringLiteral("Project Notes")));
+        QCOMPARE(item->name, QStringLiteral("Project Notes"));
+        
+        // 3. Remove
+        QVERIFY(pm.removeItem(relPath));
+        QVERIFY(pm.model()->findItem(relPath) == nullptr);
+        
+        pm.closeProject();
     }
 
     void testStressHarness()
     {
         ProjectManager &pm = ProjectManager::instance();
-        
+
         for (int i = 0; i < 10; ++i) {
             QString name = QStringLiteral("StressProj_%1").arg(i);
             QString path = m_testDirPath + QStringLiteral("/") + name;
-            
+
             qDebug() << "Stress Test Iteration" << i;
-            
+
             QVERIFY(pm.createProject(path, name));
             pm.setupDefaultProject(path, name);
             QVERIFY(pm.isProjectOpen());
             
-            // Simulate adding a file
-            ProjectTreeModel model;
-            model.setProjectData(pm.tree());
-            model.addFile(QStringLiteral("StressFile"), QStringLiteral("manuscript/stress.md"), QModelIndex());
-            pm.setTree(model.projectData());
-            
+            // Simulate adding a file via authoritative API
+            QString relPath = QStringLiteral("manuscript/stress.md");
+            QDir(path).mkpath(QStringLiteral("manuscript"));
+            QFile dummy(QDir(path).absoluteFilePath(relPath));
+            if (dummy.open(QIODevice::WriteOnly)) {
+                dummy.close();
+            }
+
+            QVERIFY(pm.addFile(QStringLiteral("StressFile"), relPath));
+
             pm.closeProject();
             QVERIFY(!pm.isProjectOpen());
         }

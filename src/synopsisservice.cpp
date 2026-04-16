@@ -64,7 +64,7 @@ void SynopsisService::requestUpdate(const QString &relativePath, bool force)
         }
 
         if (!m_queue.contains(relativePath) && !m_activeRequests.contains(relativePath)) {
-            qDebug() << "SynopsisService: Queuing update for" << relativePath;
+            qDebug() << "Synopsis AI: Queuing update for" << relativePath;
             m_queue.enqueue(relativePath);
         }
 
@@ -84,13 +84,13 @@ void SynopsisService::cancelRequest(const QString &relativePath)
 
 void SynopsisService::scanProject()
 {
-    qDebug() << "SynopsisService: Scanning project for missing synopses...";
+    qDebug() << "Synopsis AI: Scanning project for missing synopses...";
     if (!m_model) {
-        qDebug() << "SynopsisService: Scan aborted - No model set.";
+        qDebug() << "Synopsis AI: Scan aborted - No model set.";
         return;
     }
     if (!ProjectManager::instance().isProjectOpen()) {
-        qDebug() << "SynopsisService: Scan aborted - Project not open.";
+        qDebug() << "Synopsis AI: Scan aborted - Project not open.";
         return;
     }
     
@@ -123,7 +123,7 @@ void SynopsisService::scanProject()
 
     if (items.isEmpty()) return;
 
-    qDebug() << "SynopsisService: Found" << items.count() << "items to check.";
+    qDebug() << "Synopsis AI: Found" << items.count() << "items to check.";
 
     // Prioritize files to build leaf-level data first
     for (const auto &info : items) {
@@ -146,14 +146,14 @@ void SynopsisService::scanProject()
 
 void SynopsisService::pause()
 {
-    qDebug() << "SynopsisService: Pausing...";
+    qDebug() << "Synopsis AI: Pausing...";
     QMutexLocker locker(&m_mutex);
     m_paused = true;
 }
 
 void SynopsisService::resume()
 {
-    qDebug() << "SynopsisService: Resuming...";
+    qDebug() << "Synopsis AI: Resuming...";
     bool startProcessing = false;
     {
         QMutexLocker locker(&m_mutex);
@@ -190,7 +190,7 @@ void SynopsisService::processNext()
     }
     
     if (!item) {
-        qDebug() << "SynopsisService: Item no longer in tree, skipping:" << relPath;
+        qDebug() << "Synopsis AI: Item no longer in tree, skipping:" << relPath;
         {
             QMutexLocker locker(&m_mutex);
             m_activeRequests.remove(relPath);
@@ -236,12 +236,15 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
         model = settings.value(sk + QStringLiteral("/model")).toString();
     }
 
+    QString systemPrompt = settings.value(QStringLiteral("synopsis/file_prompt"),
+        i18n("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString();
+
     LLMRequest req;
     req.provider = provider;
     req.model = model;
     req.serviceName = i18n("File Synopsis");
     req.settingsKey = QStringLiteral("synopsis/synopsis_file_model");
-    req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG documents concisely.")};
+    req.messages << LLMMessage{QStringLiteral("system"), systemPrompt};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this document in one short sentence: %1", content.left(2000))};
     req.stream = false;
 
@@ -296,12 +299,15 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
         model = settings.value(sk + QStringLiteral("/model")).toString();
     }
 
+    QString systemPrompt = settings.value(QStringLiteral("synopsis/folder_prompt"),
+        i18n("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').")).toString();
+
     LLMRequest req;
     req.provider = provider;
     req.model = model;
     req.serviceName = i18n("Folder Synopsis");
     req.settingsKey = QStringLiteral("synopsis/synopsis_folder_model");
-    req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG project folders.")};
+    req.messages << LLMMessage{QStringLiteral("system"), systemPrompt};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this folder based on its contents: %1", childSynopses.join(QLatin1String("\n")))};
     req.stream = false;
 

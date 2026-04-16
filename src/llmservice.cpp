@@ -84,6 +84,7 @@ void LLMService::setApiKey(LLMProvider provider, const QString &key)
         case LLMProvider::Anthropic: walletKey = QStringLiteral("Anthropic_Key"); break;
         case LLMProvider::Grok: walletKey = QStringLiteral("Grok_Key"); break;
         case LLMProvider::Gemini: walletKey = QStringLiteral("Gemini_Key"); break;
+        case LLMProvider::LMStudio: walletKey = QStringLiteral("LMStudio_Key"); break;
         case LLMProvider::Ollama: return; // No key for Ollama usually
     }
 
@@ -118,6 +119,7 @@ QString LLMService::apiKey(LLMProvider provider) const
         case LLMProvider::Anthropic: walletKey = QStringLiteral("Anthropic_Key"); break;
         case LLMProvider::Grok: walletKey = QStringLiteral("Grok_Key"); break;
         case LLMProvider::Gemini: walletKey = QStringLiteral("Gemini_Key"); break;
+        case LLMProvider::LMStudio: walletKey = QStringLiteral("LMStudio_Key"); break;
         case LLMProvider::Ollama: delete wallet; return QString();
     }
 
@@ -166,6 +168,7 @@ QString LLMService::providerSettingsKey(LLMProvider p)
         case LLMProvider::Grok:      return QStringLiteral("llm/grok");
         case LLMProvider::Gemini:    return QStringLiteral("llm/gemini");
         case LLMProvider::Ollama:    return QStringLiteral("llm/ollama");
+        case LLMProvider::LMStudio:  return QStringLiteral("llm/lmstudio");
     }
     return QStringLiteral("llm/openai");
 }
@@ -303,13 +306,16 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
     if (request.provider == LLMProvider::OpenAI
         || request.provider == LLMProvider::Grok
-        || request.provider == LLMProvider::Gemini) {
+        || request.provider == LLMProvider::Gemini
+        || request.provider == LLMProvider::LMStudio) {
         const QString sk = LLMService::providerSettingsKey(request.provider);
         const QString defaultEndpoint =
             (request.provider == LLMProvider::Grok)
                 ? QStringLiteral("https://api.x.ai/v1/chat/completions")
             : (request.provider == LLMProvider::Gemini)
                 ? QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            : (request.provider == LLMProvider::LMStudio)
+                ? QStringLiteral("http://localhost:1234/v1/chat/completions")
             : QStringLiteral("https://api.openai.com/v1/chat/completions");
 
         url = QUrl(settings.value(sk + QStringLiteral("/endpoint"), defaultEndpoint).toString());
@@ -391,7 +397,8 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
                 if (!doc.isNull() && doc.isObject()) {
                     if (provider == LLMProvider::OpenAI
                         || provider == LLMProvider::Grok
-                        || provider == LLMProvider::Gemini) {
+                        || provider == LLMProvider::Gemini
+                        || provider == LLMProvider::LMStudio) {
                         QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
                         if (!choices.isEmpty())
                             result = choices.at(0).toObject().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
@@ -442,7 +449,8 @@ void LLMService::handleReadyRead()
     switch (m_activeProvider) {
         case LLMProvider::OpenAI:
         case LLMProvider::Grok:
-        case LLMProvider::Gemini: processOpenAIChunk(m_streamBuffer); break;
+        case LLMProvider::Gemini:
+        case LLMProvider::LMStudio: processOpenAIChunk(m_streamBuffer); break;
         case LLMProvider::Anthropic: processAnthropicChunk(m_streamBuffer); break;
         case LLMProvider::Ollama: processOllamaChunk(m_streamBuffer); break;
     }
@@ -568,7 +576,7 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
 
     QString key = apiKey(provider);
 
-    if (provider == LLMProvider::OpenAI) {
+    if (provider == LLMProvider::OpenAI || provider == LLMProvider::LMStudio) {
         const QString embModel = model.isEmpty()
             ? settings.value(QStringLiteral("llm/embedding_model")).toString()
             : model;
@@ -577,8 +585,22 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
             if (callback) callback(QVector<float>());
             return;
         }
-        url = QUrl(QStringLiteral("https://api.openai.com/v1/embeddings"));
-        netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
+        
+        if (provider == LLMProvider::OpenAI) {
+            url = QUrl(QStringLiteral("https://api.openai.com/v1/embeddings"));
+            netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
+        } else {
+            // LM Studio
+            QString endpoint = settings.value(QStringLiteral("llm/lmstudio/endpoint"), 
+                                              QStringLiteral("http://localhost:1234/v1/chat/completions")).toString();
+            if (endpoint.contains(QStringLiteral("/chat/completions"))) {
+                endpoint.replace(QStringLiteral("/chat/completions"), QStringLiteral("/embeddings"));
+            } else if (!endpoint.contains(QStringLiteral("/embeddings"))) {
+                endpoint += QStringLiteral("/embeddings");
+            }
+            url = QUrl(endpoint);
+            if (!key.isEmpty()) netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
+        }
         body[QStringLiteral("model")] = embModel;
         body[QStringLiteral("input")] = text;
     } else if (provider == LLMProvider::Ollama) {
@@ -610,7 +632,7 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
             QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
             if (!doc.isNull() && doc.isObject()) {
                 QJsonArray dataArray;
-                if (provider == LLMProvider::OpenAI) {
+                if (provider == LLMProvider::OpenAI || provider == LLMProvider::LMStudio) {
                     dataArray = doc.object().value(QStringLiteral("data")).toArray();
                     if (!dataArray.isEmpty()) {
                         QJsonArray embeddingArray = dataArray.at(0).toObject().value(QStringLiteral("embedding")).toArray();
@@ -673,12 +695,15 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
 
     if (provider == LLMProvider::OpenAI
         || provider == LLMProvider::Grok
-        || provider == LLMProvider::Gemini) {
+        || provider == LLMProvider::Gemini
+        || provider == LLMProvider::LMStudio) {
         QString settingsKey = (provider == LLMProvider::Grok) ? QStringLiteral("llm/grok")
                             : (provider == LLMProvider::Gemini) ? QStringLiteral("llm/gemini")
+                            : (provider == LLMProvider::LMStudio) ? QStringLiteral("llm/lmstudio")
                             : QStringLiteral("llm/openai");
         QString fallback = (provider == LLMProvider::Grok) ? QStringLiteral("https://api.x.ai/v1/chat/completions")
                          : (provider == LLMProvider::Gemini) ? QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+                         : (provider == LLMProvider::LMStudio) ? QStringLiteral("http://localhost:1234/v1/chat/completions")
                          : QStringLiteral("https://api.openai.com/v1/chat/completions");
         QString endpoint = settings.value(settingsKey + QStringLiteral("/endpoint"), fallback).toString().trimmed();
         if (endpoint.endsWith(QStringLiteral("/chat/completions"))) {
@@ -719,7 +744,8 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
             QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
             if (!doc.isNull() && doc.isObject()) {
                 if (provider == LLMProvider::OpenAI || provider == LLMProvider::Anthropic
-                    || provider == LLMProvider::Grok || provider == LLMProvider::Gemini) {
+                    || provider == LLMProvider::Grok || provider == LLMProvider::Gemini
+                    || provider == LLMProvider::LMStudio) {
                     QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
                     for (const QJsonValue &v : data) {
                         QString id = v.toObject().value(QStringLiteral("id")).toString();
@@ -801,7 +827,8 @@ QString LLMService::providerName(LLMProvider provider)
         case LLMProvider::Anthropic: return QStringLiteral("Anthropic");
         case LLMProvider::Ollama:    return QStringLiteral("Ollama");
         case LLMProvider::Grok:      return QStringLiteral("Grok (xAI)");
-        case LLMProvider::Gemini:    return QStringLiteral("Gemini (Google)");
+        case LLMProvider::Gemini:    return QStringLiteral("Google");
+        case LLMProvider::LMStudio:  return QStringLiteral("LM Studio");
     }
     return QStringLiteral("Unknown");
 }

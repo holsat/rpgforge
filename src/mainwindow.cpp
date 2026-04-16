@@ -46,7 +46,7 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
-#include "characterdossierservice.h"
+#include "lorekeeperservice.h"
 #include "agentgatekeeper.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -107,7 +107,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_librarianService = new LibrarianService(&LLMService::instance(), this);
     AgentGatekeeper::instance().setLibrarianService(m_librarianService);
-    CharacterDossierService::instance().init(&LLMService::instance(), m_librarianService);
+    LoreKeeperService::instance().init(&LLMService::instance(), m_librarianService);
 
     connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
     connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
@@ -117,6 +117,9 @@ MainWindow::MainWindow(QWidget *parent)
     setupSidebar();
     if (m_variablesPanel) {
         m_variablesPanel->setLibrarianService(m_librarianService);
+        connect(m_variablesPanel, &VariablesPanel::forceLoreKeeperScan, this, &MainWindow::onForceLoreScan);
+        connect(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdateStarted, m_variablesPanel, &VariablesPanel::onLoreScanStarted);
+        connect(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdateFinished, m_variablesPanel, &VariablesPanel::onLoreScanFinished);
     }
     setupActions();
 
@@ -551,7 +554,6 @@ void MainWindow::setupSidebar()
         if (folder && dragged) {
             int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
             if (m_projectTree->model()->moveItem(dragged, folder, toIdx)) {
-                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
                 ProjectManager::instance().saveProject();
             }
         }
@@ -587,16 +589,24 @@ void MainWindow::setupSidebar()
         if (m_corkboardView) m_corkboardView->setFolder(QString());
         QString projectDir = ProjectManager::instance().projectPath();
         KnowledgeBase::instance().initForProject(projectDir);
-        CharacterDossierService::instance().setProjectPath(projectDir);
-        
+        LoreKeeperService::instance().setProjectPath(projectDir);
+
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();
 
         m_projectStatsStatus->show();
         updateProjectStats();
         SynopsisService::instance().scanProject();
+        KnowledgeBase::instance().reindexProject();
     });
+
+    connect(&ProjectManager::instance(), &ProjectManager::treeChanged, this, [this]() {
+        updateProjectStats();
+        KnowledgeBase::instance().reindexProject();
+    });
+
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
+
         // PAUSE ALL AGENTS
         AgentGatekeeper::instance().pauseAll();
 
@@ -852,19 +862,23 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             return;
         }
 
-        // Check if this is a research file
+        // Check project context
+        bool isLoreKeeper = false;
         bool isResearch = false;
         if (ProjectManager::instance().isProjectOpen()) {
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
             ProjectTreeItem *item = m_projectTree->model()->findItem(relPath);
             if (item) {
-                // Check ancestors for Research category
                 ProjectTreeItem *p = item;
                 while (p) {
-                    if (p->category == ProjectTreeItem::Research || 
+                    if (p->category == ProjectTreeItem::LoreKeeper || 
                         p->category == ProjectTreeItem::Characters ||
                         p->category == ProjectTreeItem::Places ||
                         p->category == ProjectTreeItem::Cultures) {
+                        isLoreKeeper = true;
+                        break;
+                    }
+                    if (p->category == ProjectTreeItem::Research) {
                         isResearch = true;
                         break;
                     }
@@ -874,13 +888,23 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         }
 
         if (isResearch) {
+            if (m_researchDocument->url() == url) {
+                showCentralView(m_editorSplitter);
+                return;
+            }
             m_researchDocument->openUrl(url);
             m_researchView->show();
-            // Ensure first view stays visible
             m_editorView->show();
+            m_researchDocument->setReadWrite(true);
         } else {
+            if (m_document->url() == url) {
+                showCentralView(m_editorSplitter);
+                return;
+            }
             m_document->openUrl(url);
+            m_editorView->show();
             m_researchView->hide();
+            m_document->setReadWrite(!isLoreKeeper);
         }
 
         showCentralView(m_editorSplitter);
@@ -940,7 +964,7 @@ void MainWindow::newProject()
             AgentGatekeeper::instance().pauseAll();
             if (ProjectManager::instance().createProject(dir, name)) {
                 if (m_librarianService) m_librarianService->setProjectPath(dir);
-                CharacterDossierService::instance().setProjectPath(dir);
+                LoreKeeperService::instance().setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
@@ -965,7 +989,7 @@ void MainWindow::openProject()
         if (ProjectManager::instance().openProject(filePath)) {
             QString projectDir = ProjectManager::instance().projectPath();
             if (m_librarianService) m_librarianService->setProjectPath(projectDir);
-            CharacterDossierService::instance().setProjectPath(projectDir);
+            LoreKeeperService::instance().setProjectPath(projectDir);
             m_fileExplorer->setRootPath(projectDir);
             updateTitle();
         }
@@ -1714,6 +1738,14 @@ void MainWindow::aiSummarize()
     m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Summarize"));
 }
 
+void MainWindow::onForceLoreScan()
+{
+    KTextEditor::Document *doc = activeDocument();
+    if (doc && !doc->url().isEmpty() && doc->url().isLocalFile()) {
+        LoreKeeperService::instance().indexDocument(doc->url().toLocalFile());
+    }
+}
+
 void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
 {
     KTextEditor::Document *doc = nullptr;
@@ -1891,10 +1923,10 @@ void MainWindow::importScrivener()
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
             if (success) {
                 m_projectTree->model()->setProjectData(resultData);
-                ProjectManager::instance().setTree(resultData);
                 ProjectManager::instance().saveProject();
                 QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
-            } else {
+            }
+ else {
                 QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
             }
 
@@ -1968,7 +2000,6 @@ void MainWindow::importWord()
         }
     }
     
-    ProjectManager::instance().setTree(model->projectData());
     ProjectManager::instance().saveProject();
     SynopsisService::instance().resume();
 
@@ -2018,7 +2049,7 @@ void MainWindow::updateProjectPreview()
     if (!m_previewPanel || !ProjectManager::instance().isProjectOpen()) return;
 
     QString markdown;
-    auto treeData = ProjectManager::instance().tree();
+    auto treeData = ProjectManager::instance().model()->projectData();
     ProjectTreeModel model;
     model.setProjectData(treeData);
     

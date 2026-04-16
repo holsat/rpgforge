@@ -43,6 +43,10 @@ AnalyzerService::~AnalyzerService() = default;
 
 void AnalyzerService::analyzeDocument(const QString &filePath, const QString &content)
 {
+    if (!ProjectManager::instance().getActiveFiles().contains(filePath)) {
+        return;
+    }
+
     if (m_paused) {
         // Keep only the latest content for each file in the queue
         auto it = std::find_if(m_queue.begin(), m_queue.end(), [&](const PendingAnalysis &p) {
@@ -134,8 +138,19 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     req.serviceName = i18n("Game Analyzer");
     req.settingsKey = QStringLiteral("analyzer/analyzer_model");
     
-    req.model = settings.value(QStringLiteral("analyzer/analyzer_model"), 
-                               settings.value(QStringLiteral("analyzer/model"))).toString();
+    req.model = settings.value(QStringLiteral("analyzer/analyzer_model")).toString();
+    if (req.model.isEmpty()) {
+        // Fallback to provider default if analyzer specific model not set
+        switch(provider) {
+            case LLMProvider::OpenAI: req.model = settings.value(QStringLiteral("llm/openai/model")).toString(); break;
+            case LLMProvider::Anthropic: req.model = settings.value(QStringLiteral("llm/anthropic/model")).toString(); break;
+            case LLMProvider::Ollama: req.model = settings.value(QStringLiteral("llm/ollama/model")).toString(); break;
+            case LLMProvider::Grok: req.model = settings.value(QStringLiteral("llm/grok/model")).toString(); break;
+            case LLMProvider::Gemini: req.model = settings.value(QStringLiteral("llm/gemini/model")).toString(); break;
+            case LLMProvider::LMStudio: req.model = settings.value(QStringLiteral("llm/lmstudio/model")).toString(); break;
+        }
+    }
+    
     req.temperature = 0.2; 
     
     req.messages.append({QStringLiteral("system"), systemPrompt});

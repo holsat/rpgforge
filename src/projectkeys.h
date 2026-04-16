@@ -47,7 +47,17 @@ namespace ProjectKeys {
     inline constexpr auto Children = "children";
 
     // Current schema version
-    inline constexpr int CurrentVersion = 2;
+    inline constexpr int CurrentVersion = 3;
+
+    // Standard Folder Names
+    inline constexpr auto FolderManuscript = "Manuscript";
+    inline constexpr auto FolderResearch = "Research";
+    inline constexpr auto FolderLoreKeeper = "LoreKeeper";
+    inline constexpr auto FolderMedia = "Media";
+    inline constexpr auto FolderStylesheets = "Stylesheets";
+
+    // Project Data Keys
+    inline constexpr auto LoreKeeperConfig = "loreKeeperConfig";
 }
 
 #endif // PROJECTKEYS_H

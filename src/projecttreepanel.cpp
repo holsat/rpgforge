@@ -19,6 +19,7 @@
 #include "projecttreepanel.h"
 #include "projecttreemodel.h"
 #include "projectmanager.h"
+#include "agentgatekeeper.h"
 #include "metadatadialog.h"
 #include "variablemanager.h"
 #include "gitservice.h"
@@ -51,10 +52,10 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     m_refreshTimer->setSingleShot(true);
     m_refreshTimer->setInterval(100);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        // Use persistent index — automatically invalid after model reset or item removal
+        // Only update active folder state, don't force a view switch in the background
         if (m_activeFolderIndex.isValid()) {
             ProjectTreeItem *item = m_model->itemFromIndex(m_activeFolderIndex);
-            if (item) Q_EMIT folderActivated(item->path);
+            // We don't Q_EMIT folderActivated here because it forces MainWindow to show the corkboard
         }
     });
 
@@ -128,7 +129,7 @@ void ProjectTreePanel::setupUi()
     toolbar->addStretch();
     layout->addLayout(toolbar);
 
-    m_model = new ProjectTreeModel(this);
+    m_model = ProjectManager::instance().model();
     connect(m_model, &ProjectTreeModel::dataChanged, this, &ProjectTreePanel::saveTree);
     connect(m_model, &ProjectTreeModel::rowsInserted, this, &ProjectTreePanel::saveTree);
     connect(m_model, &ProjectTreeModel::rowsRemoved, this, &ProjectTreePanel::saveTree);
@@ -154,9 +155,11 @@ void ProjectTreePanel::setupUi()
     m_treeView->setDefaultDropAction(Qt::MoveAction);
     m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_treeView->setEditTriggers(QAbstractItemView::EditKeyPressed);
     m_treeView->hide(); // hidden until project open
 
     connect(m_treeView, &QTreeView::activated, this, &ProjectTreePanel::onItemActivated);
+    connect(m_treeView, &QTreeView::clicked, this, &ProjectTreePanel::onItemActivated);
     connect(m_treeView, &QTreeView::customContextMenuRequested, this, &ProjectTreePanel::onCustomContextMenu);
 
     connect(m_treeView->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
@@ -166,7 +169,7 @@ void ProjectTreePanel::setupUi()
         ProjectTreeItem *item = m_model->itemFromIndex(index);
         if (item && item->type == ProjectTreeItem::Folder) {
             m_activeFolderIndex = QPersistentModelIndex(index);
-            Q_EMIT folderActivated(item->path);
+            // We no longer emit folderActivated here to prevent background refreshes from hiding the editor.
         }
     });
 
@@ -175,17 +178,18 @@ void ProjectTreePanel::setupUi()
 
 void ProjectTreePanel::onProjectOpened()
 {
-    // Stop any pending refresh and invalidate the stored index before
-    // setProjectData() deletes all existing ProjectTreeItem objects.
+    if (m_isSaving) {
+        qDebug() << "ProjectTreePanel: Skipping model reset due to self-save.";
+        return;
+    }
+    
+    qDebug() << "ProjectTreePanel: Refreshing authoritative tree view.";
+
     m_refreshTimer->stop();
     m_activeFolderIndex = QPersistentModelIndex();
     m_emptyWidget->hide();
     m_treeView->show();
     
-    SynopsisService::instance().pause();
-    m_model->setProjectData(ProjectManager::instance().tree());
-    SynopsisService::instance().resume();
-
     m_treeView->expandAll();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
@@ -197,16 +201,11 @@ void ProjectTreePanel::onProjectOpened()
 
 void ProjectTreePanel::onProjectClosed()
 {
-    // Same guard: stop timer and clear index before items are destroyed.
     m_refreshTimer->stop();
     m_activeFolderIndex = QPersistentModelIndex();
     m_treeView->hide();
     m_emptyWidget->show();
     
-    SynopsisService::instance().pause();
-    m_model->setProjectData(QJsonObject());
-    SynopsisService::instance().resume();
-
     m_addFolderBtn->setEnabled(false);
     m_addFileBtn->setEnabled(false);
     m_syncBtn->setEnabled(false);
@@ -218,12 +217,14 @@ void ProjectTreePanel::onProjectClosed()
 void ProjectTreePanel::syncProject()
 {
     if (!ProjectManager::instance().isProjectOpen()) return;
+    AgentGatekeeper::instance().pauseAll();
 
     QString projectPath = ProjectManager::instance().projectPath();
     
     // 1. Initialize Git if not already done
     if (!GitService::instance().isRepo(projectPath)) {
         if (!GitService::instance().initRepo(projectPath)) {
+            AgentGatekeeper::instance().resumeAll();
             Q_EMIT syncFinished(false, i18n("Failed to initialize Git repository."));
             return;
         }
@@ -359,6 +360,7 @@ void ProjectTreePanel::syncProject()
         Q_EMIT syncProgress(90, i18n("Pushing to GitHub..."));
         auto pushResult = GitService::instance().push(projectPath);
         pushResult.then(this, [this, projectPath](bool success) {
+            AgentGatekeeper::instance().resumeAll();
             if (success) {
                 Q_EMIT syncFinished(true, i18n("Project synchronized and pushed to GitHub."));
             } else {
@@ -386,6 +388,7 @@ void ProjectTreePanel::syncProject()
         Q_EMIT syncProgress(95, i18n("Pushing to GitHub..."));
         auto pushResult = GitService::instance().push(projectPath);
         pushResult.then(this, [this, projectPath](bool success) {
+            AgentGatekeeper::instance().resumeAll();
             if (success) {
                 Q_EMIT syncFinished(true, i18n("Project synchronized and pushed to GitHub."));
             } else {
@@ -407,6 +410,7 @@ void ProjectTreePanel::syncProject()
 void ProjectTreePanel::onRepoCreated(const QString &cloneUrl)
 {
     if (!ProjectManager::instance().isProjectOpen()) return;
+    AgentGatekeeper::instance().pauseAll();
     QString projectPath = ProjectManager::instance().projectPath();
 
     if (GitService::instance().setRemote(projectPath, cloneUrl)) {
@@ -437,10 +441,11 @@ void ProjectTreePanel::createExploration()
             // Re-open project to refresh from disk? 
             // In hidden Git, we should ensure project state is saved.
             ProjectManager::instance().saveProject();
-            // Trigger a refresh of the tree
+            // Trigger a refresh of the tree view
             SynopsisService::instance().pause();
-            m_model->setProjectData(ProjectManager::instance().tree());
+            m_model->setProjectData(ProjectManager::instance().model()->projectData());
             SynopsisService::instance().resume();
+            m_treeView->expandAll();
         } else {
             QMessageBox::critical(this, i18n("Error"), i18n("Failed to create exploration branch."));
         }
@@ -472,14 +477,18 @@ void ProjectTreePanel::switchExploration(const QString &name)
         GitService::instance().commitAll(projectPath, i18n("Automatic save before switching to %1", name));
     }
 
+    AgentGatekeeper::instance().pauseAll();
     if (GitService::instance().checkoutBranch(projectPath, name)) {
-        // Refresh project data from disk
+        // Refresh project data from disk (this also syncs the authoritative model)
         ProjectManager::instance().openProject(ProjectManager::instance().projectFilePath());
+        
         SynopsisService::instance().pause();
-        m_model->setProjectData(ProjectManager::instance().tree());
+        m_model->setProjectData(ProjectManager::instance().model()->projectData());
         SynopsisService::instance().resume();
         m_treeView->expandAll();
+        AgentGatekeeper::instance().resumeAll();
     } else {
+        AgentGatekeeper::instance().resumeAll();
         QMessageBox::critical(this, i18n("Error"), i18n("Failed to switch to exploration branch."));
         updateExplorationList();
     }
@@ -505,8 +514,13 @@ void ProjectTreePanel::onItemActivated(const QModelIndex &index)
 {
     if (!index.isValid()) return;
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (item && item->type == ProjectTreeItem::File) {
+    if (!item) return;
+
+    if (item->type == ProjectTreeItem::File) {
         Q_EMIT fileActivated(item->path);
+    } else if (item->type == ProjectTreeItem::Folder) {
+        m_activeFolderIndex = QPersistentModelIndex(index);
+        Q_EMIT folderActivated(item->path);
     }
 }
 
@@ -555,7 +569,9 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                     resolved->category = cat;
                     QModelIndex idx = m_model->indexForItem(resolved);
                     if (idx.isValid()) m_model->dataChanged(idx, idx, {Qt::DecorationRole});
-                    saveTree();
+                    
+                    // Authoritative save
+                    ProjectManager::instance().saveProject();
                 }
             });
             // Initial check state
@@ -600,8 +616,7 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                                 m_model->addTransientVersionLink(label, tempPath, resIdx);
                                 m_treeView->expand(resIdx);
                                 
-                                // Persist the change
-                                ProjectManager::instance().setTree(m_model->projectData());
+                                // Persist the change via authoritative model save
                                 ProjectManager::instance().saveProject();
 
                                 Q_EMIT fileActivated(tempPath);
@@ -639,16 +654,22 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
 void ProjectTreePanel::addFolder()
 {
     QModelIndex parent = m_treeView->currentIndex();
+    ProjectTreeItem *parentItem = m_model->itemFromIndex(parent);
+    QString parentPath = parentItem ? parentItem->path : QString();
+
     bool ok;
     QString name = QInputDialog::getText(this, i18n("Add Folder"), i18n("Folder Name:"), QLineEdit::Normal, i18n("New Folder"), &ok);
     if (ok && !name.isEmpty()) {
-        m_model->addFolder(name, QString(), parent);
+        ProjectManager::instance().addFolder(name, QString(), parentPath);
     }
 }
 
 void ProjectTreePanel::addFile()
 {
     QModelIndex parent = m_treeView->currentIndex();
+    ProjectTreeItem *parentItem = m_model->itemFromIndex(parent);
+    QString parentPath = parentItem ? parentItem->path : QString();
+
     QString projectDir = ProjectManager::instance().projectPath();
     
     QString filePath = QFileDialog::getOpenFileName(this, i18n("Select File to Link"), projectDir, 
@@ -658,17 +679,15 @@ void ProjectTreePanel::addFile()
     QFileInfo fi(filePath);
     QString relativePath = QDir(projectDir).relativeFilePath(filePath);
     
-    m_model->addFile(fi.completeBaseName(), relativePath, parent);
+    ProjectManager::instance().addFile(fi.completeBaseName(), relativePath, parentPath);
 }
 
 void ProjectTreePanel::removeItem()
 {
     QModelIndex index = m_treeView->currentIndex();
-    if (index.isValid()) {
-        m_model->removeItem(index);
-        // m_activeFolderIndex (QPersistentModelIndex) is automatically
-        // invalidated by Qt if the indexed item was removed or is an ancestor
-        // of the removed item.
+    ProjectTreeItem *item = m_model->itemFromIndex(index);
+    if (item) {
+        ProjectManager::instance().removeItem(item->path);
     }
 }
 
@@ -796,9 +815,14 @@ ProjectTreeItem* ProjectTreePanel::currentFolder() const
 
 void ProjectTreePanel::saveTree()
 {
+    if (m_isSaving) return;
     if (ProjectManager::instance().isProjectOpen()) {
-        ProjectManager::instance().setTree(m_model->projectData());
+        AgentGatekeeper::instance().pauseAll();
+        m_isSaving = true;
+        // The ProjectManager already owns the model, so we just need to tell it to save its current state.
         ProjectManager::instance().saveProject();
+        m_isSaving = false;
+        AgentGatekeeper::instance().resumeAll();
         
         requestRefresh();
     }

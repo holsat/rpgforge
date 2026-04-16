@@ -18,6 +18,7 @@
 
 #include "librarianservice.h"
 #include "llmservice.h"
+#include "projectmanager.h"
 #include <KLocalizedString>
 #include <QDir>
 #include <QDirIterator>
@@ -61,7 +62,7 @@ LibrarianService::~LibrarianService()
 void LibrarianService::setProjectPath(const QString &path)
 {
     if (path.isEmpty()) return;
-    qDebug() << "LibrarianService: Setting project path:" << path;
+    qDebug() << "Data Extractor: Setting project path:" << path;
     QMutexLocker locker(&m_mutex);
     m_projectPath = path;
     m_pendingFiles.clear(); 
@@ -82,7 +83,7 @@ void LibrarianService::setProjectPath(const QString &path)
 
 void LibrarianService::pause()
 {
-    qDebug() << "LibrarianService: Pausing...";
+    qDebug() << "Data Extractor: Pausing...";
     QMutexLocker locker(&m_mutex);
     m_paused = true;
     m_processTimer->stop();
@@ -91,7 +92,7 @@ void LibrarianService::pause()
 
 void LibrarianService::resume()
 {
-    qDebug() << "LibrarianService: Resuming...";
+    qDebug() << "Data Extractor: Resuming...";
     QMutexLocker locker(&m_mutex);
     m_paused = false;
     m_processTimer->start();
@@ -102,19 +103,18 @@ void LibrarianService::scanAll()
 {
     if (m_paused || m_projectPath.isEmpty()) return;
     
-    QDir dir(m_projectPath);
-    QStringList filters;
-    filters << QStringLiteral("*.md") << QStringLiteral("*.markdown");
-    
-    QDirIterator it(m_projectPath, filters, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-    
+    QStringList activeFiles = ProjectManager::instance().getActiveFiles();
+    qDebug() << "Data Extractor: Scanning" << activeFiles.size() << "active project files.";
+
     QMutexLocker locker(&m_mutex);
-    while (it.hasNext()) {
-        QString file = it.next();
-        if (!m_pendingFiles.contains(file)) {
-            m_pendingFiles.append(file);
+    for (const QString &file : activeFiles) {
+        QString suffix = QFileInfo(file).suffix().toLower();
+        if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+            if (!m_pendingFiles.contains(file)) {
+                m_pendingFiles.append(file);
+            }
+            m_watcher->addPath(file);
         }
-        m_watcher->addPath(file);
     }
     m_processTimer->start();
 }
@@ -248,7 +248,7 @@ void LibrarianService::parseMarkdownLists(const QString &content, const QString 
             int level = headerMatch.captured(1).length();
             QString name = headerMatch.captured(2).trimmed();
             // Clean up name (e.g. remove trailing tags like {#èwò})
-            name.remove(QRegularExpression(QStringLiteral("\\{.+\\}$"))).trimmed();
+            name = name.remove(QRegularExpression(QStringLiteral("\\{.+\\}$"))).trimmed();
 
             while (sectionStack.size() > 1 && sectionStack.last().level >= level) {
                 sectionStack.removeLast();
