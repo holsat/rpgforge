@@ -28,20 +28,53 @@ class QPushButton;
 class QLabel;
 class QStandardItemModel;
 
+/**
+ * \brief Modal dialog for browsing a file's commit history and recalling a past version.
+ *
+ * Presents a table of commits that touched the file, colour-coded by branch
+ * lane using the supplied colour map, with a read-only preview of the file
+ * content at the selected commit.  When the user clicks "Recall", the dialog
+ * emits versionSelected() and closes; the caller is responsible for
+ * replacing the live file with the recalled content.
+ *
+ * \sa GitService::getHistory(), GitService::extractBlob()
+ */
 class VersionRecallBrowser : public QDialog
 {
     Q_OBJECT
 public:
-    // filePath: absolute path to the file to browse history for
-    // repoPath: root of the git repo
+    /**
+     * \brief Constructs the dialog and begins loading commit history.
+     *
+     * History is loaded asynchronously via GitService::getHistory() so the
+     * dialog opens immediately.  The table is populated once the future
+     * resolves on the main thread.
+     *
+     * \param filePath   Absolute path to the file whose history is displayed.
+     * \param repoPath   Absolute path to the root of the Git repository.
+     * \param laneColors Map of branch name strings to colour strings (e.g.
+     *                   "#a0c4ff") used to tint commit rows by branch.
+     *                   Pass an empty map to use default colours.
+     * \param parent     Optional parent widget.
+     */
     explicit VersionRecallBrowser(const QString &filePath,
                                    const QString &repoPath,
-                                   const QVariantMap &laneColors,  // branchName->colorString
+                                   const QVariantMap &laneColors,
                                    QWidget *parent = nullptr);
     ~VersionRecallBrowser() override;
 
 Q_SIGNALS:
-    // Emitted when user confirms recall; caller is responsible for the file replacement
+    /**
+     * \brief Emitted when the user confirms recall of a specific version.
+     *
+     * Fired on the main thread immediately before the dialog is accepted.
+     * The caller is responsible for extracting the blob and replacing the
+     * live file; the dialog does not perform the file replacement itself.
+     *
+     * \param filePath   Absolute path to the file being recalled (same value
+     *                   passed to the constructor).
+     * \param commitHash Full commit OID from which the file should be restored.
+     */
     void versionSelected(const QString &filePath, const QString &commitHash);
 
 private Q_SLOTS:

@@ -92,8 +92,45 @@ public:
     int calculateTotalWordCount() const;
     void triggerWordCountUpdate();
 
+    /**
+     * \brief Persists exploration caches into the project file.
+     *
+     * Stores both the word-count cache (commit hash to word count) and the
+     * branch-colour map (branch name to colour string) in the project's
+     * JSON data under reserved keys.  The project file is saved to disk
+     * immediately via saveProject().
+     *
+     * Must be called on the main thread.  Typically called on project close
+     * or when ExplorationGraphView::colorMapChanged() fires.
+     *
+     * \param wordCountCache   Map of commit hash strings to word-count integers,
+     *                         as returned by GitService::saveWordCountCache().
+     * \param explorationColors Map of branch name strings to colour strings
+     *                          (e.g. "#a0c4ff"), as returned by
+     *                          ExplorationGraphView::saveColorMap().
+     * \sa loadExplorationData()
+     */
     void saveExplorationData(const QVariantMap &wordCountCache,
                               const QVariantMap &explorationColors);
+
+    /**
+     * \brief Reads exploration caches from the project file.
+     *
+     * Populates the output parameters from the project JSON data written by
+     * saveExplorationData().  Both output parameters are cleared before
+     * being populated; if no data was previously saved the maps are left
+     * empty rather than returning an error.
+     *
+     * Must be called on the main thread.  Typically called immediately
+     * after openProject() succeeds.
+     *
+     * \param[out] wordCountCache    Populated with a map of commit hash strings
+     *                               to word-count integers.
+     * \param[out] explorationColors Populated with a map of branch name strings
+     *                               to colour strings.
+     * \sa saveExplorationData(), GitService::loadWordCountCache(),
+     *     ExplorationGraphView::loadColorMap()
+     */
     void loadExplorationData(QVariantMap &wordCountCache,
                               QVariantMap &explorationColors) const;
 

@@ -26,24 +26,113 @@
 #include <QColor>
 #include <QVariantMap>
 
+/**
+ * \brief Custom widget that renders the exploration (branch) graph.
+ *
+ * ExplorationGraphView paints a vertical, lane-based commit graph for
+ * all local branches in the repository.  Each branch occupies a coloured
+ * lane; merge edges are drawn between lanes.  Commit nodes scale with
+ * their word-count delta so writers can see at a glance where the most
+ * productive commits are.
+ *
+ * The widget supports scroll via mouse wheel and keyboard arrows,
+ * node selection via click, and a context menu for branch-management
+ * actions.  It does not perform any Git I/O itself — refresh() delegates
+ * to GitService::getExplorationGraph() on a worker thread.
+ *
+ * \sa ExplorationsPanel, GitService::getExplorationGraph()
+ */
 class ExplorationGraphView : public QWidget
 {
     Q_OBJECT
 public:
     explicit ExplorationGraphView(QWidget *parent = nullptr);
 
+    /**
+     * \brief Sets the repository whose graph will be displayed.
+     *
+     * Does not trigger a repaint; call refresh() after this to load
+     * and render the graph.
+     *
+     * \param path Absolute path to the root of the Git repository.
+     */
     void setRepoPath(const QString &path);
+
+    /**
+     * \brief Reloads the exploration graph from GitService and repaints.
+     *
+     * Delegates to GitService::getExplorationGraph() on a worker thread.
+     * The widget is repainted once the future resolves on the main thread.
+     * It is safe to call this method from the main thread at any time.
+     */
     void refresh();
 
+    /**
+     * \brief Restores the branch-colour map from a previously serialized map.
+     *
+     * Must be called before the first refresh() so that branch colours are
+     * consistent across sessions.
+     *
+     * \param data Map of branch name strings to colour strings (e.g. "#a0c4ff"),
+     *             as produced by saveColorMap().
+     * \sa saveColorMap()
+     */
     void loadColorMap(const QVariantMap &data);
+
+    /**
+     * \brief Serializes the current branch-colour assignments to a QVariantMap.
+     *
+     * \return Map of branch name strings to colour strings suitable for
+     *         passing to ProjectManager::saveExplorationData().
+     * \sa loadColorMap()
+     */
     QVariantMap saveColorMap() const;
 
+    /**
+     * \brief Updates the widget's notion of which branch is currently checked out.
+     *
+     * The HEAD node for this branch is rendered with a distinct ring.
+     * Does not reload graph data; call refresh() if the branch has changed
+     * because of a checkout.
+     *
+     * \param branch Name of the currently active branch.
+     */
     void setCurrentBranch(const QString &branch);
 
 Q_SIGNALS:
+    /**
+     * \brief Emitted when the user requests to switch to a branch via the context menu.
+     *
+     * Fired on the main thread.
+     *
+     * \param branchName Name of the branch to switch to.
+     */
     void switchRequested(const QString &branchName);
+
+    /**
+     * \brief Emitted when the user requests to integrate (merge) a branch via the context menu.
+     *
+     * Fired on the main thread.
+     *
+     * \param sourceBranch Name of the branch to merge into the current branch.
+     */
     void integrateRequested(const QString &sourceBranch);
+
+    /**
+     * \brief Emitted when the user requests a landmark tag on a commit.
+     *
+     * Fired on the main thread.
+     *
+     * \param hash Full commit OID of the node on which the landmark is requested.
+     */
     void createLandmarkRequested(const QString &hash);
+
+    /**
+     * \brief Emitted when the user assigns a new colour to a branch lane.
+     *
+     * Fired on the main thread.  Callers should persist the updated map via
+     * saveColorMap() and ProjectManager::saveExplorationData().
+     */
     void colorMapChanged();
 
 protected:

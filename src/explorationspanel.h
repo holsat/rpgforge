@@ -29,20 +29,81 @@ class QVBoxLayout;
 class QFrame;
 class QToolButton;
 
+/**
+ * \brief Side-panel widget that hosts the exploration graph and stash manager.
+ *
+ * ExplorationsPanel composes an ExplorationGraphView with a collapsible
+ * stash section that lists current Git stash entries and provides apply/drop
+ * actions.  It also exposes a "New Exploration" toolbar button for creating
+ * branches directly from the panel.
+ *
+ * All signals from the embedded graph view are re-emitted from this class
+ * so that parent widgets can connect to a single panel object rather than
+ * to the inner graph view.
+ *
+ * \sa ExplorationGraphView, GitService
+ */
 class ExplorationsPanel : public QWidget
 {
     Q_OBJECT
 public:
     explicit ExplorationsPanel(QWidget *parent = nullptr);
 
+    /**
+     * \brief Sets the project root directory and propagates it to child views.
+     *
+     * Does not trigger a repaint; call refresh() after this.
+     *
+     * \param path Absolute path to the project root (must be a Git repository).
+     */
     void setRootPath(const QString &path);
+
+    /**
+     * \brief Reloads the exploration graph and stash list from Git.
+     *
+     * Delegates graph data loading to ExplorationGraphView::refresh() and
+     * rebuilds the stash widget list synchronously via
+     * GitService::listStashes().  Safe to call from the main thread.
+     */
     void refresh();
 
+    /**
+     * \brief Returns the embedded ExplorationGraphView.
+     *
+     * Provided for callers that need to connect to colour-map signals or
+     * invoke serialization methods directly on the graph view.
+     *
+     * \return Non-owning pointer to the embedded graph view; never null
+     *         after construction.
+     */
     ExplorationGraphView *graphView() const { return m_graphView; }
 
 Q_SIGNALS:
+    /**
+     * \brief Re-emitted from the embedded ExplorationGraphView.
+     *
+     * Fired on the main thread when the user requests a branch switch.
+     *
+     * \param branchName Name of the branch to switch to.
+     */
     void switchRequested(const QString &branchName);
+
+    /**
+     * \brief Re-emitted from the embedded ExplorationGraphView.
+     *
+     * Fired on the main thread when the user requests a branch integration.
+     *
+     * \param sourceBranch Name of the branch to merge into the current branch.
+     */
     void integrateRequested(const QString &sourceBranch);
+
+    /**
+     * \brief Re-emitted from the embedded ExplorationGraphView.
+     *
+     * Fired on the main thread when the user requests a landmark on a commit.
+     *
+     * \param hash Full commit OID of the target node.
+     */
     void createLandmarkRequested(const QString &hash);
 
 private Q_SLOTS:

@@ -23,16 +23,53 @@
 
 class QLineEdit;
 
+/**
+ * \brief Dialog that resolves uncommitted changes before an exploration switch.
+ *
+ * Shown when the user attempts to switch to a different exploration branch
+ * while the working tree is dirty.  The dialog presents two resolution paths:
+ * commit the changes as a milestone, or park them as a stash entry.  It
+ * emits exactly one of its two signals when the user confirms a choice.
+ *
+ * \sa GitService::switchExploration(), GitService::stashChanges()
+ */
 class UnsavedChangesDialog : public QDialog
 {
     Q_OBJECT
 public:
+    /**
+     * \brief Constructs the dialog describing the pending branch switch.
+     *
+     * The dialog text names both branches so the user understands the
+     * context of the choice.
+     *
+     * \param currentBranch Name of the branch currently checked out.
+     * \param targetBranch  Name of the branch the user wants to switch to.
+     * \param parent        Optional parent widget.
+     */
     explicit UnsavedChangesDialog(const QString &currentBranch,
                                    const QString &targetBranch,
                                    QWidget *parent = nullptr);
 
 Q_SIGNALS:
+    /**
+     * \brief Emitted when the user chooses to commit changes as a milestone.
+     *
+     * Fired on the main thread when the user confirms the "Save as Milestone"
+     * action.  The caller should pass the message to GitService::commitAll().
+     *
+     * \param milestoneMessage User-supplied commit message for the milestone.
+     */
     void saveRequested(const QString &milestoneMessage);
+
+    /**
+     * \brief Emitted when the user chooses to park changes as a stash entry.
+     *
+     * Fired on the main thread when the user confirms the "Park Changes"
+     * action.  The caller should pass the message to GitService::stashChanges().
+     *
+     * \param stashMessage User-supplied description for the stash entry.
+     */
     void stashRequested(const QString &stashMessage);
 
 private:
