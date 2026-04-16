@@ -274,14 +274,18 @@ bool ProjectTreeModel::setData(const QModelIndex &index, const QVariant &value, 
     return false;
 }
 
+// Validate that `item` is still reachable from `root` WITHOUT dereferencing
+// `item` until we've proven it's in the tree. Walking up from item->parent
+// (the previous implementation) is UB when item is a dangling pointer — the
+// very first dereference reads freed memory and can segfault, which is how
+// we crashed during edit-commit repaints racing against background scanners.
+// Walk down from root instead: if we reach item by traversing known-live
+// children, the pointer is valid.
 static bool isItemInTree(ProjectTreeItem *item, ProjectTreeItem *root) {
     if (!item || !root) return false;
     if (item == root) return true;
-    // Walk up from item to check if it reaches root
-    ProjectTreeItem *p = item->parent;
-    while (p) {
-        if (p == root) return true;
-        p = p->parent;
+    for (ProjectTreeItem *child : root->children) {
+        if (isItemInTree(item, child)) return true;
     }
     return false;
 }

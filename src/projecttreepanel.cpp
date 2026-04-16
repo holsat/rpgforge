@@ -154,6 +154,14 @@ void ProjectTreePanel::setupUi()
     m_treeView->setDefaultDropAction(Qt::MoveAction);
     m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    // Rename only on F2 (standard KDE convention). Without this, the default
+    // edit triggers include DoubleClicked / SelectedClicked, which swallow
+    // the click that should be activating the file and open in-place rename
+    // instead — also triggering a setData/dataChanged cycle that races with
+    // the background scanners.
+    m_treeView->setEditTriggers(QAbstractItemView::EditKeyPressed);
+
     m_treeView->hide(); // hidden until project open
 
     connect(m_treeView, &QTreeView::activated, this, &ProjectTreePanel::onItemActivated);
