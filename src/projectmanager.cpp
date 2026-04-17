@@ -665,6 +665,40 @@ void ProjectManager::validateTree()
             }
         }
 
+        // Fix type: leaf Folder (no children) whose path resolves to a file on
+        // disk should be a File. Scrivener-imported projects often record
+        // documents as extensionless Folder entries; the on-disk file lives
+        // alongside with a .md/.markdown suffix. Without this correction the
+        // tree click handler treats the item as a folder and never opens it.
+        if (item->type == ProjectTreeItem::Folder
+            && !item->path.isEmpty()
+            && item->children.isEmpty()
+            && !m_projectFilePath.isEmpty())
+        {
+            QDir projectDir(projectPath());
+            const QStringList candidates = {
+                item->path,
+                item->path + QStringLiteral(".md"),
+                item->path + QStringLiteral(".markdown"),
+                item->path + QStringLiteral(".txt")
+            };
+            for (const QString &candidate : candidates) {
+                const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+                if (fi.exists() && fi.isFile()) {
+                    qDebug() << "ProjectManager: validateTree: Correcting leaf Folder ->"
+                             << "File for" << item->name
+                             << "(path was" << item->path << ", on-disk file is"
+                             << fi.absoluteFilePath() << ")";
+                    item->type = ProjectTreeItem::File;
+                    if (item->path != candidate) {
+                        item->path = candidate;  // record the path with extension
+                    }
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
         // Fix type: has children but typed as File
         if (item->type == ProjectTreeItem::File && !item->children.isEmpty()) {
             qDebug() << "ProjectManager: validateTree: Correcting type File->Folder for" << item->name << "(has children)";

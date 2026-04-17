@@ -526,22 +526,76 @@ void ProjectTreePanel::updateExplorationList()
     m_explorationCombo->blockSignals(false);
 }
 
+// If `item` is typed as Folder but is a leaf whose path resolves to a real
+// file on disk (with or without a markdown suffix), return the path that
+// resolves; otherwise return an empty string. This compensates for legacy /
+// Scrivener-imported tree entries where documents were recorded as
+// extensionless Folder nodes.
+static QString resolveFolderItemAsFile(const ProjectTreeItem *item)
+{
+    if (!item) return QString();
+    if (item->path.isEmpty()) return QString();
+    if (!item->children.isEmpty()) return QString();
+    if (!ProjectManager::instance().isProjectOpen()) return QString();
+
+    const QDir projectDir(ProjectManager::instance().projectPath());
+    const QStringList candidates = {
+        item->path,
+        item->path + QStringLiteral(".md"),
+        item->path + QStringLiteral(".markdown"),
+        item->path + QStringLiteral(".txt")
+    };
+    for (const QString &c : candidates) {
+        const QFileInfo fi(projectDir.absoluteFilePath(c));
+        if (fi.exists() && fi.isFile()) return c;
+    }
+    return QString();
+}
+
 void ProjectTreePanel::onItemClicked(const QModelIndex &index)
 {
-    // Single-click handler: only opens FILES. Folders are just selected so
+    // Single-click handler: opens FILES. Real folders are just selected so
     // navigating the tree does not destroy the editor's open document.
+    qDebug() << "ProjectTreePanel::onItemClicked indexValid=" << index.isValid()
+             << "row=" << (index.isValid() ? index.row() : -1);
     if (!index.isValid()) return;
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (!item) return;
+    if (!item) {
+        qDebug() << "ProjectTreePanel::onItemClicked itemFromIndex returned null — model rejected the index (dangling pointer guard)";
+        return;
+    }
+    qDebug() << "ProjectTreePanel::onItemClicked name=" << item->name
+             << "type=" << static_cast<int>(item->type)
+             << "(0=Folder 1=File)"
+             << "path=" << item->path
+             << "category=" << static_cast<int>(item->category);
 
     if (item->type == ProjectTreeItem::File) {
+        qDebug() << "ProjectTreePanel::onItemClicked emitting fileActivated for" << item->path;
         Q_EMIT fileActivated(item->path);
-    } else if (item->type == ProjectTreeItem::Folder) {
-        // Track the selected folder for "Add File / Add Folder" toolbar
-        // actions, but do not switch the central view — the user has not
-        // explicitly asked to leave the editor.
-        m_activeFolderIndex = QPersistentModelIndex(index);
+        return;
     }
+
+    if (item->type == ProjectTreeItem::Folder) {
+        // Compatibility fallback: legacy / Scrivener-imported items can be
+        // typed as Folder while really being documents on disk. Detect that
+        // case and open the file. validateTree() heals these on next load
+        // but we want clicks to work in the current session too.
+        const QString resolved = resolveFolderItemAsFile(item);
+        if (!resolved.isEmpty()) {
+            qDebug() << "ProjectTreePanel::onItemClicked Folder-typed item resolves to file"
+                     << resolved << "— treating as file open";
+            Q_EMIT fileActivated(resolved);
+            return;
+        }
+
+        // Real folder — just select it (do not switch the central view).
+        qDebug() << "ProjectTreePanel::onItemClicked folder selected (no view switch)";
+        m_activeFolderIndex = QPersistentModelIndex(index);
+        return;
+    }
+
+    qDebug() << "ProjectTreePanel::onItemClicked item type is neither File nor Folder — ignored";
 }
 
 void ProjectTreePanel::onItemActivated(const QModelIndex &index)
@@ -555,7 +609,19 @@ void ProjectTreePanel::onItemActivated(const QModelIndex &index)
 
     if (item->type == ProjectTreeItem::File) {
         Q_EMIT fileActivated(item->path);
-    } else if (item->type == ProjectTreeItem::Folder) {
+        return;
+    }
+
+    if (item->type == ProjectTreeItem::Folder) {
+        // Same compatibility fallback as in onItemClicked: a "Folder" leaf
+        // that maps to a file on disk should open as a file, not toggle the
+        // corkboard. Otherwise double-clicking a legacy document entry would
+        // surprise the user with an empty corkboard.
+        const QString resolved = resolveFolderItemAsFile(item);
+        if (!resolved.isEmpty()) {
+            Q_EMIT fileActivated(resolved);
+            return;
+        }
         m_activeFolderIndex = QPersistentModelIndex(index);
         Q_EMIT folderActivated(item->path);
     }
