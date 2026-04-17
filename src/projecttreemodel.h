@@ -102,6 +102,41 @@ public:
     ProjectTreeItem* findItem(const QString &relativePath, ProjectTreeItem *root = nullptr) const;
     QModelIndex indexForItem(ProjectTreeItem *item) const;
 
+    /**
+     * @brief Derives the authoritative category from a project-relative path.
+     *
+     * The three authoritative top-level folders are:
+     *   - "manuscript" -> Manuscript
+     *   - "lorekeeper" -> LoreKeeper
+     *   - "research"   -> Research
+     *
+     * Items that live under one of these roots (e.g. "manuscript/ch1/scene1.md")
+     * inherit the root's category. Comparison is case-insensitive on the
+     * first path segment. Returns ProjectTreeItem::None if the path is empty
+     * or does not begin with one of the authoritative roots.
+     */
+    static ProjectTreeItem::Category categoryForPath(const QString &relativePath);
+
+    /**
+     * @brief Returns `item`'s own category, or the nearest ancestor's category
+     * if the item's own category is None. Stops at the root (returns None if
+     * no categorized ancestor is found).
+     *
+     * Used by routing consumers (compile, PDF export, file-open read-only
+     * check, LoreKeeper RAG triggers, etc.) that need to treat unset
+     * categories as inherited from the parent folder.
+     */
+    ProjectTreeItem::Category effectiveCategory(const ProjectTreeItem *item) const;
+
+    /**
+     * @brief Returns true if the item is an authoritative top-level folder —
+     * i.e. a Folder directly under the root whose path resolves to one of
+     * the three authoritative categories (Manuscript / LoreKeeper / Research).
+     *
+     * Authoritative folders cannot be renamed, moved, or removed by the user.
+     */
+    bool isAuthoritativeRoot(const ProjectTreeItem *item) const;
+
     QModelIndex addFolder(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
     QModelIndex addFile(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
     QModelIndex addFileWithSmartDiscovery(const QString &absolutePath, const QModelIndex &parent = QModelIndex());

@@ -25,8 +25,42 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QDebug>
 #include <KLocalizedString>
+
+ProjectTreeItem::Category ProjectTreeModel::categoryForPath(const QString &relativePath)
+{
+    if (relativePath.isEmpty()) return ProjectTreeItem::None;
+
+    // Split on both '/' and '\\' so Windows-style paths from older project files
+    // are handled the same as Unix paths. Only the first segment matters.
+    const QString firstSegment = relativePath.section(QRegularExpression(QStringLiteral("[/\\\\]")),
+                                                     0, 0).toLower();
+    if (firstSegment == QLatin1String("manuscript")) return ProjectTreeItem::Manuscript;
+    if (firstSegment == QLatin1String("lorekeeper")) return ProjectTreeItem::LoreKeeper;
+    if (firstSegment == QLatin1String("research"))   return ProjectTreeItem::Research;
+    return ProjectTreeItem::None;
+}
+
+ProjectTreeItem::Category ProjectTreeModel::effectiveCategory(const ProjectTreeItem *item) const
+{
+    if (!item) return ProjectTreeItem::None;
+    const ProjectTreeItem *cursor = item;
+    while (cursor && cursor != m_rootItem) {
+        if (cursor->category != ProjectTreeItem::None) return cursor->category;
+        cursor = cursor->parent;
+    }
+    return ProjectTreeItem::None;
+}
+
+bool ProjectTreeModel::isAuthoritativeRoot(const ProjectTreeItem *item) const
+{
+    if (!item || item == m_rootItem) return false;
+    if (item->type != ProjectTreeItem::Folder) return false;
+    if (item->parent != m_rootItem) return false;
+    return categoryForPath(item->path) != ProjectTreeItem::None;
+}
 
 ProjectTreeModel::ProjectTreeModel(QObject *parent)
     : QAbstractItemModel(parent)
@@ -182,15 +216,21 @@ Qt::ItemFlags ProjectTreeModel::flags(const QModelIndex &index) const
     if (!index.isValid()) return Qt::ItemIsDropEnabled;
 
     ProjectTreeItem *item = static_cast<ProjectTreeItem*>(index.internalPointer());
-    Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
 
-    // LoreKeeper root node is protected: no editing, no removing
-    if (item->category == ProjectTreeItem::LoreKeeper && item->type == ProjectTreeItem::Folder && item->parent == m_rootItem) {
-        return flags;
+    // Authoritative top-level folders (manuscript/, lorekeeper/, research/)
+    // are protected: the user cannot rename, drag, or remove them. They can
+    // still receive drops (items dragged into them) and be selected.
+    if (isAuthoritativeRoot(item)) {
+        return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDropEnabled;
     }
 
-    // LoreKeeper content is read-only
-    if (item->category != ProjectTreeItem::LoreKeeper) {
+    Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
+
+    // LoreKeeper content is read-only (the service owns its dossiers).
+    // Inherited category is the right check: a file under
+    // lorekeeper/Characters/ should be read-only even if its own category
+    // field is None.
+    if (effectiveCategory(item) != ProjectTreeItem::LoreKeeper) {
         flags |= Qt::ItemIsEditable;
     }
 
@@ -267,6 +307,44 @@ ProjectTreeItem* ProjectTreeModel::loadItem(const QJsonObject &obj, ProjectTreeI
         item->children.append(loadItem(child.toObject(), item));
     }
 
+    // Path is the source of truth for the three authoritative categories
+    // (Manuscript / LoreKeeper / Research). If the path places this item
+    // under manuscript/, lorekeeper/, or research/, and the JSON didn't
+    // assign a more specific subcategory (Chapter, Scene, Characters,
+    // Places, Cultures, ...) that implies the same umbrella, stamp the
+    // umbrella category. User-assigned subcategories are preserved so
+    // Chapter/Scene survive a round-trip.
+    //
+    // If the item has no category of its own AND its path doesn't fall
+    // under an authoritative root, inherit the parent's category.
+    auto isSubcategoryOf = [](ProjectTreeItem::Category child,
+                              ProjectTreeItem::Category umbrella) {
+        if (umbrella == ProjectTreeItem::Manuscript) {
+            return child == ProjectTreeItem::Chapter
+                || child == ProjectTreeItem::Scene;
+        }
+        if (umbrella == ProjectTreeItem::LoreKeeper) {
+            return child == ProjectTreeItem::Characters
+                || child == ProjectTreeItem::Places
+                || child == ProjectTreeItem::Cultures;
+        }
+        // Research has no known subcategories today.
+        return false;
+    };
+
+    const auto pathDerived = categoryForPath(item->path);
+    if (pathDerived != ProjectTreeItem::None) {
+        const bool keepExistingSubcategory =
+            item->category != ProjectTreeItem::None
+            && (item->category == pathDerived
+                || isSubcategoryOf(item->category, pathDerived));
+        if (!keepExistingSubcategory) {
+            item->category = pathDerived;
+        }
+    } else if (item->category == ProjectTreeItem::None && parent) {
+        item->category = parent->category;
+    }
+
     return item;
 }
 
@@ -278,6 +356,10 @@ QJsonObject ProjectTreeModel::saveItem(ProjectTreeItem *item) const
     obj[QStringLiteral("synopsis")] = item->synopsis;
     obj[QStringLiteral("status")] = item->status;
     obj[QStringLiteral("type")] = static_cast<int>(item->type);
+    // Category is still written to JSON for backward compatibility with
+    // external tools, but it is informational only: loadItem() recomputes
+    // the category from path for the three authoritative roots and from
+    // parent inheritance otherwise. The on-disk value is not trusted.
     obj[QStringLiteral("category")] = static_cast<int>(item->category);
 
     QJsonArray children;
@@ -436,6 +518,19 @@ bool ProjectTreeModel::removeRows(int row, int count, const QModelIndex &parent)
     if (!parentItem || row < 0 || row + count > parentItem->children.count()) return false;
 
     QMutexLocker locker(&m_treeMutex);
+
+    // Refuse to remove authoritative top-level folders. Checked before any
+    // mutation so a mixed-selection remove is atomic: if any child in the
+    // range is protected, the entire operation is rejected. This keeps the
+    // three authoritative roots present for the life of the project.
+    for (int i = 0; i < count; ++i) {
+        if (isAuthoritativeRoot(parentItem->children.at(row + i))) {
+            qDebug() << "ProjectTreeModel: Refusing to remove authoritative folder"
+                     << parentItem->children.at(row + i)->path;
+            return false;
+        }
+    }
+
     beginRemoveRows(parent, row, row + count - 1);
     for (int i = 0; i < count; ++i) {
         delete parentItem->children.takeAt(row);
@@ -566,6 +661,9 @@ bool ProjectTreeModel::canDropMimeData(const QMimeData *data, Qt::DropAction act
         if (!draggedItem) return false;
         if (draggedItem == targetItem) return false;
 
+        // Authoritative top-level folders are not draggable at all.
+        if (isAuthoritativeRoot(draggedItem)) return false;
+
         ProjectTreeItem *p = targetItem;
         while (p) {
             if (p == draggedItem) return false;
@@ -609,6 +707,10 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
             draggedItem = findByName(m_rootItem);
         }
         if (!draggedItem || !draggedItem->parent) continue;
+
+        // Authoritative top-level folders are not moveable. Skip any such
+        // item silently — the drop still proceeds for remaining items.
+        if (isAuthoritativeRoot(draggedItem)) continue;
 
         // Verify no circular move
         bool circular = false;

@@ -55,6 +55,7 @@ Q_SIGNALS:
 private Q_SLOTS:
     void onProjectOpened();
     void onProjectClosed();
+    void onItemClicked(const QModelIndex &index);
     void onItemActivated(const QModelIndex &index);
     void onCustomContextMenu(const QPoint &pos);
     

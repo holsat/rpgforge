@@ -165,8 +165,16 @@ void ProjectTreePanel::setupUi()
 
     m_treeView->hide(); // hidden until project open
 
-    connect(m_treeView, &QTreeView::activated, this, &ProjectTreePanel::onItemActivated);
-    connect(m_treeView, &QTreeView::clicked, this, &ProjectTreePanel::onItemActivated);
+    // Single-click opens FILES in the editor; folders are selected only.
+    // Switching to the corkboard requires an explicit double-click on the
+    // folder. Previously single-click on any folder switched the central
+    // view to the corkboard, which made navigating the tree destroy the
+    // open editor as a side-effect (folderActivated fired on every click).
+    connect(m_treeView, &QTreeView::clicked, this, &ProjectTreePanel::onItemClicked);
+    connect(m_treeView, &QTreeView::doubleClicked, this, &ProjectTreePanel::onItemActivated);
+    // Note: NOT connecting QTreeView::activated. On KDE single-click style
+    // it overlaps with `clicked`, causing folder corkboard activation on
+    // every single click — exactly the bug we are fixing.
     connect(m_treeView, &QTreeView::customContextMenuRequested, this, &ProjectTreePanel::onCustomContextMenu);
 
     connect(m_treeView->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
@@ -518,8 +526,29 @@ void ProjectTreePanel::updateExplorationList()
     m_explorationCombo->blockSignals(false);
 }
 
+void ProjectTreePanel::onItemClicked(const QModelIndex &index)
+{
+    // Single-click handler: only opens FILES. Folders are just selected so
+    // navigating the tree does not destroy the editor's open document.
+    if (!index.isValid()) return;
+    ProjectTreeItem *item = m_model->itemFromIndex(index);
+    if (!item) return;
+
+    if (item->type == ProjectTreeItem::File) {
+        Q_EMIT fileActivated(item->path);
+    } else if (item->type == ProjectTreeItem::Folder) {
+        // Track the selected folder for "Add File / Add Folder" toolbar
+        // actions, but do not switch the central view — the user has not
+        // explicitly asked to leave the editor.
+        m_activeFolderIndex = QPersistentModelIndex(index);
+    }
+}
+
 void ProjectTreePanel::onItemActivated(const QModelIndex &index)
 {
+    // Activation handler (double-click or Enter): files open in the editor,
+    // folders open the corkboard. Single-click no longer routes here — see
+    // the connection block in setupUi().
     if (!index.isValid()) return;
     ProjectTreeItem *item = m_model->itemFromIndex(index);
     if (!item) return;
@@ -560,43 +589,48 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         menu.addSeparator();
         ProjectTreeItem *item = m_model->itemFromIndex(index);
         if (!item) return;
-        
+
         QString itemPath = item->path;
         bool isFile = (item->type == ProjectTreeItem::File);
 
-        // Category Submenu
-        auto *categoryMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), i18n("Set Category"));
-        
-        auto addCategoryAction = [&](const QString &text, const QString &icon, ProjectTreeItem::Category cat) {
-            auto *action = categoryMenu->addAction(QIcon::fromTheme(icon), text);
-            action->setCheckable(true);
-            // We resolve the item in the lambda to be safe
-            connect(action, &QAction::triggered, this, [this, itemPath, cat]() {
-                ProjectTreeItem *resolved = m_model->findItem(itemPath);
-                if (resolved) {
-                    resolved->category = cat;
-                    QModelIndex idx = m_model->indexForItem(resolved);
-                    if (idx.isValid()) m_model->dataChanged(idx, idx, {Qt::DecorationRole});
-                    
-                    // Authoritative save
-                    ProjectManager::instance().saveProject();
-                }
-            });
-            // Initial check state
-            ProjectTreeItem *resolved = m_model->findItem(itemPath);
-            if (resolved) action->setChecked(resolved->category == cat);
-        };
+        // Category submenu is only offered for items that the user is allowed
+        // to recategorize. The three authoritative top-level folders
+        // (manuscript/, lorekeeper/, research/) have their category derived
+        // from path and cannot be overridden.
+        if (!m_model->isAuthoritativeRoot(item)) {
+            auto *categoryMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), i18n("Set Category"));
 
-        addCategoryAction(i18n("None"), QStringLiteral("folder"), ProjectTreeItem::None);
-        addCategoryAction(i18n("Manuscript"), QStringLiteral("document-edit"), ProjectTreeItem::Manuscript);
-        addCategoryAction(i18n("Research"), QStringLiteral("search"), ProjectTreeItem::Research);
-        addCategoryAction(i18n("Chapter"), QStringLiteral("book-contents"), ProjectTreeItem::Chapter);
-        addCategoryAction(i18n("Scene"), QStringLiteral("document-edit-symbolic"), ProjectTreeItem::Scene);
-        addCategoryAction(i18n("Characters"), QStringLiteral("user-identity"), ProjectTreeItem::Characters);
-        addCategoryAction(i18n("Places"), QStringLiteral("applications-graphics"), ProjectTreeItem::Places);
-        addCategoryAction(i18n("Cultures"), QStringLiteral("view-list-details"), ProjectTreeItem::Cultures);
-        addCategoryAction(i18n("Stylesheet"), QStringLiteral("applications-graphics-symbolic"), ProjectTreeItem::Stylesheet);
-        addCategoryAction(i18n("Notes"), QStringLiteral("note-sticky"), ProjectTreeItem::Notes);
+            auto addCategoryAction = [&](const QString &text, const QString &icon, ProjectTreeItem::Category cat) {
+                auto *action = categoryMenu->addAction(QIcon::fromTheme(icon), text);
+                action->setCheckable(true);
+                // We resolve the item in the lambda to be safe
+                connect(action, &QAction::triggered, this, [this, itemPath, cat]() {
+                    ProjectTreeItem *resolved = m_model->findItem(itemPath);
+                    if (resolved) {
+                        resolved->category = cat;
+                        QModelIndex idx = m_model->indexForItem(resolved);
+                        if (idx.isValid()) m_model->dataChanged(idx, idx, {Qt::DecorationRole});
+
+                        // Authoritative save
+                        ProjectManager::instance().saveProject();
+                    }
+                });
+                // Initial check state
+                ProjectTreeItem *resolved = m_model->findItem(itemPath);
+                if (resolved) action->setChecked(resolved->category == cat);
+            };
+
+            addCategoryAction(i18n("None"), QStringLiteral("folder"), ProjectTreeItem::None);
+            addCategoryAction(i18n("Manuscript"), QStringLiteral("document-edit"), ProjectTreeItem::Manuscript);
+            addCategoryAction(i18n("Research"), QStringLiteral("search"), ProjectTreeItem::Research);
+            addCategoryAction(i18n("Chapter"), QStringLiteral("book-contents"), ProjectTreeItem::Chapter);
+            addCategoryAction(i18n("Scene"), QStringLiteral("document-edit-symbolic"), ProjectTreeItem::Scene);
+            addCategoryAction(i18n("Characters"), QStringLiteral("user-identity"), ProjectTreeItem::Characters);
+            addCategoryAction(i18n("Places"), QStringLiteral("applications-graphics"), ProjectTreeItem::Places);
+            addCategoryAction(i18n("Cultures"), QStringLiteral("view-list-details"), ProjectTreeItem::Cultures);
+            addCategoryAction(i18n("Stylesheet"), QStringLiteral("applications-graphics-symbolic"), ProjectTreeItem::Stylesheet);
+            addCategoryAction(i18n("Notes"), QStringLiteral("note-sticky"), ProjectTreeItem::Notes);
+        }
 
         menu.addSeparator();
         if (isFile) {
@@ -656,12 +690,20 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
             });
         }
         menu.addSeparator();
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
-        if (isFile) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
+        // Authoritative top-level folders cannot be renamed or removed: the
+        // model rejects those operations, and offering them in the menu
+        // would just present the user with actions that silently no-op.
+        const bool isAuthoritative = m_model->isAuthoritativeRoot(item);
+        if (!isAuthoritative) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
+            if (isFile) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
+            }
         }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
+        if (!isAuthoritative) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
+        }
     }
 
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));

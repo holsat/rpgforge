@@ -517,6 +517,225 @@ private Q_SLOTS:
 
         delete mime;
     }
+
+    // ---------------------------------------------------------------
+    // Category refactor: path-based derivation + inheritance
+    // ---------------------------------------------------------------
+
+    void testCategoryForPath_topLevel()
+    {
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("manuscript")),
+                 ProjectTreeItem::Manuscript);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("lorekeeper")),
+                 ProjectTreeItem::LoreKeeper);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("research")),
+                 ProjectTreeItem::Research);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("stylesheets")),
+                 ProjectTreeItem::None);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QString()),
+                 ProjectTreeItem::None);
+    }
+
+    void testCategoryForPath_subPath()
+    {
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("manuscript/ch1/scene1.md")),
+                 ProjectTreeItem::Manuscript);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("lorekeeper/Characters/Aragorn.md")),
+                 ProjectTreeItem::LoreKeeper);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("research/notes/timeline.md")),
+                 ProjectTreeItem::Research);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("media/image.png")),
+                 ProjectTreeItem::None);
+    }
+
+    void testCategoryForPath_caseInsensitive()
+    {
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("Manuscript")),
+                 ProjectTreeItem::Manuscript);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("MANUSCRIPT/ch1.md")),
+                 ProjectTreeItem::Manuscript);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("LoreKeeper/Places/Rivendell.md")),
+                 ProjectTreeItem::LoreKeeper);
+        QCOMPARE(ProjectTreeModel::categoryForPath(QStringLiteral("Research")),
+                 ProjectTreeItem::Research);
+    }
+
+    void testEffectiveCategory_inheritsFromParent()
+    {
+        // Build a tree where the child item has category=None but lives
+        // under a Manuscript-tagged parent. effectiveCategory should walk
+        // up to find the nearest categorized ancestor.
+        ProjectTreeModel model;
+        QModelIndex parentIdx = model.addFolder(QStringLiteral("My Chapters"),
+                                                QStringLiteral("my-chapters"), QModelIndex());
+        ProjectTreeItem *parent = model.itemFromIndex(parentIdx);
+        QVERIFY(parent);
+        parent->category = ProjectTreeItem::Manuscript;
+
+        QModelIndex childIdx = model.addFile(QStringLiteral("scene.md"),
+                                             QStringLiteral("my-chapters/scene.md"), parentIdx);
+        ProjectTreeItem *child = model.itemFromIndex(childIdx);
+        QVERIFY(child);
+        QCOMPARE(child->category, ProjectTreeItem::None);
+
+        QCOMPARE(model.effectiveCategory(child), ProjectTreeItem::Manuscript);
+
+        // Own category takes precedence over parent's when set.
+        child->category = ProjectTreeItem::Scene;
+        QCOMPARE(model.effectiveCategory(child), ProjectTreeItem::Scene);
+
+        // Null input returns None and does not crash.
+        QCOMPARE(model.effectiveCategory(nullptr), ProjectTreeItem::None);
+    }
+
+    void testEffectiveCategory_loadItem_inheritsFromPath()
+    {
+        // A file loaded under path "manuscript/ch1.md" with no explicit
+        // category in JSON should end up categorized as Manuscript via
+        // the path override in loadItem, so effectiveCategory just returns
+        // its own category directly.
+        ProjectTreeModel model;
+        QJsonObject root;
+        root[QStringLiteral("name")] = QStringLiteral("Root");
+        root[QStringLiteral("type")] = 0;
+        root[QStringLiteral("category")] = 0;
+
+        QJsonObject manuscript;
+        manuscript[QStringLiteral("name")] = QStringLiteral("Manuscript");
+        manuscript[QStringLiteral("path")] = QStringLiteral("manuscript");
+        manuscript[QStringLiteral("type")] = 0;
+        // Deliberately set the wrong category in JSON to prove path wins.
+        manuscript[QStringLiteral("category")] = 0;
+
+        QJsonObject scene;
+        scene[QStringLiteral("name")] = QStringLiteral("Scene 1");
+        scene[QStringLiteral("path")] = QStringLiteral("manuscript/scene1.md");
+        scene[QStringLiteral("type")] = 1;
+        scene[QStringLiteral("category")] = 0;
+
+        manuscript[QStringLiteral("children")] = QJsonArray{scene};
+        root[QStringLiteral("children")] = QJsonArray{manuscript};
+        model.setProjectData(root);
+
+        ProjectTreeItem *manItem = model.itemFromIndex(model.index(0, 0, QModelIndex()));
+        QVERIFY(manItem);
+        QCOMPARE(manItem->category, ProjectTreeItem::Manuscript);
+
+        QModelIndex manIdx = model.index(0, 0, QModelIndex());
+        ProjectTreeItem *sceneItem = model.itemFromIndex(model.index(0, 0, manIdx));
+        QVERIFY(sceneItem);
+        // Path override lands on the child too since its path falls under
+        // manuscript/.
+        QCOMPARE(sceneItem->category, ProjectTreeItem::Manuscript);
+        QCOMPARE(model.effectiveCategory(sceneItem), ProjectTreeItem::Manuscript);
+    }
+
+    void testFlags_authoritativeFolderNotEditable()
+    {
+        ProjectTreeModel model;
+        QModelIndex manIdx = model.addFolder(QStringLiteral("Manuscript"),
+                                             QStringLiteral("manuscript"), QModelIndex());
+        QVERIFY(manIdx.isValid());
+
+        Qt::ItemFlags f = model.flags(manIdx);
+        QVERIFY2(!(f & Qt::ItemIsEditable), "Authoritative folder must not be editable");
+        QVERIFY2(!(f & Qt::ItemIsDragEnabled), "Authoritative folder must not be draggable");
+        // Still selectable and drop target.
+        QVERIFY(f & Qt::ItemIsSelectable);
+        QVERIFY(f & Qt::ItemIsDropEnabled);
+        QVERIFY(f & Qt::ItemIsEnabled);
+
+        // isAuthoritativeRoot helper returns true for these.
+        ProjectTreeItem *man = model.itemFromIndex(manIdx);
+        QVERIFY(model.isAuthoritativeRoot(man));
+    }
+
+    void testFlags_authoritativeFolderNotEditable_allThreeRoots()
+    {
+        ProjectTreeModel model;
+        QModelIndex manIdx = model.addFolder(QStringLiteral("Manuscript"),
+                                             QStringLiteral("manuscript"), QModelIndex());
+        QModelIndex lkIdx = model.addFolder(QStringLiteral("LoreKeeper"),
+                                            QStringLiteral("lorekeeper"), QModelIndex());
+        QModelIndex resIdx = model.addFolder(QStringLiteral("Research"),
+                                             QStringLiteral("research"), QModelIndex());
+
+        for (const QModelIndex &idx : {manIdx, lkIdx, resIdx}) {
+            Qt::ItemFlags f = model.flags(idx);
+            QVERIFY(!(f & Qt::ItemIsEditable));
+            QVERIFY(!(f & Qt::ItemIsDragEnabled));
+        }
+    }
+
+    void testFlags_regularFolderIsEditable()
+    {
+        ProjectTreeModel model;
+        QModelIndex idx = model.addFolder(QStringLiteral("My Notes"),
+                                          QStringLiteral("my-notes"), QModelIndex());
+        Qt::ItemFlags f = model.flags(idx);
+        QVERIFY(f & Qt::ItemIsEditable);
+        QVERIFY(f & Qt::ItemIsDragEnabled);
+
+        ProjectTreeItem *item = model.itemFromIndex(idx);
+        QVERIFY(!model.isAuthoritativeRoot(item));
+    }
+
+    void testRemoveRows_authoritativeFolderProtected()
+    {
+        ProjectTreeModel model;
+        model.addFolder(QStringLiteral("LoreKeeper"),
+                        QStringLiteral("lorekeeper"), QModelIndex());
+        QCOMPARE(model.rowCount(QModelIndex()), 1);
+
+        QVERIFY2(!model.removeRows(0, 1, QModelIndex()),
+                 "removeRows must return false for authoritative folders");
+        // Folder is still there.
+        QCOMPARE(model.rowCount(QModelIndex()), 1);
+    }
+
+    void testRemoveRows_mixedBatchRejectsEntireOperation()
+    {
+        // If even one of the rows in the batch is authoritative, the whole
+        // remove is rejected — this prevents accidental loss of a regular
+        // folder adjacent to a protected one.
+        ProjectTreeModel model;
+        model.addFolder(QStringLiteral("Custom"),
+                        QStringLiteral("custom"), QModelIndex());
+        model.addFolder(QStringLiteral("Manuscript"),
+                        QStringLiteral("manuscript"), QModelIndex());
+
+        QCOMPARE(model.rowCount(QModelIndex()), 2);
+        QVERIFY(!model.removeRows(0, 2, QModelIndex()));
+        QCOMPARE(model.rowCount(QModelIndex()), 2);
+    }
+
+    void testRemoveRows_regularFolderStillRemovable()
+    {
+        ProjectTreeModel model;
+        model.addFolder(QStringLiteral("Custom"),
+                        QStringLiteral("custom"), QModelIndex());
+        QCOMPARE(model.rowCount(QModelIndex()), 1);
+        QVERIFY(model.removeRows(0, 1, QModelIndex()));
+        QCOMPARE(model.rowCount(QModelIndex()), 0);
+    }
+
+    void testCanDropMimeData_rejectsDraggingAuthoritativeFolder()
+    {
+        ProjectTreeModel model;
+        QModelIndex manIdx = model.addFolder(QStringLiteral("Manuscript"),
+                                             QStringLiteral("manuscript"), QModelIndex());
+        QModelIndex customIdx = model.addFolder(QStringLiteral("Custom"),
+                                                QStringLiteral("custom"), QModelIndex());
+
+        // Try to drop the Manuscript folder onto Custom — must be rejected.
+        QModelIndexList indexes;
+        indexes << manIdx;
+        QMimeData *mime = model.mimeData(indexes);
+        QVERIFY(mime != nullptr);
+
+        QVERIFY(!model.canDropMimeData(mime, Qt::MoveAction, -1, 0, customIdx));
+        delete mime;
+    }
 };
 
 QTEST_MAIN(TestProjectTreeModel)

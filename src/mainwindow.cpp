@@ -991,28 +991,26 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             return;
         }
 
-        // Check project context
+        // Check project context via the model's path-aware inheritance.
+        // effectiveCategory walks up the tree and honours the authoritative
+        // path-based categories, so an entry under lorekeeper/ is correctly
+        // flagged even if its own category field is None or stale.
         bool isLoreKeeper = false;
         bool isResearch = false;
         if (ProjectManager::instance().isProjectOpen()) {
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
             ProjectTreeItem *item = ProjectManager::instance().findItem(relPath);
             if (item) {
-                qDebug() << "MainWindow: Found item in tree for" << relPath << "category:" << item->category;
-                ProjectTreeItem *p = item;
-                while (p) {
-                    if (p->category == ProjectTreeItem::LoreKeeper || 
-                        p->category == ProjectTreeItem::Characters ||
-                        p->category == ProjectTreeItem::Places ||
-                        p->category == ProjectTreeItem::Cultures) {
-                        isLoreKeeper = true;
-                        break;
-                    }
-                    if (p->category == ProjectTreeItem::Research) {
-                        isResearch = true;
-                        break;
-                    }
-                    p = p->parent;
+                const auto cat = ProjectManager::instance().model()->effectiveCategory(item);
+                qDebug() << "MainWindow: Found item in tree for" << relPath
+                         << "effectiveCategory:" << cat;
+                if (cat == ProjectTreeItem::LoreKeeper
+                    || cat == ProjectTreeItem::Characters
+                    || cat == ProjectTreeItem::Places
+                    || cat == ProjectTreeItem::Cultures) {
+                    isLoreKeeper = true;
+                } else if (cat == ProjectTreeItem::Research) {
+                    isResearch = true;
                 }
             }
         }

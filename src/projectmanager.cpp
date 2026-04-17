@@ -700,6 +700,77 @@ void ProjectManager::validateTree()
 
     validate(m_treeModel->rootItem());
 
+    // Ensure the three authoritative top-level folders (manuscript/,
+    // lorekeeper/, research/) exist in both the logical tree and on disk.
+    // The tree model treats these as protected roots — they must always be
+    // present, even if the user deleted them in an older version of the
+    // project file or if the project was created by an external tool.
+    struct AuthoritativeFolder {
+        const char *path;
+        const char *defaultName;
+        ProjectTreeItem::Category category;
+    };
+    static const AuthoritativeFolder kAuthoritativeFolders[] = {
+        {"manuscript", "Manuscript", ProjectTreeItem::Manuscript},
+        {"lorekeeper", "LoreKeeper", ProjectTreeItem::LoreKeeper},
+        {"research",   "Research",   ProjectTreeItem::Research},
+    };
+
+    ProjectTreeItem *root = m_treeModel->rootItem();
+    const QString projectDir = projectPath();
+
+    for (const auto &spec : kAuthoritativeFolders) {
+        const QString relPath = QString::fromLatin1(spec.path);
+
+        // Does a top-level child *exactly* representing this authoritative
+        // root already exist? Match is case-insensitive on the whole path,
+        // which also covers the legacy case where an older project file
+        // stored "Manuscript" or an empty path with a matching category
+        // field. We must NOT match a descendant folder like
+        // "manuscript/ch1" here — that would corrupt the descendant's path.
+        ProjectTreeItem *existing = nullptr;
+        for (auto *child : root->children) {
+            if (child->type != ProjectTreeItem::Folder) continue;
+
+            const bool pathMatches = child->path.compare(relPath, Qt::CaseInsensitive) == 0;
+            const bool legacyNameMatch = child->path.isEmpty()
+                                          && child->category == spec.category;
+
+            if (pathMatches || legacyNameMatch) {
+                existing = child;
+                break;
+            }
+        }
+
+        if (existing) {
+            // Heal the path and category in case old data had them wrong.
+            if (existing->path.compare(relPath, Qt::CaseInsensitive) != 0) {
+                qDebug() << "ProjectManager: validateTree: normalizing authoritative folder path"
+                         << existing->path << "->" << relPath;
+                existing->path = relPath;
+                changed = true;
+            }
+            if (existing->category != spec.category) {
+                existing->category = spec.category;
+                changed = true;
+            }
+        } else {
+            qDebug() << "ProjectManager: validateTree: creating missing authoritative folder" << relPath;
+            QModelIndex newIdx = m_treeModel->addFolder(i18n(spec.defaultName), relPath, QModelIndex());
+            ProjectTreeItem *newItem = m_treeModel->itemFromIndex(newIdx);
+            if (newItem) {
+                newItem->category = spec.category;
+            }
+            changed = true;
+        }
+
+        // Ensure the on-disk folder exists. Creating an already-existing
+        // directory is a no-op for mkpath, so this is safe.
+        if (!projectDir.isEmpty()) {
+            QDir(projectDir).mkpath(relPath);
+        }
+    }
+
     if (changed) {
         qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";
         m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
