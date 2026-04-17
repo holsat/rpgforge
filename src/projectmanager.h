@@ -165,6 +165,35 @@ public Q_SLOTS:
     void requestTreeUpdate(const QString &category, const QString &entityName, const QString &relativePath);
 
     /**
+     * \brief Replace the entire tree from a JSON object.
+     *
+     * Validating wrapper around ProjectTreeModel::setProjectData. Used by
+     * importers (Scrivener, Word, etc.) after building a fresh tree
+     * representation. Internally runs validateTree() so the persisted JSON
+     * is healed (Folder→File for leaf-as-disk-file, missing authoritative
+     * top-level folders created, etc.) before any save.
+     *
+     * Returns true if the tree was applied successfully. Refuses an empty
+     * QJsonObject (no-op).
+     */
+    bool setTreeData(const QJsonObject &treeJson);
+
+    /**
+     * \brief Move a tree item to a new parent at the specified row.
+     *
+     * Validating wrapper around ProjectTreeModel::moveItem. Inputs are
+     * project-relative paths (resolved internally via findItem) — callers
+     * never need a raw ProjectTreeItem pointer. The move is rejected if
+     * either item cannot be found, if the move would be circular, or if
+     * the source is an authoritative root.
+     *
+     * Returns true on successful move; the project is saved automatically.
+     */
+    bool moveItem(const QString &draggedPath,
+                  const QString &newParentPath,
+                  int row);
+
+    /**
      * \brief Validate and self-heal the current tree.
      *
      * Public so importers can call it on a freshly-populated tree before

@@ -559,9 +559,9 @@ void MainWindow::setupSidebar()
 
     m_problemsPanel = new ProblemsPanel(this);
 
-    SynopsisService::instance().setModel(m_projectTree->model());
+    SynopsisService::instance().setModel(ProjectManager::instance().model());
 
-    connect(m_projectTree->model(), &ProjectTreeModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
+    connect(ProjectManager::instance().model(), &ProjectTreeModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
         Q_UNUSED(topLeft);
         Q_UNUSED(bottomRight);
         if (roles.contains(ProjectTreeModel::SynopsisRole) || roles.contains(ProjectTreeModel::StatusRole)) {
@@ -659,7 +659,7 @@ void MainWindow::setupSidebar()
             // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
-    m_corkboardView->setModel(m_projectTree->model());
+    m_corkboardView->setModel(ProjectManager::instance().model());
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](const QString &folderPath) {
         if (folderPath.isEmpty()) return;
         const QString nameLower = folderPath.section(QDir::separator(), -1).toLower();
@@ -676,17 +676,17 @@ void MainWindow::setupSidebar()
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
         }
     });
-    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
-        ProjectTreeItem *folder = m_projectTree->model()->findItem(folderPath);
-        ProjectTreeItem *dragged = m_projectTree->model()->findItem(draggedPath);
-        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : m_projectTree->model()->findItem(targetPath);
-        
-        if (folder && dragged) {
-            int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
-            if (m_projectTree->model()->moveItem(dragged, folder, toIdx)) {
-                ProjectManager::instance().saveProject();
-            }
-        }
+    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
+        // Resolve the target row inside the parent. We need a brief read of
+        // the model here ONLY to compute the row index — the actual move
+        // goes through the validating ProjectManager::moveItem wrapper.
+        auto *model = ProjectManager::instance().model();
+        if (!model) return;
+        ProjectTreeItem *folder = model->findItem(folderPath);
+        if (!folder) return;
+        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : model->findItem(targetPath);
+        const int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
+        ProjectManager::instance().moveItem(draggedPath, folderPath, toIdx);
     });
     connect(m_outlinePanel, &OutlinePanel::headingsUpdated,
             m_breadcrumbBar, &BreadcrumbBar::setHeadings);
@@ -799,9 +799,9 @@ void MainWindow::setupSidebar()
         }
         m_currentUrl = m_document->url();
     });
-    connect(m_projectTree->model(), &ProjectTreeModel::modelReset, this, &MainWindow::updateProjectStats);
-    connect(m_projectTree->model(), &ProjectTreeModel::rowsInserted, this, &MainWindow::updateProjectStats);
-    connect(m_projectTree->model(), &ProjectTreeModel::rowsRemoved, this, &MainWindow::updateProjectStats);
+    connect(ProjectManager::instance().model(), &ProjectTreeModel::modelReset, this, &MainWindow::updateProjectStats);
+    connect(ProjectManager::instance().model(), &ProjectTreeModel::rowsInserted, this, &MainWindow::updateProjectStats);
+    connect(ProjectManager::instance().model(), &ProjectTreeModel::rowsRemoved, this, &MainWindow::updateProjectStats);
 
     connect(&ProjectManager::instance(), &ProjectManager::totalWordCountUpdated, this, [this](int count) {
         m_projectStatsStatus->setText(i18n("Project: %1 words", count));
@@ -2148,20 +2148,12 @@ void MainWindow::importScrivener()
         
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
             if (success) {
-                m_projectTree->model()->setProjectData(resultData);
-
-                // Validate the freshly-imported tree BEFORE saving so the
-                // first persisted JSON is already correct:
-                //   - top-level Manuscript / LoreKeeper / Research folders
-                //     are present (created if Scrivener did not include them)
-                //   - leaf Folder items that resolve to files on disk get
-                //     converted to File type with the correct path/extension
-                //   - empty-path system folders get canonical paths
-                // This prevents users from clicking Scrivener-imported
-                // documents that the importer recorded as folders.
-                ProjectManager::instance().validateTree();
-
-                ProjectManager::instance().saveProject();
+                // Single validating wrapper: setTreeData internally runs
+                // validateTree (heals leaf-Folder-as-File, ensures the three
+                // authoritative top-level folders, etc.) and then saves the
+                // already-corrected JSON. Importers no longer touch the
+                // model directly.
+                ProjectManager::instance().setTreeData(resultData);
                 QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
             }
  else {
@@ -2189,7 +2181,7 @@ void MainWindow::importWord()
     QString projectDir = ProjectManager::instance().projectPath();
     QString mediaDir = projectDir + QStringLiteral("/media");
     
-    ProjectTreeModel *model = m_projectTree->model();
+    ProjectTreeModel *model = ProjectManager::instance().model();
     SynopsisService::instance().pause();
 
     // 1. Find Manuscript folder

@@ -636,6 +636,54 @@ void ProjectManager::processTreeUpdateQueue()
     }
 }
 
+bool ProjectManager::setTreeData(const QJsonObject &treeJson)
+{
+    if (!m_treeModel) return false;
+    if (treeJson.isEmpty()) return false;
+
+    m_treeModel->setProjectData(treeJson);
+    validateTree();          // self-heal authoritative folders + leaf-as-file
+    saveProject();           // persist the corrected tree
+    Q_EMIT treeChanged();
+    return true;
+}
+
+bool ProjectManager::moveItem(const QString &draggedPath,
+                               const QString &newParentPath,
+                               int row)
+{
+    if (!m_treeModel) return false;
+    if (draggedPath.isEmpty()) return false;
+
+    ProjectTreeItem *dragged = m_treeModel->findItem(draggedPath);
+    if (!dragged) {
+        qWarning() << "ProjectManager::moveItem: dragged path not found:" << draggedPath;
+        return false;
+    }
+
+    // Reject moving authoritative top-level folders (defensive — the model
+    // also rejects via removeRows / dropMimeData, but the explicit check
+    // here gives a clear log line).
+    if (m_treeModel->isAuthoritativeRoot(dragged)) {
+        qWarning() << "ProjectManager::moveItem: refusing to move authoritative root" << draggedPath;
+        return false;
+    }
+
+    ProjectTreeItem *newParent = newParentPath.isEmpty()
+        ? m_treeModel->rootItem()
+        : m_treeModel->findItem(newParentPath);
+    if (!newParent) {
+        qWarning() << "ProjectManager::moveItem: target parent not found:" << newParentPath;
+        return false;
+    }
+
+    if (!m_treeModel->moveItem(dragged, newParent, row)) {
+        return false;
+    }
+    saveProject();
+    return true;
+}
+
 void ProjectManager::validateTree()
 {
     if (!m_treeModel || !m_treeModel->rootItem()) return;
