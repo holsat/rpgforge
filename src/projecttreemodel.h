@@ -164,6 +164,22 @@ public:
     bool removeItem(const QModelIndex &index);
     bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
 
+    /**
+     * @brief Rewrite the `path` field of \a item and every descendant when a
+     * rename or move changes the path prefix.
+     *
+     * Replaces occurrences of \a oldPathPrefix at the head of each node's
+     * path with \a newPathPrefix. Emits dataChanged(PathRole) for each
+     * touched node so views pick up the new tooltip/path. Must be called
+     * under m_treeMutex (the method acquires it internally).
+     *
+     * Used by atomic rename and move flows in ProjectManager to keep tree
+     * paths in sync with the on-disk location after a successful disk op.
+     */
+    void updatePathsAfterMoveOrRename(ProjectTreeItem *item,
+                                       const QString &oldPathPrefix,
+                                       const QString &newPathPrefix);
+
     QStringList allFiles() const;
 
     /**

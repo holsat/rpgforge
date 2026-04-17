@@ -243,6 +243,10 @@ add_executable(test_projectmanager tests/test_projectmanager.cpp)
 target_link_libraries(test_projectmanager rpgforge_core Qt6::Test)
 add_test(NAME project_manager_test COMMAND test_projectmanager)
 
+add_executable(test_projectmanager_mutations tests/test_projectmanager_mutations.cpp)
+target_link_libraries(test_projectmanager_mutations rpgforge_core Qt6::Test)
+add_test(NAME project_manager_mutations_test COMMAND test_projectmanager_mutations)
+
 add_executable(test_projectmetadata tests/test_projectmetadata.cpp)
 target_link_libraries(test_projectmetadata rpgforge_core Qt6::Test)
 add_test(NAME project_metadata_test COMMAND test_projectmetadata)

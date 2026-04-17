@@ -303,12 +303,31 @@ void ProjectManager::setLoreKeeperConfig(const QJsonObject &config)
 bool ProjectManager::addFile(const QString &name, const QString &relativePath, const QString &parentPath)
 {
     if (!isProjectOpen()) return false;
-
-    // Validation: Ensure physical file exists
-    QString absPath = QDir(projectPath()).absoluteFilePath(relativePath);
-    if (!QFile::exists(absPath)) {
-        qWarning() << "ProjectManager: Rejected addFile — Physical file does not exist:" << absPath;
+    if (relativePath.isEmpty()) {
+        qWarning() << "ProjectManager::addFile: empty relative path rejected";
         return false;
+    }
+
+    const QString absPath = QDir(projectPath()).absoluteFilePath(relativePath);
+    QFileInfo fi(absPath);
+
+    // Disk op first. If the file doesn't exist yet, create an empty one
+    // (so the tree and disk are consistent). If it already exists we leave
+    // its contents untouched — this path is also used to register files
+    // that were produced by something else (e.g. LoreKeeper AI output).
+    const bool fileAlreadyExisted = fi.exists();
+    if (!fileAlreadyExisted) {
+        // mkpath is a no-op if the parent directory already exists.
+        if (!QDir().mkpath(fi.absolutePath())) {
+            qWarning() << "ProjectManager::addFile: failed to create parent directory for" << absPath;
+            return false;
+        }
+        QFile f(absPath);
+        if (!f.open(QIODevice::WriteOnly)) {
+            qWarning() << "ProjectManager::addFile: failed to create" << absPath;
+            return false;
+        }
+        f.close();
     }
 
     QModelIndex parentIdx;
@@ -319,16 +338,44 @@ bool ProjectManager::addFile(const QString &name, const QString &relativePath, c
         }
     }
 
-    if (m_treeModel->addFile(name, relativePath, parentIdx).isValid()) {
-        return saveProject();
+    if (!m_treeModel->addFile(name, relativePath, parentIdx).isValid()) {
+        // Tree op failed — rollback the disk op only if we just created the file.
+        if (!fileAlreadyExisted) {
+            QFile::remove(absPath);
+        }
+        qWarning() << "ProjectManager::addFile: tree insertion failed for" << relativePath;
+        return false;
     }
-    return false;
+
+    return saveProject();
 }
 
 bool ProjectManager::addFolder(const QString &name, const QString &relativePath, const QString &parentPath)
 {
     if (!isProjectOpen()) return false;
 
+    // The UI currently passes an empty relativePath when creating a plain
+    // logical folder via the "Add Folder" button. Derive a sensible disk
+    // path from parent + name so the folder actually materialises on disk.
+    QString effectivePath = relativePath;
+    if (effectivePath.isEmpty()) {
+        if (name.isEmpty()) {
+            qWarning() << "ProjectManager::addFolder: empty name and path rejected";
+            return false;
+        }
+        effectivePath = parentPath.isEmpty() ? name : (parentPath + QLatin1Char('/') + name);
+    }
+
+    const QString absPath = QDir(projectPath()).absoluteFilePath(effectivePath);
+    const bool dirAlreadyExisted = QFileInfo(absPath).exists();
+
+    if (!dirAlreadyExisted) {
+        if (!QDir().mkpath(absPath)) {
+            qWarning() << "ProjectManager::addFolder: failed to create directory" << absPath;
+            return false;
+        }
+    }
+
     QModelIndex parentIdx;
     if (!parentPath.isEmpty()) {
         ProjectTreeItem *parentItem = m_treeModel->findItem(parentPath);
@@ -337,53 +384,149 @@ bool ProjectManager::addFolder(const QString &name, const QString &relativePath,
         }
     }
 
-    if (m_treeModel->addFolder(name, relativePath, parentIdx).isValid()) {
-        return saveProject();
+    if (!m_treeModel->addFolder(name, effectivePath, parentIdx).isValid()) {
+        // Tree op failed — rollback only if we just created the directory.
+        if (!dirAlreadyExisted) {
+            QDir(absPath).removeRecursively();
+        }
+        qWarning() << "ProjectManager::addFolder: tree insertion failed for" << effectivePath;
+        return false;
     }
-    return false;
+
+    return saveProject();
 }
 
 bool ProjectManager::moveItem(const QString &sourcePath, const QString &targetParentPath)
 {
+    // Append-to-end overload: delegate to the three-argument form.
     if (!isProjectOpen()) return false;
-    
-    ProjectTreeItem *item = m_treeModel->findItem(sourcePath);
-    ProjectTreeItem *newParent = m_treeModel->findItem(targetParentPath);
-    
-    if (item && newParent) {
-        if (m_treeModel->moveItem(item, newParent, newParent->children.count())) {
-            return saveProject();
-        }
-    }
-    return false;
+    ProjectTreeItem *newParent = targetParentPath.isEmpty()
+        ? m_treeModel->rootItem()
+        : m_treeModel->findItem(targetParentPath);
+    if (!newParent) return false;
+    return moveItem(sourcePath, targetParentPath, newParent->children.count());
 }
 
 bool ProjectManager::removeItem(const QString &path)
 {
     if (!isProjectOpen()) return false;
-    
+    if (path.isEmpty()) return false;
+
     ProjectTreeItem *item = m_treeModel->findItem(path);
-    if (item) {
-        QModelIndex idx = m_treeModel->indexForItem(item);
-        if (m_treeModel->removeRow(idx.row(), idx.parent())) {
-            return saveProject();
+    if (!item) return false;
+
+    // Belt-and-suspenders: the model also rejects authoritative roots in
+    // removeRows, but checking here produces a clear log line and avoids
+    // ever issuing a disk delete against a canonical folder. We guard on
+    // both the model's structural check AND the canonical path strings,
+    // since setupDefaultProject wraps the three canonical folders in an
+    // outer project-name folder — so their parent is not m_rootItem and
+    // the structural check alone would not fire.
+    const QString canonical = path.toLower();
+    const bool isCanonicalPath =
+        canonical == QLatin1String("manuscript")
+        || canonical == QLatin1String("lorekeeper")
+        || canonical == QLatin1String("research");
+    if (m_treeModel->isAuthoritativeRoot(item) || isCanonicalPath) {
+        qWarning() << "ProjectManager::removeItem: refusing to remove authoritative root" << path;
+        return false;
+    }
+
+    const QString absPath = QDir(projectPath()).absoluteFilePath(path);
+    const QFileInfo fi(absPath);
+    const bool isFolder = (item->type == ProjectTreeItem::Folder);
+
+    // Disk op first. If the on-disk entry is missing we still prune the tree
+    // (it was already out-of-sync); only a genuine failure to delete an
+    // existing entry is an error.
+    bool diskOk = true;
+    if (fi.exists()) {
+        if (isFolder) {
+            diskOk = QDir(absPath).removeRecursively();
+        } else {
+            diskOk = QFile::remove(absPath);
         }
     }
-    return false;
+    if (!diskOk) {
+        qWarning() << "ProjectManager::removeItem: failed to delete on disk:" << absPath;
+        return false;
+    }
+
+    const QModelIndex idx = m_treeModel->indexForItem(item);
+    if (!m_treeModel->removeRow(idx.row(), idx.parent())) {
+        // Can't un-delete — leave the tree dirty and log. The next validate/
+        // reconciliation pass will resync.
+        qWarning() << "ProjectManager::removeItem: disk delete succeeded but tree removal failed for" << path;
+        return false;
+    }
+
+    return saveProject();
 }
 
 bool ProjectManager::renameItem(const QString &path, const QString &newName)
 {
     if (!isProjectOpen()) return false;
-    
+    if (path.isEmpty() || newName.isEmpty()) return false;
+
     ProjectTreeItem *item = m_treeModel->findItem(path);
-    if (item) {
-        QModelIndex idx = m_treeModel->indexForItem(item);
-        if (m_treeModel->setData(idx, newName, Qt::EditRole)) {
-            return saveProject();
+    if (!item) return false;
+
+    if (m_treeModel->isAuthoritativeRoot(item)) {
+        qWarning() << "ProjectManager::renameItem: refusing to rename authoritative root" << path;
+        return false;
+    }
+
+    const QFileInfo oldFi(QDir(projectPath()).absoluteFilePath(path));
+    const QString parentAbsDir = oldFi.absolutePath();
+    const QString oldBasename = oldFi.fileName();
+
+    // The new on-disk basename: for files with an extension we keep the
+    // extension intact if the caller did not supply one, mirroring what
+    // setData(EditRole) expects.
+    QString newBasename = newName;
+    if (item->type == ProjectTreeItem::File) {
+        const QString ext = oldFi.suffix();
+        if (!ext.isEmpty() && !newBasename.contains(QLatin1Char('.'))) {
+            newBasename = newBasename + QLatin1Char('.') + ext;
         }
     }
-    return false;
+
+    const QString newAbsPath = parentAbsDir + QLatin1Char('/') + newBasename;
+    const QString newRelPath = QDir(projectPath()).relativeFilePath(newAbsPath);
+
+    // If the rename is a no-op (same basename) short-circuit.
+    const bool onDiskRenameNeeded = (oldBasename != newBasename);
+    if (onDiskRenameNeeded && QFileInfo(newAbsPath).exists()) {
+        qWarning() << "ProjectManager::renameItem: target already exists on disk:" << newAbsPath;
+        return false;
+    }
+
+    if (onDiskRenameNeeded && oldFi.exists()) {
+        QDir parentDir(parentAbsDir);
+        if (!parentDir.rename(oldBasename, newBasename)) {
+            qWarning() << "ProjectManager::renameItem: disk rename failed:" << oldBasename << "->" << newBasename;
+            return false;
+        }
+    }
+
+    const QString oldPathSaved = item->path;
+    const QModelIndex idx = m_treeModel->indexForItem(item);
+    if (!m_treeModel->setData(idx, newName, Qt::EditRole)) {
+        // Rollback: undo the disk rename if we made one.
+        if (onDiskRenameNeeded && oldFi.exists()) {
+            QDir(parentAbsDir).rename(newBasename, oldBasename);
+        }
+        qWarning() << "ProjectManager::renameItem: tree setData failed for" << path;
+        return false;
+    }
+
+    // Cascade the path change to the item and all descendants so the tree
+    // path mirrors the new on-disk location.
+    if (onDiskRenameNeeded) {
+        m_treeModel->updatePathsAfterMoveOrRename(item, oldPathSaved, newRelPath);
+    }
+
+    return saveProject();
 }
 
 ProjectTreeItem* ProjectManager::findItem(const QString &path) const
@@ -680,7 +823,7 @@ void ProjectManager::processTreeUpdateQueue()
     while (!m_treeUpdateQueue.isEmpty()) {
         TreeUpdateRequest req = m_treeUpdateQueue.dequeue();
         qDebug() << "ProjectManager: Processing request for" << req.entityName << "in category" << req.category;
-        
+
         // Find LoreKeeper root using a robust breadth-first search
         ProjectTreeItem *loreRoot = nullptr;
         QQueue<ProjectTreeItem*> searchQueue;
@@ -695,45 +838,64 @@ void ProjectManager::processTreeUpdateQueue()
             }
             for (auto *c : current->children) searchQueue.enqueue(c);
         }
-        
-        if (loreRoot) {
-            ProjectTreeItem *catFolder = nullptr;
-            for (auto *c : loreRoot->children) {
-                if (c->name == req.category) {
-                    catFolder = c;
-                    break;
-                }
+
+        if (!loreRoot) {
+            qWarning() << "ProjectManager: CRITICAL - Could not find LoreKeeper root node in authoritative tree!";
+            continue;
+        }
+
+        // Ensure the category subfolder exists — route through addFolder so
+        // it materialises on disk under lorekeeper/<Category>/ (and not just
+        // in the tree).
+        const QString lkRootPath = loreRoot->path.isEmpty()
+            ? QStringLiteral("lorekeeper")
+            : loreRoot->path;
+        const QString catFolderPath = lkRootPath + QLatin1Char('/') + req.category;
+
+        ProjectTreeItem *catFolder = nullptr;
+        for (auto *c : loreRoot->children) {
+            if (c->name == req.category) {
+                catFolder = c;
+                break;
             }
-            
+        }
+
+        if (!catFolder) {
+            qDebug() << "ProjectManager: Category folder" << req.category
+                     << "not found, creating on disk + tree at" << catFolderPath;
+            if (!addFolder(req.category, catFolderPath, lkRootPath)) {
+                qWarning() << "ProjectManager: Failed to create LoreKeeper category folder" << catFolderPath;
+                continue;
+            }
+            catFolder = m_treeModel->findItem(catFolderPath);
             if (!catFolder) {
-                qDebug() << "ProjectManager: Category folder" << req.category << "not found, creating it.";
-                m_treeModel->addFolder(req.category, QStringLiteral("lorekeeper/") + req.category, m_treeModel->indexForItem(loreRoot));
-                catFolder = loreRoot->children.last();
+                qWarning() << "ProjectManager: addFolder succeeded but findItem failed for" << catFolderPath;
+                continue;
             }
-            
-            bool found = false;
-            for (auto *c : catFolder->children) {
-                if (c->path == req.relativePath) {
-                    found = true;
-                    break;
-                }
+        }
+
+        bool found = false;
+        for (auto *c : catFolder->children) {
+            if (c->path == req.relativePath) {
+                found = true;
+                break;
             }
-            
-            if (!found) {
-                qDebug() << "ProjectManager: Adding new file to model:" << req.entityName << "at" << req.relativePath;
-                m_treeModel->addFile(req.entityName, req.relativePath, m_treeModel->indexForItem(catFolder));
+        }
+
+        if (!found) {
+            qDebug() << "ProjectManager: Adding new file to model:" << req.entityName << "at" << req.relativePath;
+            // LoreKeeper wrote the file to disk before calling us, so addFile
+            // will register the existing file rather than creating a new one.
+            if (addFile(req.entityName, req.relativePath, catFolder->path)) {
                 changed = true;
-            } else {
-                qDebug() << "ProjectManager: Entity" << req.entityName << "already exists in tree.";
             }
         } else {
-            qWarning() << "ProjectManager: CRITICAL - Could not find LoreKeeper root node in authoritative tree!";
+            qDebug() << "ProjectManager: Entity" << req.entityName << "already exists in tree.";
         }
     }
-    
+
     if (changed) {
-        qDebug() << "ProjectManager: Tree structure changed, saving and emitting signal.";
-        saveProject();
+        qDebug() << "ProjectManager: Tree structure changed, emitting signal.";
         Q_EMIT treeChanged();
     }
 }
@@ -794,9 +956,54 @@ bool ProjectManager::moveItem(const QString &draggedPath,
         return false;
     }
 
+    // No-op guard: dropping into the same parent at the end is a benign
+    // reorder; let the tree op handle it but skip the disk rename entirely.
+    const QString projectDir = projectPath();
+    const QString oldAbs = QDir(projectDir).absoluteFilePath(draggedPath);
+    const QFileInfo oldFi(oldAbs);
+    const QString baseName = oldFi.fileName();
+
+    const QString newParentAbs = newParentPath.isEmpty()
+        ? projectDir
+        : QDir(projectDir).absoluteFilePath(newParentPath);
+    const QString newAbs = newParentAbs + QLatin1Char('/') + baseName;
+    const QString newRelPath = QDir(projectDir).relativeFilePath(newAbs);
+
+    const bool sameParent = (QFileInfo(oldFi.absolutePath()).absoluteFilePath()
+                              == QFileInfo(newParentAbs).absoluteFilePath());
+
+    // Disk op first — rename into the target parent. Only done when the
+    // parent is actually changing AND something exists on disk.
+    const bool onDiskMoveNeeded = !sameParent && oldFi.exists();
+    if (onDiskMoveNeeded) {
+        if (QFileInfo(newAbs).exists()) {
+            qWarning() << "ProjectManager::moveItem: target already exists on disk:" << newAbs;
+            return false;
+        }
+        // Ensure target parent dir exists (mkpath is a no-op if present).
+        QDir().mkpath(newParentAbs);
+        if (!QDir().rename(oldAbs, newAbs)) {
+            qWarning() << "ProjectManager::moveItem: disk rename failed:" << oldAbs << "->" << newAbs;
+            return false;
+        }
+        qDebug() << "ProjectManager::moveItem: disk" << oldAbs << "->" << newAbs;
+    }
+
+    const QString oldPathSaved = dragged->path;
     if (!m_treeModel->moveItem(dragged, newParent, row)) {
+        // Rollback: undo the disk rename if we performed one.
+        if (onDiskMoveNeeded) {
+            QDir().rename(newAbs, oldAbs);
+        }
         return false;
     }
+
+    // Cascade the new path prefix to the moved subtree so tree paths track
+    // the on-disk location. Skipped when the parent didn't change.
+    if (!sameParent) {
+        m_treeModel->updatePathsAfterMoveOrRename(dragged, oldPathSaved, newRelPath);
+    }
+
     saveProject();
     return true;
 }

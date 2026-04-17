@@ -656,6 +656,38 @@ void ProjectTreeModel::propagateCategoryFromParent(ProjectTreeItem *item)
     }
 }
 
+void ProjectTreeModel::updatePathsAfterMoveOrRename(ProjectTreeItem *item,
+                                                     const QString &oldPathPrefix,
+                                                     const QString &newPathPrefix)
+{
+    if (!item) return;
+    if (oldPathPrefix == newPathPrefix) return;
+
+    QList<ProjectTreeItem*> changed;
+    {
+        QMutexLocker locker(&m_treeMutex);
+        std::function<void(ProjectTreeItem*)> walk = [&](ProjectTreeItem *node) {
+            if (!node) return;
+            if (!node->path.isEmpty()) {
+                if (node->path == oldPathPrefix) {
+                    node->path = newPathPrefix;
+                    changed.append(node);
+                } else if (node->path.startsWith(oldPathPrefix + QLatin1Char('/'))) {
+                    node->path = newPathPrefix + node->path.mid(oldPathPrefix.length());
+                    changed.append(node);
+                }
+            }
+            for (auto *child : node->children) walk(child);
+        };
+        walk(item);
+    }
+
+    for (auto *node : std::as_const(changed)) {
+        const QModelIndex idx = indexForItem(node);
+        if (idx.isValid()) Q_EMIT dataChanged(idx, idx, {PathRole, Qt::ToolTipRole});
+    }
+}
+
 TreeNodeSnapshot ProjectTreeModel::snapshotFrom(const ProjectTreeItem *item) const
 {
     TreeNodeSnapshot snap;
@@ -796,11 +828,16 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
     if (!targetItem) return false;
     if (targetItem != m_rootItem && targetItem->type != ProjectTreeItem::Folder) return false;
 
-    // Collect all valid items first, then move them
+    // Collect all valid items first, then move them through PM::moveItem
+    // so the on-disk structure follows the drop atomically.
     QByteArray encoded = data->data(QStringLiteral("application/x-rpgforge-treeitem"));
     QDataStream stream(&encoded, QIODevice::ReadOnly);
 
-    QList<ProjectTreeItem*> itemsToMove;
+    struct PendingMove {
+        QString path;
+        ProjectTreeItem *item;
+    };
+    QList<PendingMove> itemsToMove;
     while (!stream.atEnd()) {
         QString name, path;
         stream >> name >> path;
@@ -831,29 +868,36 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
             p = p->parent;
         }
         if (!circular) {
-            itemsToMove.append(draggedItem);
+            itemsToMove.append({draggedItem->path, draggedItem});
         }
     }
 
     if (itemsToMove.isEmpty()) return false;
 
+    const QString targetParentPath = (targetItem == m_rootItem) ? QString() : targetItem->path;
     int insertRow = (row >= 0) ? row : targetItem->children.count();
 
-    for (auto *draggedItem : itemsToMove) {
-        if (!draggedItem->parent) continue;
+    bool anyMoved = false;
+    for (const auto &pm : itemsToMove) {
+        if (!pm.item || !pm.item->parent) continue;
 
-        ProjectTreeItem *oldParent = draggedItem->parent;
-        int oldRow = oldParent->children.indexOf(draggedItem);
+        ProjectTreeItem *oldParent = pm.item->parent;
+        int oldRow = oldParent->children.indexOf(pm.item);
         if (oldRow < 0) continue;
 
         if (oldParent == targetItem && oldRow < insertRow) {
             insertRow--;
         }
 
-        if (moveItem(draggedItem, targetItem, insertRow)) {
+        // Route through ProjectManager so the disk rename happens first and
+        // rolls back on partial failure. Using the path captured before the
+        // loop (the item pointer is still valid, but its path may be
+        // rewritten by each successful move).
+        if (ProjectManager::instance().moveItem(pm.path, targetParentPath, insertRow)) {
             insertRow++;
+            anyMoved = true;
         }
     }
 
-    return true;
+    return anyMoved;
 }

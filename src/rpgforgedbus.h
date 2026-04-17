@@ -135,6 +135,30 @@ public Q_SLOTS:
      *  full snapshot just to assert presence. */
     bool pathExists(const QString &path);
 
+    // ---------------- Tree mutations (Phase 3) ----------------
+    // Thin wrappers around the atomic ProjectManager mutation API. Each
+    // performs the disk op and the tree update as a single unit; partial
+    // failures roll back. Return the ProjectManager result verbatim.
+
+    /** \brief Create a folder at \a relPath (empty to auto-derive from
+     *  parent + name) under \a parentPath, creating it on disk as well. */
+    bool addFolderAt(const QString &name, const QString &relPath, const QString &parentPath);
+
+    /** \brief Register a file at \a relPath in the tree; creates an empty
+     *  file on disk if it doesn't exist yet. */
+    bool addFileAt(const QString &name, const QString &relPath, const QString &parentPath);
+
+    /** \brief Rename the item at \a path, renaming the backing file or
+     *  folder on disk to match. */
+    bool renameItemAt(const QString &path, const QString &newName);
+
+    /** \brief Move the item at \a path to \a newParentPath at \a row, issuing
+     *  a disk rename into the new parent directory. */
+    bool moveItemTo(const QString &path, const QString &newParentPath, int row);
+
+    /** \brief Remove the item at \a path from both tree and disk. */
+    bool removeItemAt(const QString &path);
+
     // ---------------- Explorations / Git queries ----------------
     /** \brief Returns names of all explorations (branches). */
     QStringList explorationNames() const;

@@ -121,28 +121,31 @@ private Q_SLOTS:
         QVERIFY(pm.createProject(projPath, projName));
         pm.setupDefaultProject(projPath, projName);
 
-        // 1. Add file (Must exist physically)
+        // 1. Add file. As of Phase 3, addFile creates the empty file on disk
+        // if it doesn't exist — no need to pre-create.
         QString relPath = QStringLiteral("research/notes.md");
-        QString absPath = QDir(projPath).absoluteFilePath(relPath);
-        QFile file(absPath);
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        file.write("Authoritative content");
-        file.close();
 
         QVERIFY(pm.addFile(QStringLiteral("Notes"), relPath, QStringLiteral("research")));
 
-        // Verify in model via authoritative wrapper
+        // Verify in model via authoritative wrapper AND on disk.
         ProjectTreeItem *item = pm.findItem(relPath);
         QVERIFY(item != nullptr);
         QCOMPARE(item->name, QStringLiteral("Notes"));
+        QVERIFY(QFileInfo(QDir(projPath).absoluteFilePath(relPath)).isFile());
 
-        // 2. Rename
+        // 2. Rename — Phase 3 renames on disk too and updates the path field.
         QVERIFY(pm.renameItem(relPath, QStringLiteral("Project Notes")));
         QCOMPARE(item->name, QStringLiteral("Project Notes"));
 
-        // 3. Remove
-        QVERIFY(pm.removeItem(relPath));
-        QVERIFY(pm.findItem(relPath) == nullptr);
+        const QString newRelPath = QStringLiteral("research/Project Notes.md");
+        QCOMPARE(item->path, newRelPath);
+        QVERIFY(!QFileInfo(QDir(projPath).absoluteFilePath(relPath)).exists());
+        QVERIFY(QFileInfo(QDir(projPath).absoluteFilePath(newRelPath)).isFile());
+
+        // 3. Remove via the new path.
+        QVERIFY(pm.removeItem(newRelPath));
+        QVERIFY(pm.findItem(newRelPath) == nullptr);
+        QVERIFY(!QFileInfo(QDir(projPath).absoluteFilePath(newRelPath)).exists());
 
         pm.closeProject();
     }

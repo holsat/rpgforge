@@ -370,6 +370,38 @@ bool RpgForgeDBus::pathExists(const QString &path)
     return ProjectManager::instance().pathExists(path);
 }
 
+// -------- Tree mutations (Phase 3) --------
+
+bool RpgForgeDBus::addFolderAt(const QString &name, const QString &relPath, const QString &parentPath)
+{
+    if (!projectOpen()) return false;
+    return ProjectManager::instance().addFolder(name, relPath, parentPath);
+}
+
+bool RpgForgeDBus::addFileAt(const QString &name, const QString &relPath, const QString &parentPath)
+{
+    if (!projectOpen()) return false;
+    return ProjectManager::instance().addFile(name, relPath, parentPath);
+}
+
+bool RpgForgeDBus::renameItemAt(const QString &path, const QString &newName)
+{
+    if (!projectOpen()) return false;
+    return ProjectManager::instance().renameItem(path, newName);
+}
+
+bool RpgForgeDBus::moveItemTo(const QString &path, const QString &newParentPath, int row)
+{
+    if (!projectOpen()) return false;
+    return ProjectManager::instance().moveItem(path, newParentPath, row);
+}
+
+bool RpgForgeDBus::removeItemAt(const QString &path)
+{
+    if (!projectOpen()) return false;
+    return ProjectManager::instance().removeItem(path);
+}
+
 // -------- Explorations / Git queries --------
 
 QStringList RpgForgeDBus::explorationNames() const
