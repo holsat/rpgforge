@@ -155,6 +155,37 @@ public:
      */
     Sidebar* sidebar() const { return m_sidebar; }
 
+    /**
+     * @brief Saves every open KTextEditor document that has an associated URL.
+     *
+     * Intended for "Save All" — also used by the DBus adaptor. Returns true if
+     * every open document with a URL saved successfully (or if there was
+     * nothing to save). Used by the DBus adaptor.
+     */
+    bool saveAllDocuments();
+
+    /**
+     * @brief Returns the path of the conflict file currently shown in the
+     *        conflict banner, or an empty string if no integration conflict
+     *        is active. Used by the DBus adaptor.
+     */
+    QString activeConflictFile() const;
+
+    /**
+     * @brief Returns conflict-resolution progress as [currentIndex, totalConflicts].
+     *
+     * currentIndex is zero-based. If no conflict resolution is active, both
+     * values are zero. Used by the DBus adaptor.
+     */
+    QList<int> conflictProgress() const;
+
+    /**
+     * @brief Synchronous wrapper over onVersionSelected() so callers (e.g. the
+     *        DBus adaptor) can trigger a version-recall without first showing
+     *        the VersionRecallBrowser dialog.
+     */
+    void invokeVersionRecall(const QString &filePath, const QString &commitHash);
+
 private Q_SLOTS:
     void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
 

@@ -2598,3 +2598,39 @@ void MainWindow::onVersionSelected(const QString &filePath, const QString &commi
             });
     });
 }
+
+bool MainWindow::saveAllDocuments()
+{
+    bool ok = true;
+    auto saveOne = [&ok](KTextEditor::Document *doc) {
+        if (!doc) return;
+        if (doc->url().isEmpty()) return; // untitled — skip, caller needs saveAs
+        if (!doc->isModified()) return;
+        if (!doc->save()) ok = false;
+    };
+    saveOne(m_document);
+    saveOne(m_researchDocument);
+    if (ProjectManager::instance().isProjectOpen()) {
+        ProjectManager::instance().saveProject();
+    }
+    return ok;
+}
+
+QString MainWindow::activeConflictFile() const
+{
+    if (m_conflictFiles.isEmpty() || m_conflictIndex < 0
+        || m_conflictIndex >= m_conflictFiles.size()) {
+        return QString();
+    }
+    return m_conflictFiles.at(m_conflictIndex).path;
+}
+
+QList<int> MainWindow::conflictProgress() const
+{
+    return QList<int>{m_conflictIndex, static_cast<int>(m_conflictFiles.size())};
+}
+
+void MainWindow::invokeVersionRecall(const QString &filePath, const QString &commitHash)
+{
+    onVersionSelected(filePath, commitHash);
+}

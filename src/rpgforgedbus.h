@@ -20,6 +20,7 @@
 #define RPGFORGEDBUS_H
 
 #include <QDBusAbstractAdaptor>
+#include <QList>
 #include <QStringList>
 #include <QVariantList>
 
@@ -47,7 +48,7 @@ public:
     ~RpgForgeDBus() override = default;
 
 public Q_SLOTS:
-    // Application lifecycle
+    // ---------------- Application lifecycle ----------------
     /** \brief Returns the app version string. */
     QString version() const;
 
@@ -66,7 +67,23 @@ public Q_SLOTS:
     /** \brief Quit the application cleanly. */
     void quit();
 
-    // Sidebar
+    // ---------------- UI state queries ----------------
+    /** \brief True if the main window is visible. */
+    bool mainWindowVisible() const;
+
+    /** \brief Rect of the main window in screen coords: [x, y, width, height]. */
+    QList<int> mainWindowGeometry() const;
+
+    /** \brief True if the current editor document has unsaved modifications. */
+    bool currentDocumentModified() const;
+
+    /** \brief Returns the auto-sync setting (auto-commit on save). */
+    bool autoSyncEnabled() const;
+
+    /** \brief Enables/disables auto-sync. Returns the new value. */
+    bool setAutoSyncEnabled(bool enabled);
+
+    // ---------------- Sidebar ----------------
     /** \brief Returns the display names of all registered sidebar panels. */
     QStringList sidebarPanels() const;
 
@@ -76,7 +93,7 @@ public Q_SLOTS:
     /** \brief Switch the visible sidebar panel by display name. Returns true on success. */
     bool showSidebarPanel(const QString &name);
 
-    // Editor
+    // ---------------- Editor ----------------
     /** \brief Absolute path of the file currently open in the main editor, or "". */
     QString currentEditorFilePath() const;
 
@@ -86,25 +103,117 @@ public Q_SLOTS:
     /** \brief Open the file at \a absolutePath in the editor. */
     bool openFile(const QString &absolutePath);
 
-    // Project tree
+    // ---------------- Project tree ----------------
     /** \brief Returns relative paths of every file in the project tree. */
     QStringList projectFiles() const;
 
-    // Explorations
+    /** \brief Returns absolute paths for every file in the project tree
+     *         (convenience over projectFiles()). */
+    QStringList projectFilesAbsolute() const;
+
+    /** \brief Returns relative paths for every folder in the project tree. */
+    QStringList projectFolders() const;
+
+    /** \brief True if the given relative path is present in the project tree. */
+    bool projectContains(const QString &relativePath) const;
+
+    // ---------------- Explorations / Git queries ----------------
     /** \brief Returns names of all explorations (branches). */
     QStringList explorationNames() const;
 
     /** \brief Name of the currently checked-out exploration, or "". */
     QString currentExploration() const;
 
+    /** \brief True if the working tree has uncommitted changes. */
+    bool hasUncommittedChanges() const;
+
+    /** \brief Returns detailed commit nodes for the current repo as a list of
+     *  maps with keys: hash, branchName, message, date (ISO),
+     *  tags (QStringList), wordCount, wordCountDelta, primaryParentHash,
+     *  mergeParentHash. Blocks briefly on the ExplorationNode future via
+     *  .result(). */
+    QVariantList graphNodes() const;
+
+    /** \brief Short-form recent commits on the current branch: list of maps
+     *  with hash, message, date. Bounded by \a limit. */
+    QVariantList recentCommits(int limit) const;
+
+    /** \brief Names of all tags (landmarks) in the repo. */
+    QStringList landmarkNames() const;
+
+    /** \brief Returns parked (stashed) change entries as a list of maps with
+     *  keys: index, message, onBranch, date. */
+    QVariantList parkedChanges() const;
+
+    // ---------------- Explorations / Git actions ----------------
     /** \brief Create a new exploration with the given name. */
     bool createExploration(const QString &name);
 
-    /** \brief Switch to the named exploration (assumes clean tree; caller may need to park first). */
+    /** \brief Switch to the named exploration (assumes clean tree; caller may
+     *  need to park first). */
     bool switchExploration(const QString &name);
 
-    /** \brief Returns parked (stashed) change entries as a list of maps with keys: index, message, onBranch, date. */
-    QVariantList parkedChanges() const;
+    /** \brief Save all open documents. Returns true on success. */
+    bool saveAll();
+
+    /** \brief Commit all working-tree changes. Returns true on success.
+     *  Blocks on the future. */
+    bool commitAll(const QString &message);
+
+    /** \brief Park (stash) all uncommitted changes with \a message. */
+    bool parkChanges(const QString &message);
+
+    /** \brief Restore parked changes at index. */
+    bool restoreParkedChanges(int stashIndex);
+
+    /** \brief Discard parked changes at index. */
+    bool discardParkedChanges(int stashIndex);
+
+    /** \brief Integrate (merge) a source exploration into the current one.
+     *  Returns true if the merge succeeded cleanly. If there are conflicts,
+     *  returns false; conflictingFiles() will then list the conflicts. */
+    bool integrateExploration(const QString &sourceBranch);
+
+    /** \brief Returns conflicting file paths after a failed integrate. */
+    QStringList conflictingFiles() const;
+
+    /** \brief Create a landmark (tag) at the given commit hash. */
+    bool createLandmark(const QString &commitHash, const QString &landmarkName);
+
+    /** \brief Recall the version of \a filePath at \a commitHash.
+     *  Equivalent to what VersionRecallBrowser's "Recall Version" button does.
+     *  Auto-commits current changes first, then overwrites filePath with the
+     *  historical content, then triggers editor reload. */
+    bool recallVersion(const QString &filePath, const QString &commitHash);
+
+    // ---------------- Conflict state ----------------
+    /** \brief Path of the conflict file the conflict banner is currently
+     *  showing, or "". */
+    QString activeConflictFile() const;
+
+    /** \brief Returns [currentIndex, totalConflicts] for the ongoing
+     *  integration, or [0, 0] if none. */
+    QList<int> conflictProgress() const;
+
+    // ---------------- Dialog introspection + interaction ----------------
+    /** \brief Titles of every currently-visible QDialog owned by the
+     *  application. */
+    QStringList openDialogTitles() const;
+
+    /** \brief Accept (OK/Yes/primary button) the dialog whose windowTitle
+     *  matches. Returns true if a matching dialog was found and accepted. */
+    bool acceptDialog(const QString &windowTitle);
+
+    /** \brief Reject (Cancel/Close) the dialog whose windowTitle matches. */
+    bool rejectDialog(const QString &windowTitle);
+
+    /** \brief Fill a QLineEdit by objectName inside the dialog whose
+     *  windowTitle matches. Returns true on success. Objects without an
+     *  objectName won't be found; the test harness is expected to know the
+     *  objectName it needs. */
+    bool fillDialogLineEdit(const QString &windowTitle,
+                            const QString &objectName,
+                            const QString &value);
 
 private:
     MainWindow *m_window;
