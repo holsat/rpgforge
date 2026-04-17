@@ -288,14 +288,14 @@ void SimulationPanel::onBatchFinished(const BatchResult &results)
 void SimulationPanel::showAnalytics(const BatchResult &results)
 {
     m_logEdit->append(QStringLiteral("\n=== BATCH ANALYTICS ==="));
-    m_logEdit->append(i18n("Total Runs: %1").arg(results.totalRuns));
+    m_logEdit->append(i18n("Total Runs: %1", results.totalRuns));
     
     // Basic analysis: Average turns
     double avgTurns = 0;
     for (const auto &run : results.runs) avgTurns += run.turns;
     avgTurns /= results.runs.size();
     
-    m_logEdit->append(i18n("Average Duration: %1 turns").arg(QString::number(avgTurns, 'f', 1)));
+    m_logEdit->append(i18n("Average Duration: %1 turns", QString::number(avgTurns, 'f', 1)));
     
     // In a future step, we'll add character mortality/utility metrics by parsing finalStates
 }

@@ -31,6 +31,7 @@
 #include <QDrag>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QProgressBar>
 #include <KLocalizedString>
 
 // --- DraggableVariableTree implementation ---
@@ -48,7 +49,7 @@ QString DraggableVariableTree::fullVariableName(QTreeWidgetItem *item) const
     QTreeWidgetItem *p = item;
     bool isLibrary = false;
     while (p) {
-        if (p->text(0) == i18n("Library (Auto-extracted)")) {
+        if (p->text(0) == i18n("LoreKeeper (Auto-extracted)")) {
             isLibrary = true;
             break;
         }
@@ -59,8 +60,9 @@ QString DraggableVariableTree::fullVariableName(QTreeWidgetItem *item) const
         // Librarian path: type.entity.attribute
         QStringList parts;
         p = item;
-        while (p && p->text(0) != i18n("Library (Auto-extracted)")) {
-            parts.prepend(p->text(0));
+        while (p && p->text(0) != i18n("LoreKeeper (Auto-extracted)")) {
+            // LibrarianService sanitizes keys by removing spaces
+            parts.prepend(p->text(0).replace(QStringLiteral(" "), QString()));
             p = p->parent();
         }
         return parts.join(QLatin1Char('.'));
@@ -148,11 +150,24 @@ void VariablesPanel::setupUi()
     m_reindexButton->setToolTip(i18n("Re-index Library (Full Scan)"));
     connect(m_reindexButton, &QToolButton::clicked, this, &VariablesPanel::triggerReindex);
 
+    m_loreScanButton = new QToolButton(toolbar);
+    m_loreScanButton->setIcon(QIcon::fromTheme(QStringLiteral("document-edit-sign")));
+    m_loreScanButton->setToolTip(i18n("Scan current document for lore with LoreKeeper AI"));
+    connect(m_loreScanButton, &QToolButton::clicked, this, &VariablesPanel::forceLoreKeeperScan);
+
     toolbarLayout->addWidget(m_addButton);
     toolbarLayout->addWidget(m_addVariantButton);
     toolbarLayout->addWidget(m_removeButton);
+    toolbarLayout->addSpacing(10);
     toolbarLayout->addWidget(m_reindexButton);
+    toolbarLayout->addWidget(m_loreScanButton);
     toolbarLayout->addStretch();
+    
+    m_loreScanProgress = new QProgressBar(this);
+    m_loreScanProgress->setRange(0,0); // Indeterminate
+    m_loreScanProgress->setMaximumSize(100, 16);
+    m_loreScanProgress->hide();
+    toolbarLayout->addWidget(m_loreScanProgress);
     
     layout->addWidget(toolbar);
 
@@ -170,7 +185,7 @@ void VariablesPanel::setupUi()
     m_customVarsRoot->setExpanded(true);
 
     m_libraryRoot = new QTreeWidgetItem(m_treeWidget);
-    m_libraryRoot->setText(0, i18n("Library (Auto-extracted)"));
+    m_libraryRoot->setText(0, i18n("LoreKeeper (Auto-extracted)"));
     m_libraryRoot->setFlags(Qt::ItemIsEnabled);
     m_libraryRoot->setExpanded(true);
     
@@ -386,6 +401,18 @@ void VariablesPanel::setLibrarianService(LibrarianService *service)
         connect(m_librarianService, &LibrarianService::scanningFinished, this, &VariablesPanel::refreshLibrary);
         refreshLibrary();
     }
+}
+
+void VariablesPanel::onLoreScanStarted(const QString &filePath)
+{
+    m_loreScanButton->setEnabled(false);
+    m_loreScanProgress->show();
+}
+
+void VariablesPanel::onLoreScanFinished(const QString &filePath)
+{
+    m_loreScanButton->setEnabled(true);
+    m_loreScanProgress->hide();
 }
 
 void VariablesPanel::triggerReindex()

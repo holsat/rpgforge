@@ -58,7 +58,7 @@ void PdfExporter::exportProject(const QString &outputPath, const CompileOptions 
 
     QString markdown;
     QStringList validationErrors;
-    auto treeData = ProjectManager::instance().tree();
+    auto treeData = ProjectManager::instance().model()->projectData();
     ProjectTreeModel model;
     model.setProjectData(treeData);
     

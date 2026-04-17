@@ -23,6 +23,12 @@
 #include <QString>
 #include <QJsonObject>
 #include <QMap>
+#include <QTimer>
+#include <QQueue>
+#include <QMutex>
+
+class ProjectTreeModel;
+struct ProjectTreeItem;
 
 /**
  * @brief Manages the RPG Forge project structure and settings.
@@ -36,38 +42,33 @@ class ProjectManager : public QObject
 public:
     static ProjectManager& instance();
 
-    bool isProjectOpen() const { return !m_projectFilePath.isEmpty(); }
-    QString projectPath() const;
-    QString projectFilePath() const { return m_projectFilePath; }
-
     bool openProject(const QString &filePath);
     bool createProject(const QString &dirPath, const QString &projectName);
-    void setupDefaultProject(const QString &dirPath, const QString &projectName);
-    void closeProject();
     bool saveProject();
+    void closeProject();
+
+    bool isProjectOpen() const;
+    QString projectFilePath() const { return m_projectFilePath; }
+    QString projectPath() const;
 
     // Project Metadata
     QString projectName() const;
     void setProjectName(const QString &name);
-    
+
     QString author() const;
     void setAuthor(const QString &author);
 
-    // PDF Settings
+    // Page Settings
     QString pageSize() const;
     void setPageSize(const QString &size);
-
     double marginLeft() const;
-    void setMarginLeft(double margin);
-
+    void setMarginLeft(double val);
     double marginRight() const;
-    void setMarginRight(double margin);
-
+    void setMarginRight(double val);
     double marginTop() const;
-    void setMarginTop(double margin);
-
+    void setMarginTop(double val);
     double marginBottom() const;
-    void setMarginBottom(double margin);
+    void setMarginBottom(double val);
 
     bool showPageNumbers() const;
     void setShowPageNumbers(bool show);
@@ -85,9 +86,22 @@ public:
     // Returns absolute paths of all .css files in the stylesheets/ directory
     QStringList stylesheetPaths() const;
 
+    // LoreKeeper Configuration
+    QJsonObject loreKeeperConfig() const;
+    void setLoreKeeperConfig(const QJsonObject &config);
+
     // Logical Tree Management
-    QJsonObject tree() const;
-    void setTree(const QJsonObject &tree);
+    ProjectTreeModel* model() const { return m_treeModel; }
+    
+    // Encapsulated Tree Mutations (The authoritative way to change project structure)
+    bool addFile(const QString &name, const QString &relativePath, const QString &parentPath = QString());
+    bool addFolder(const QString &name, const QString &relativePath, const QString &parentPath = QString());
+    bool moveItem(const QString &sourcePath, const QString &targetParentPath);
+    bool removeItem(const QString &path);
+    bool renameItem(const QString &path, const QString &newName);
+    
+    // Authorization check for finding items
+    ProjectTreeItem* findItem(const QString &path) const;
 
     int calculateTotalWordCount() const;
     void triggerWordCountUpdate();
@@ -134,6 +148,12 @@ public:
     void loadExplorationData(QVariantMap &wordCountCache,
                               QVariantMap &explorationColors) const;
 
+    // Returns a flat list of absolute paths for all files registered in the project tree.
+    QStringList getActiveFiles() const;
+
+    // Setup project with default folders (Manuscript, Research, etc.)
+    void setupDefaultProject(const QString &dir, const QString &name);
+
 Q_SIGNALS:
     void projectOpened();
     void projectClosed();
@@ -141,16 +161,34 @@ Q_SIGNALS:
     void treeChanged();
     void totalWordCountUpdated(int count);
 
+public Q_SLOTS:
+    void requestTreeUpdate(const QString &category, const QString &entityName, const QString &relativePath);
+
+private Q_SLOTS:
+    void processTreeUpdateQueue();
+
 private:
     explicit ProjectManager(QObject *parent = nullptr);
     
     void loadDefaults();
+    bool migrate(QJsonObject &data);
+    void validateTree();
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
     int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;
 
+    struct TreeUpdateRequest {
+        QString category;
+        QString entityName;
+        QString relativePath;
+    };
+
     QString m_projectFilePath;
     QJsonObject m_data;
+    ProjectTreeModel *m_treeModel;
+    QTimer *m_treeUpdateTimer;
+    QQueue<TreeUpdateRequest> m_treeUpdateQueue;
+    QMutex m_queueMutex;
 };
 
 #endif // PROJECTMANAGER_H

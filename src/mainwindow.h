@@ -118,6 +118,7 @@ private Q_SLOTS:
     void aiSummarize();
     void onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics);
     void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
+    void onForceLoreScan();
 
     // Explorations slots
     void onSwitchExplorationRequested(const QString &branchName);

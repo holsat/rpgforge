@@ -38,9 +38,60 @@
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
 
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
+
+// Custom message handler to log to file and console
+static QTextStream *logStream = nullptr;
+static QFile *logFile = nullptr;
+
+void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    // Also print to original console
+    fprintf(stderr, "%s\n", msg.toLocal8Bit().constData());
+    
+    if (!logStream) return;
+
+    QString level;
+    switch (type) {
+        case QtDebugMsg:    level = QStringLiteral("DEBUG"); break;
+        case QtInfoMsg:     level = QStringLiteral("INFO"); break;
+        case QtWarningMsg:  level = QStringLiteral("WARN"); break;
+        case QtCriticalMsg: level = QStringLiteral("CRITICAL"); break;
+        case QtFatalMsg:    level = QStringLiteral("FATAL"); break;
+    }
+    
+    QString formattedMessage = QStringLiteral("%1 [%2] %3 (%4:%5, %6)\n")
+        .arg(QDateTime::currentDateTime().toString(Qt::ISODate), 
+             level, 
+             msg,
+             context.file ? context.file : "unknown", 
+             QString::number(context.line), 
+             context.function ? context.function : "unknown");
+
+    *logStream << formattedMessage;
+    logStream->flush();
+}
+
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+
+    // Setup logging
+    QString logFileName = QStringLiteral("rpgforge_debug.log");
+    logFile = new QFile(logFileName);
+    if (logFile->exists()) {
+        QString backupName = QStringLiteral("%1.%2.bak").arg(logFileName, QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")));
+        logFile->rename(backupName);
+    }
+    if (logFile->open(QIODevice::WriteOnly | QIODevice::Append)) {
+        logStream = new QTextStream(logFile);
+        qInstallMessageHandler(messageHandler);
+    } else {
+        qWarning() << "Could not open log file for writing:" << logFileName;
+    }
 
     // Disable and clear WebEngine cache for debugging and safety
     QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);

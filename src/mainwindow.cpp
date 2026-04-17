@@ -47,7 +47,7 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
-#include "characterdossierservice.h"
+#include "lorekeeperservice.h"
 #include "agentgatekeeper.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -115,7 +115,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_librarianService = new LibrarianService(&LLMService::instance(), this);
     AgentGatekeeper::instance().setLibrarianService(m_librarianService);
-    CharacterDossierService::instance().init(&LLMService::instance(), m_librarianService);
+    LoreKeeperService::instance().init(&LLMService::instance(), m_librarianService);
 
     connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
     connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
@@ -125,6 +125,9 @@ MainWindow::MainWindow(QWidget *parent)
     setupSidebar();
     if (m_variablesPanel) {
         m_variablesPanel->setLibrarianService(m_librarianService);
+        connect(m_variablesPanel, &VariablesPanel::forceLoreKeeperScan, this, &MainWindow::onForceLoreScan);
+        connect(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdateStarted, m_variablesPanel, &VariablesPanel::onLoreScanStarted);
+        connect(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdateFinished, m_variablesPanel, &VariablesPanel::onLoreScanFinished);
     }
     setupActions();
 
@@ -221,6 +224,7 @@ void MainWindow::setupEditor()
     m_editorSplitter = new QSplitter(Qt::Horizontal, this);
     m_editorSplitter->addWidget(m_editorView);
     m_editorSplitter->addWidget(m_researchView);
+    m_editorView->show();
     m_researchView->hide(); // hidden until a research file is opened
 
     // Shared signals for both editors
@@ -500,10 +504,9 @@ void MainWindow::setupSidebar()
     m_centralViewLayout->addWidget(m_pdfViewer);
 
     // Only show the editor view initially; hide the rest
-    m_corkboardView->hide();
-    m_imagePreview->hide();
-    m_diffView->hide();
-    m_pdfViewer->hide();
+    showCentralView(m_editorSplitter);
+    m_editorView->show();
+
     vbox->addWidget(viewContainer);
 
     m_mainSplitter->addWidget(m_sidebar);
@@ -644,7 +647,6 @@ void MainWindow::setupSidebar()
         if (folder && dragged) {
             int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
             if (m_projectTree->model()->moveItem(dragged, folder, toIdx)) {
-                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
                 ProjectManager::instance().saveProject();
             }
         }
@@ -698,7 +700,7 @@ void MainWindow::setupSidebar()
         if (m_corkboardView) m_corkboardView->setFolder(QString());
         QString projectDir = ProjectManager::instance().projectPath();
         KnowledgeBase::instance().initForProject(projectDir);
-        CharacterDossierService::instance().setProjectPath(projectDir);
+        LoreKeeperService::instance().setProjectPath(projectDir);
 
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();
@@ -706,6 +708,7 @@ void MainWindow::setupSidebar()
         m_projectStatsStatus->show();
         updateProjectStats();
         SynopsisService::instance().scanProject();
+        KnowledgeBase::instance().reindexProject();
 
         // Explorations panel
         m_explorationsPanel->setRootPath(projectDir);
@@ -716,6 +719,12 @@ void MainWindow::setupSidebar()
         GitService::instance().loadWordCountCache(wordCountCache);
         m_explorationsPanel->graphView()->loadColorMap(explorationColors);
     });
+
+    connect(&ProjectManager::instance(), &ProjectManager::treeChanged, this, [this]() {
+        updateProjectStats();
+        KnowledgeBase::instance().reindexProject();
+    });
+
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
         // Save exploration data before closing
         ProjectManager::instance().saveExplorationData(
@@ -942,6 +951,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 {
     if (!url.isEmpty() && url.isLocalFile()) {
         QString path = url.toLocalFile();
+        qDebug() << "MainWindow: openFileFromUrl request for:" << path;
         QString suffix = QFileInfo(path).suffix().toLower();
 
         static const QStringList imgSuffixes = {
@@ -977,19 +987,24 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             return;
         }
 
-        // Check if this is a research file
+        // Check project context
+        bool isLoreKeeper = false;
         bool isResearch = false;
         if (ProjectManager::instance().isProjectOpen()) {
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
-            ProjectTreeItem *item = m_projectTree->model()->findItem(relPath);
+            ProjectTreeItem *item = ProjectManager::instance().findItem(relPath);
             if (item) {
-                // Check ancestors for Research category
+                qDebug() << "MainWindow: Found item in tree for" << relPath << "category:" << item->category;
                 ProjectTreeItem *p = item;
                 while (p) {
-                    if (p->category == ProjectTreeItem::Research || 
+                    if (p->category == ProjectTreeItem::LoreKeeper || 
                         p->category == ProjectTreeItem::Characters ||
                         p->category == ProjectTreeItem::Places ||
                         p->category == ProjectTreeItem::Cultures) {
+                        isLoreKeeper = true;
+                        break;
+                    }
+                    if (p->category == ProjectTreeItem::Research) {
                         isResearch = true;
                         break;
                     }
@@ -999,18 +1014,33 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         }
 
         if (isResearch) {
-            m_researchDocument->openUrl(url);
+            qDebug() << "MainWindow: Opening as Research file.";
             m_researchView->show();
-            // Ensure first view stays visible
             m_editorView->show();
+            if (m_researchDocument->url() == url) {
+                qDebug() << "MainWindow: Research file already open, bringing to front.";
+                showCentralView(m_editorSplitter);
+                return;
+            }
+            m_researchDocument->openUrl(url);
+            m_researchDocument->setReadWrite(true);
         } else {
-            m_document->openUrl(url);
+            qDebug() << "MainWindow: Opening as Manuscript/General file.";
+            m_editorView->show();
             m_researchView->hide();
+            if (m_document->url() == url) {
+                qDebug() << "MainWindow: File already open, bringing to front.";
+                showCentralView(m_editorSplitter);
+                return;
+            }
+            m_document->openUrl(url);
+            m_document->setReadWrite(!isLoreKeeper);
         }
 
+        qDebug() << "MainWindow: Showing editor splitter.";
         showCentralView(m_editorSplitter);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
-            m_previewPanel->show();
+            togglePreview();
             m_previewPanel->setBaseUrl(url);
         }
         const QString fileName = url.fileName();
@@ -1065,7 +1095,7 @@ void MainWindow::newProject()
             AgentGatekeeper::instance().pauseAll();
             if (ProjectManager::instance().createProject(dir, name)) {
                 if (m_librarianService) m_librarianService->setProjectPath(dir);
-                CharacterDossierService::instance().setProjectPath(dir);
+                LoreKeeperService::instance().setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
@@ -1090,7 +1120,7 @@ void MainWindow::openProject()
         if (ProjectManager::instance().openProject(filePath)) {
             QString projectDir = ProjectManager::instance().projectPath();
             if (m_librarianService) m_librarianService->setProjectPath(projectDir);
-            CharacterDossierService::instance().setProjectPath(projectDir);
+            LoreKeeperService::instance().setProjectPath(projectDir);
             m_fileExplorer->setRootPath(projectDir);
             updateTitle();
         }
@@ -1329,9 +1359,28 @@ void MainWindow::navigateToLine(int line)
 void MainWindow::togglePreview()
 {
     if (m_previewPanel) {
-        m_previewPanel->setVisible(m_togglePreviewAction->isChecked());
-        if (m_previewPanel->isVisible()) {
+        bool visible = m_togglePreviewAction->isChecked();
+        m_previewPanel->setVisible(visible);
+        
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (visible) {
+            // Give it some reasonable space if it was hidden (size 0)
+            if (sizes.size() >= 3 && sizes[2] < 50) {
+                int total = 0;
+                for (int s : sizes) total += s;
+                int previewSize = total * 0.3; // 30% for preview
+                sizes[2] = previewSize;
+                sizes[1] = total - sizes[0] - previewSize;
+                m_mainSplitter->setSizes(sizes);
+            }
             syncScroll();
+        } else {
+            // Hide it completely in the splitter
+            if (sizes.size() >= 3) {
+                sizes[1] += sizes[2];
+                sizes[2] = 0;
+                m_mainSplitter->setSizes(sizes);
+            }
         }
     }
 }
@@ -1367,11 +1416,24 @@ void MainWindow::updateTitle()
 }
 void MainWindow::showCentralView(QWidget *widget)
 {
-    m_editorSplitter->setVisible(widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
+    // The splitter should be visible if any of its children are the requested widget
+    bool showSplitter = (widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
+    m_editorSplitter->setVisible(showSplitter);
+    
     m_corkboardView->setVisible(widget == m_corkboardView);
     m_imagePreview->setVisible(widget == m_imagePreview);
     m_diffView->setVisible(widget == m_diffView);
     m_pdfViewer->setVisible(widget == m_pdfViewer);
+
+    if (showSplitter) {
+        // Ensure the splitter has size
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 2 && sizes[1] < 100) {
+            int total = sizes[0] + sizes[1] + (sizes.size() > 2 ? sizes[2] : 0);
+            sizes[1] = total - sizes[0] - (sizes.size() > 2 ? sizes[2] : 0);
+            m_mainSplitter->setSizes(sizes);
+        }
+    }
 
     // Add the Kompare part's toolbar only while the diff view is visible,
     // so its actions never pollute the primary toolbar.
@@ -1859,6 +1921,14 @@ void MainWindow::aiSummarize()
     m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Summarize"));
 }
 
+void MainWindow::onForceLoreScan()
+{
+    KTextEditor::Document *doc = activeDocument();
+    if (doc && !doc->url().isEmpty() && doc->url().isLocalFile()) {
+        LoreKeeperService::instance().indexDocument(doc->url().toLocalFile());
+    }
+}
+
 void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
 {
     KTextEditor::Document *doc = nullptr;
@@ -2036,10 +2106,10 @@ void MainWindow::importScrivener()
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
             if (success) {
                 m_projectTree->model()->setProjectData(resultData);
-                ProjectManager::instance().setTree(resultData);
                 ProjectManager::instance().saveProject();
                 QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
-            } else {
+            }
+ else {
                 QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
             }
 
@@ -2113,7 +2183,6 @@ void MainWindow::importWord()
         }
     }
     
-    ProjectManager::instance().setTree(model->projectData());
     ProjectManager::instance().saveProject();
     SynopsisService::instance().resume();
 
@@ -2163,7 +2232,7 @@ void MainWindow::updateProjectPreview()
     if (!m_previewPanel || !ProjectManager::instance().isProjectOpen()) return;
 
     QString markdown;
-    auto treeData = ProjectManager::instance().tree();
+    auto treeData = ProjectManager::instance().model()->projectData();
     ProjectTreeModel model;
     model.setProjectData(treeData);
     

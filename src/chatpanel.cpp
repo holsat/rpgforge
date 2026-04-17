@@ -86,7 +86,8 @@ void ChatPanel::setupUi()
         {"Anthropic", LLMProvider::Anthropic},
         {"Ollama",    LLMProvider::Ollama},
         {"Grok",      LLMProvider::Grok},
-        {"Gemini",    LLMProvider::Gemini},
+        {"Google",    LLMProvider::Gemini},
+        {"LM Studio", LLMProvider::LMStudio},
     };
     for (const auto &p : providers) {
         m_providerCombo->addItem(QLatin1String(p.label),
@@ -95,7 +96,8 @@ void ChatPanel::setupUi()
     m_providerCombo->setMinimumWidth(100);
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    const int savedProvider = settings.value(QStringLiteral("llm/provider"), 0).toInt();
+    const int savedProvider = settings.value(QStringLiteral("llm/chat_provider"), 
+                                             settings.value(QStringLiteral("llm/provider"), 0)).toInt();
     for (int i = 0; i < m_providerCombo->count(); ++i) {
         if (m_providerCombo->itemData(i).toInt() == savedProvider) {
             m_providerCombo->setCurrentIndex(i);
@@ -106,8 +108,9 @@ void ChatPanel::setupUi()
     toolbar->addWidget(m_providerCombo);
 
     m_modelCombo = new QComboBox(this);
-    m_modelCombo->setMinimumWidth(120);
+    m_modelCombo->setMinimumWidth(250);
     updateModelList();
+    connect(m_modelCombo, &QComboBox::currentTextChanged, this, &ChatPanel::onModelChanged);
     toolbar->addWidget(m_modelCombo);
 
     m_refreshModelsBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("view-refresh")), QString(), this);
@@ -297,6 +300,8 @@ bool ChatPanel::eventFilter(QObject *watched, QEvent *event)
 
 void ChatPanel::onProviderChanged()
 {
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    settings.setValue(QStringLiteral("llm/chat_provider"), static_cast<int>(currentProvider()));
     updateModelList();
 }
 
@@ -323,9 +328,11 @@ void ChatPanel::updateModelList()
             else if (provider == LLMProvider::Anthropic) settingsKey = QStringLiteral("llm/anthropic/model");
             else if (provider == LLMProvider::Grok) settingsKey = QStringLiteral("llm/grok/model");
             else if (provider == LLMProvider::Gemini) settingsKey = QStringLiteral("llm/gemini/model");
+            else if (provider == LLMProvider::LMStudio) settingsKey = QStringLiteral("llm/lmstudio/model");
             else settingsKey = QStringLiteral("llm/ollama/model");
 
-            const QString configuredModel = settings.value(settingsKey).toString();
+            const QString configuredModel = settings.value(QStringLiteral("llm/chat_model"), 
+                                                           settings.value(settingsKey)).toString();
             int idx = m_modelCombo->findText(configuredModel);
             if (idx != -1) m_modelCombo->setCurrentIndex(idx);
         } else {
@@ -343,12 +350,22 @@ void ChatPanel::updateModelList()
             } else if (provider == LLMProvider::Gemini) {
                 const QString m = settings.value(QStringLiteral("llm/gemini/model")).toString();
                 if (!m.isEmpty()) m_modelCombo->addItem(m);
+            } else if (provider == LLMProvider::LMStudio) {
+                const QString m = settings.value(QStringLiteral("llm/lmstudio/model")).toString();
+                if (!m.isEmpty()) m_modelCombo->addItem(m);
             } else { // Ollama
                 const QString m = settings.value(QStringLiteral("llm/ollama/model")).toString();
                 if (!m.isEmpty()) m_modelCombo->addItem(m);
             }
         }
     });
+}
+
+void ChatPanel::onModelChanged(const QString &model)
+{
+    if (model.isEmpty() || model == i18n("Loading models...")) return;
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    settings.setValue(QStringLiteral("llm/chat_model"), model);
 }
 
 void ChatPanel::sendMessage()

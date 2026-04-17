@@ -200,7 +200,7 @@ OnboardingPage* OnboardingWizard::createAiPage()
     auto *form = new QFormLayout();
 
     m_aiProviderCombo = new QComboBox(page);
-    m_aiProviderCombo->addItems({QStringLiteral("Ollama (Local)"), QStringLiteral("OpenAI"), QStringLiteral("Anthropic")});
+    m_aiProviderCombo->addItems({QStringLiteral("Ollama (Local)"), QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Grok (xAI)"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
     form->addRow(i18n("AI Provider:"), m_aiProviderCombo);
 
     m_aiModelCombo = new QComboBox(page);
@@ -228,17 +228,23 @@ OnboardingPage* OnboardingWizard::createAiPage()
     layout->addWidget(m_ollamaStatus);
 
     connect(m_aiProviderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        m_aiKeyEdit->setEnabled(index != 0); // Disable for Ollama
+        m_aiKeyEdit->setEnabled(index != 0 && index != 5); // Disable for Ollama and LM Studio (optional)
         m_aiModelCombo->clear();
-        if (index == 0) {
+        m_ollamaStatus->hide();
+        
+        if (index == 0) { // Ollama
             m_aiModelCombo->addItems({QStringLiteral("llama3"), QStringLiteral("mistral"), QStringLiteral("phi3")});
             checkOllama();
-        } else if (index == 1) {
+        } else if (index == 1) { // OpenAI
             m_aiModelCombo->addItems({QStringLiteral("gpt-4o"), QStringLiteral("gpt-4-turbo"), QStringLiteral("gpt-3.5-turbo")});
-            m_ollamaStatus->hide();
-        } else {
+        } else if (index == 2) { // Anthropic
             m_aiModelCombo->addItems({QStringLiteral("claude-3-5-sonnet-20240620"), QStringLiteral("claude-3-opus-20240229")});
-            m_ollamaStatus->hide();
+        } else if (index == 3) { // Grok
+            m_aiModelCombo->addItems({QStringLiteral("grok-1")});
+        } else if (index == 4) { // Google
+            m_aiModelCombo->addItems({QStringLiteral("gemini-1.5-pro-latest"), QStringLiteral("gemini-1.5-flash-latest")});
+        } else if (index == 5) { // LM Studio
+            m_aiModelCombo->addItems({QStringLiteral("local-model")});
         }
     });
 
@@ -374,7 +380,7 @@ void OnboardingWizard::accept()
             loop.exec();
             
             if (success) {
-                ProjectManager::instance().setTree(resultData);
+                ProjectManager::instance().model()->setProjectData(resultData);
                 ProjectManager::instance().saveProject();
             }
             progress->close();
