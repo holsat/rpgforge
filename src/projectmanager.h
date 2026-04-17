@@ -27,6 +27,8 @@
 #include <QQueue>
 #include <QMutex>
 
+#include "projectmetadata.h"
+
 class ProjectTreeModel;
 struct ProjectTreeItem;
 
@@ -273,11 +275,9 @@ private Q_SLOTS:
 
 private:
     explicit ProjectManager(QObject *parent = nullptr);
-    
+
     void loadDefaults();
     bool migrate(QJsonObject &data);
-    QJsonObject toJson() const;
-    void fromJson(const QJsonObject &obj);
     int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;
 
     struct TreeUpdateRequest {
@@ -287,7 +287,8 @@ private:
     };
 
     QString m_projectFilePath;
-    QJsonObject m_data;
+    ProjectMetadata m_meta;
+    QJsonObject m_extraJson;          // unknown top-level keys preserved for round-trip fidelity
     ProjectTreeModel *m_treeModel;
     QTimer *m_treeUpdateTimer;
     QQueue<TreeUpdateRequest> m_treeUpdateQueue;

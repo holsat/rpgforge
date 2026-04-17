@@ -69,21 +69,10 @@ int ProjectManager::effectiveCategoryForPath(const QString &relativePath) const
 
 void ProjectManager::loadDefaults()
 {
-    m_data = QJsonObject();
-    m_data[QLatin1String(ProjectKeys::Name)] = i18n("Untitled Project");
-    m_data[QLatin1String(ProjectKeys::Author)] = i18n("Unknown Author");
-    m_data[QLatin1String(ProjectKeys::PageSize)] = QStringLiteral("A4");
-    
-    QJsonObject margins;
-    margins[QStringLiteral("left")] = 20.0;
-    margins[QStringLiteral("right")] = 20.0;
-    margins[QStringLiteral("top")] = 20.0;
-    margins[QStringLiteral("bottom")] = 20.0;
-    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
-
-    m_data[QLatin1String(ProjectKeys::ShowPageNumbers)] = true;
-    m_data[QLatin1String(ProjectKeys::AutoSync)] = true;
-    m_data[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+    m_meta = ProjectMetadata{};
+    m_meta.name = i18n("Untitled Project");
+    m_meta.author = i18n("Unknown Author");
+    m_meta.version = ProjectKeys::CurrentVersion;
 
     // Default LoreKeeper Configuration
     QJsonObject lkConfig;
@@ -97,7 +86,9 @@ void ProjectManager::loadDefaults()
     );
     categories.append(charCat);
     lkConfig[QStringLiteral("categories")] = categories;
-    m_data[QLatin1String(ProjectKeys::LoreKeeperConfig)] = lkConfig;
+    m_meta.loreKeeperConfig = lkConfig;
+
+    m_extraJson = QJsonObject();
 
     if (m_treeModel) {
         m_treeModel->setProjectData(QJsonObject());
@@ -131,14 +122,34 @@ bool ProjectManager::openProject(const QString &filePath)
     }
 
     m_projectFilePath = filePath;
-    m_data = doc.object();
 
-    // Migrate old project files to current schema version
-    bool migrated = migrate(m_data);
+    QJsonObject rawData = doc.object();
+
+    // Migrate legacy tree-node fields (string type/category values, etc.)
+    // before parsing the metadata. The migrate() helper operates on the
+    // full project object in place.
+    const bool migrated = migrate(rawData);
+
+    // Parse typed metadata fields. ProjectMetadata::fromJson also handles
+    // the v1-flat-margin -> v3-nested-margins migration.
+    m_meta = ProjectMetadata::fromJson(rawData);
+
+    // Preserve any top-level keys that ProjectMetadata does not recognise
+    // so saveProject() can write them back verbatim — future-compat with
+    // fields introduced by newer builds.
+    m_extraJson = QJsonObject();
+    const QStringList known = ProjectMetadata::knownKeys();
+    for (auto it = rawData.constBegin(); it != rawData.constEnd(); ++it) {
+        if (!known.contains(it.key())) {
+            m_extraJson.insert(it.key(), it.value());
+        }
+    }
 
     qDebug() << "ProjectManager: Project data loaded. Syncing model.";
-    // Sync authoritative model
-    m_treeModel->setProjectData(m_data.value(QLatin1String(ProjectKeys::Tree)).toObject());
+    // Sync authoritative tree model from the JSON tree blob. Phases 5/6
+    // will move tree sourcing to disk; until then the JSON tree is still
+    // the structure source.
+    m_treeModel->setProjectData(rawData.value(QLatin1String(ProjectKeys::Tree)).toObject());
     validateTree();
 
     // Persist migration changes to disk
@@ -161,8 +172,8 @@ bool ProjectManager::createProject(const QString &dirPath, const QString &projec
 
     m_projectFilePath = dir.absoluteFilePath(QStringLiteral("rpgforge.project"));
     loadDefaults();
-    m_data[QLatin1String(ProjectKeys::Name)] = projectName;
-    
+    m_meta.name = projectName;
+
     return saveProject();
 }
 
@@ -175,12 +186,22 @@ bool ProjectManager::saveProject()
         return false;
     }
 
-    // Always sync the model data back to m_data before saving
-    m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
-    m_data[QLatin1String(ProjectKeys::Version)] = ProjectKeys::CurrentVersion;
+    // Compose the on-disk JSON:
+    //  1. typed metadata fields via ProjectMetadata::toJson
+    //  2. unknown top-level keys carried over from the previous load
+    //  3. the live tree JSON from the model
+    QJsonObject doc = m_meta.toJson();
 
-    QJsonDocument doc(m_data);
-    file.write(doc.toJson());
+    for (auto it = m_extraJson.constBegin(); it != m_extraJson.constEnd(); ++it) {
+        if (!doc.contains(it.key())) {
+            doc.insert(it.key(), it.value());
+        }
+    }
+
+    doc[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
+
+    QJsonDocument docWrapper(doc);
+    file.write(docWrapper.toJson());
     return true;
 }
 
@@ -191,81 +212,73 @@ void ProjectManager::closeProject()
     Q_EMIT projectClosed();
 }
 
-QString ProjectManager::projectName() const { return m_data.value(QLatin1String(ProjectKeys::Name)).toString(); }
+QString ProjectManager::projectName() const { return m_meta.name; }
 void ProjectManager::setProjectName(const QString &name)
 {
-    m_data[QLatin1String(ProjectKeys::Name)] = name;
+    m_meta.name = name;
     Q_EMIT projectSettingsChanged();
 }
 
-QString ProjectManager::author() const { return m_data.value(QLatin1String(ProjectKeys::Author)).toString(); }
+QString ProjectManager::author() const { return m_meta.author; }
 void ProjectManager::setAuthor(const QString &author)
 {
-    m_data[QLatin1String(ProjectKeys::Author)] = author;
+    m_meta.author = author;
     Q_EMIT projectSettingsChanged();
 }
 
-QString ProjectManager::pageSize() const { return m_data.value(QLatin1String(ProjectKeys::PageSize)).toString(); }
+QString ProjectManager::pageSize() const { return m_meta.pageSize; }
 void ProjectManager::setPageSize(const QString &size)
 {
-    m_data[QLatin1String(ProjectKeys::PageSize)] = size;
+    m_meta.pageSize = size;
     Q_EMIT projectSettingsChanged();
 }
 
-double ProjectManager::marginLeft() const { return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("left")).toDouble(20.0); }
+double ProjectManager::marginLeft() const { return m_meta.margins.left; }
 void ProjectManager::setMarginLeft(double val)
 {
-    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
-    margins[QStringLiteral("left")] = val;
-    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    m_meta.margins.left = val;
     Q_EMIT projectSettingsChanged();
 }
 
-double ProjectManager::marginRight() const { return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("right")).toDouble(20.0); }
+double ProjectManager::marginRight() const { return m_meta.margins.right; }
 void ProjectManager::setMarginRight(double val)
 {
-    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
-    margins[QStringLiteral("right")] = val;
-    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    m_meta.margins.right = val;
     Q_EMIT projectSettingsChanged();
 }
 
-double ProjectManager::marginTop() const { return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("top")).toDouble(20.0); }
+double ProjectManager::marginTop() const { return m_meta.margins.top; }
 void ProjectManager::setMarginTop(double val)
 {
-    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
-    margins[QStringLiteral("top")] = val;
-    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    m_meta.margins.top = val;
     Q_EMIT projectSettingsChanged();
 }
 
-double ProjectManager::marginBottom() const { return m_data.value(QLatin1String(ProjectKeys::Margins)).toObject().value(QStringLiteral("bottom")).toDouble(20.0); }
+double ProjectManager::marginBottom() const { return m_meta.margins.bottom; }
 void ProjectManager::setMarginBottom(double val)
 {
-    QJsonObject margins = m_data.value(QLatin1String(ProjectKeys::Margins)).toObject();
-    margins[QStringLiteral("bottom")] = val;
-    m_data[QLatin1String(ProjectKeys::Margins)] = margins;
+    m_meta.margins.bottom = val;
     Q_EMIT projectSettingsChanged();
 }
 
-bool ProjectManager::showPageNumbers() const { return m_data.value(QLatin1String(ProjectKeys::ShowPageNumbers)).toBool(true); }
+bool ProjectManager::showPageNumbers() const { return m_meta.showPageNumbers; }
 void ProjectManager::setShowPageNumbers(bool show)
 {
-    m_data[QLatin1String(ProjectKeys::ShowPageNumbers)] = show;
+    m_meta.showPageNumbers = show;
     Q_EMIT projectSettingsChanged();
 }
 
-QString ProjectManager::stylesheetPath() const { return m_data.value(QLatin1String(ProjectKeys::StylesheetPath)).toString(); }
+QString ProjectManager::stylesheetPath() const { return m_meta.stylesheetPath; }
 void ProjectManager::setStylesheetPath(const QString &path)
 {
-    m_data[QLatin1String(ProjectKeys::StylesheetPath)] = path;
+    m_meta.stylesheetPath = path;
     Q_EMIT projectSettingsChanged();
 }
 
-bool ProjectManager::autoSync() const { return m_data.value(QLatin1String(ProjectKeys::AutoSync)).toBool(true); }
+bool ProjectManager::autoSync() const { return m_meta.autoSync; }
 void ProjectManager::setAutoSync(bool enabled)
 {
-    m_data[QLatin1String(ProjectKeys::AutoSync)] = enabled;
+    m_meta.autoSync = enabled;
     Q_EMIT projectSettingsChanged();
 }
 
@@ -280,10 +293,10 @@ QStringList ProjectManager::stylesheetPaths() const
     return paths;
 }
 
-QJsonObject ProjectManager::loreKeeperConfig() const { return m_data.value(QLatin1String(ProjectKeys::LoreKeeperConfig)).toObject(); }
+QJsonObject ProjectManager::loreKeeperConfig() const { return m_meta.loreKeeperConfig; }
 void ProjectManager::setLoreKeeperConfig(const QJsonObject &config)
 {
-    m_data[QLatin1String(ProjectKeys::LoreKeeperConfig)] = config;
+    m_meta.loreKeeperConfig = config;
     Q_EMIT projectSettingsChanged();
 }
 
@@ -307,7 +320,6 @@ bool ProjectManager::addFile(const QString &name, const QString &relativePath, c
     }
 
     if (m_treeModel->addFile(name, relativePath, parentIdx).isValid()) {
-        m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
         return saveProject();
     }
     return false;
@@ -326,7 +338,6 @@ bool ProjectManager::addFolder(const QString &name, const QString &relativePath,
     }
 
     if (m_treeModel->addFolder(name, relativePath, parentIdx).isValid()) {
-        m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
         return saveProject();
     }
     return false;
@@ -341,7 +352,6 @@ bool ProjectManager::moveItem(const QString &sourcePath, const QString &targetPa
     
     if (item && newParent) {
         if (m_treeModel->moveItem(item, newParent, newParent->children.count())) {
-            m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
             return saveProject();
         }
     }
@@ -356,7 +366,6 @@ bool ProjectManager::removeItem(const QString &path)
     if (item) {
         QModelIndex idx = m_treeModel->indexForItem(item);
         if (m_treeModel->removeRow(idx.row(), idx.parent())) {
-            m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
             return saveProject();
         }
     }
@@ -371,7 +380,6 @@ bool ProjectManager::renameItem(const QString &path, const QString &newName)
     if (item) {
         QModelIndex idx = m_treeModel->indexForItem(item);
         if (m_treeModel->setData(idx, newName, Qt::EditRole)) {
-            m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
             return saveProject();
         }
     }
@@ -568,16 +576,16 @@ void ProjectManager::saveExplorationData(const QVariantMap &wordCountCache,
 {
     if (m_projectFilePath.isEmpty()) return;
 
-    m_data[QStringLiteral("wordCountCache")] = QJsonObject::fromVariantMap(wordCountCache);
-    m_data[QStringLiteral("explorationColors")] = QJsonObject::fromVariantMap(explorationColors);
+    m_meta.wordCountCache = wordCountCache;
+    m_meta.explorationColors = explorationColors;
     saveProject();
 }
 
 void ProjectManager::loadExplorationData(QVariantMap &wordCountCache,
                                           QVariantMap &explorationColors) const
 {
-    wordCountCache = m_data.value(QStringLiteral("wordCountCache")).toObject().toVariantMap();
-    explorationColors = m_data.value(QStringLiteral("explorationColors")).toObject().toVariantMap();
+    wordCountCache = m_meta.wordCountCache;
+    explorationColors = m_meta.explorationColors;
 }
 
 void ProjectManager::requestTreeUpdate(const QString &category, const QString &entityName, const QString &relativePath)
@@ -952,7 +960,6 @@ void ProjectManager::validateTree()
 
     if (changed) {
         qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";
-        m_data[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
         saveProject();
     }
 }
