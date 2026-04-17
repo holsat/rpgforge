@@ -788,16 +788,83 @@ void ProjectManager::validateTree()
 
     validate(m_treeModel->rootItem());
 
-    // NOTE: previously this method auto-created top-level "manuscript",
-    // "lorekeeper", "research" folders as a "self-healing" measure. That
-    // behavior was wrong for imported projects (Scrivener etc.) whose tree
-    // structure does not match those exact paths — it added DUPLICATE
-    // folders instead of recognising the user's existing structure, and
-    // every project save cemented the duplicates further. Auto-creation
-    // belongs in setupDefaultProject (where it already lives) for fresh
-    // projects only. Imported projects keep their imported structure.
-    // Category is still derived from path via ProjectTreeModel; folder
-    // existence is no longer enforced here.
+    // Ensure the three authoritative top-level folders (manuscript/,
+    // lorekeeper/, research/) exist in both the logical tree and on disk.
+    // Permissive existence check: a top-level folder counts as "already the
+    // authoritative root" if ANY of these match: path equals canonical path
+    // case-insensitively, display name equals the canonical name
+    // case-insensitively, or category field already equals the target
+    // category (e.g. legacy items with empty paths). When a match is
+    // found we heal the path / category / name in place rather than
+    // creating a duplicate. Only when no top-level child matches by any
+    // criterion is a new folder created.
+    struct AuthoritativeFolder {
+        const char *path;
+        const char *defaultName;
+        ProjectTreeItem::Category category;
+    };
+    static const AuthoritativeFolder kAuthoritativeFolders[] = {
+        {"manuscript", "Manuscript", ProjectTreeItem::Manuscript},
+        {"lorekeeper", "LoreKeeper", ProjectTreeItem::LoreKeeper},
+        {"research",   "Research",   ProjectTreeItem::Research},
+    };
+
+    ProjectTreeItem *root = m_treeModel->rootItem();
+    const QString projectDir = projectPath();
+
+    for (const auto &spec : kAuthoritativeFolders) {
+        const QString canonicalPath = QString::fromLatin1(spec.path);
+        const QString canonicalName = QString::fromLatin1(spec.defaultName);
+
+        ProjectTreeItem *existing = nullptr;
+        for (auto *child : root->children) {
+            if (child->type != ProjectTreeItem::Folder) continue;
+
+            const bool pathMatches = !child->path.isEmpty()
+                && child->path.compare(canonicalPath, Qt::CaseInsensitive) == 0;
+            const bool nameMatches = !child->name.isEmpty()
+                && child->name.compare(canonicalName, Qt::CaseInsensitive) == 0;
+            const bool categoryMatches = child->category == spec.category;
+
+            if (pathMatches || nameMatches || categoryMatches) {
+                existing = child;
+                break;
+            }
+        }
+
+        if (existing) {
+            // Heal name / path / category to canonical values so future
+            // identification is unambiguous.
+            if (existing->path.compare(canonicalPath, Qt::CaseInsensitive) != 0) {
+                qDebug() << "ProjectManager: validateTree: normalizing authoritative folder path"
+                         << existing->path << "->" << canonicalPath;
+                existing->path = canonicalPath;
+                changed = true;
+            }
+            if (existing->category != spec.category) {
+                qDebug() << "ProjectManager: validateTree: setting category for" << existing->name;
+                existing->category = spec.category;
+                changed = true;
+            }
+            if (existing->name.isEmpty()) {
+                existing->name = canonicalName;
+                changed = true;
+            }
+        } else {
+            qDebug() << "ProjectManager: validateTree: creating missing authoritative folder" << canonicalPath;
+            QModelIndex newIdx = m_treeModel->addFolder(i18n(spec.defaultName), canonicalPath, QModelIndex());
+            if (ProjectTreeItem *newItem = m_treeModel->itemFromIndex(newIdx)) {
+                newItem->category = spec.category;
+            }
+            changed = true;
+        }
+
+        // Always ensure the on-disk folder exists. mkpath is a no-op when
+        // the directory is already there, so this is safe to call every time.
+        if (!projectDir.isEmpty()) {
+            QDir(projectDir).mkpath(canonicalPath);
+        }
+    }
 
     if (changed) {
         qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";
