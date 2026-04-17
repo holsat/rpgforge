@@ -207,6 +207,7 @@ private:
 
     KTextEditor::Document *m_researchDocument = nullptr;
     KTextEditor::View *m_researchView = nullptr;
+    QWidget *m_researchPane = nullptr; // wraps m_researchView with title + close btn
     QSplitter *m_editorSplitter = nullptr;
 
     QStackedLayout *m_centralViewLayout = nullptr;

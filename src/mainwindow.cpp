@@ -107,6 +107,7 @@
 
 #include <QFrame>
 #include <QLabel>
+#include <QToolButton>
 #include <QStatusBar>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -224,9 +225,41 @@ void MainWindow::setupEditor()
 
     m_editorSplitter = new QSplitter(Qt::Horizontal, this);
     m_editorSplitter->addWidget(m_editorView);
-    m_editorSplitter->addWidget(m_researchView);
+
+    // Wrap the research view in a small container that includes a close
+    // button at the top, so the user has an obvious way to dismiss the
+    // split when they are done with it. Hidden by default; only shown when
+    // the user opens a Research file (which switches the split mode on).
+    m_researchPane = new QWidget(this);
+    {
+        auto *paneLayout = new QVBoxLayout(m_researchPane);
+        paneLayout->setContentsMargins(0, 0, 0, 0);
+        paneLayout->setSpacing(0);
+
+        auto *paneToolbar = new QHBoxLayout();
+        paneToolbar->setContentsMargins(4, 2, 4, 2);
+        auto *paneTitle = new QLabel(i18n("Research"), m_researchPane);
+        QFont titleFont = paneTitle->font();
+        titleFont.setBold(true);
+        paneTitle->setFont(titleFont);
+        paneToolbar->addWidget(paneTitle);
+        paneToolbar->addStretch();
+        auto *closeBtn = new QToolButton(m_researchPane);
+        closeBtn->setIcon(QIcon::fromTheme(QStringLiteral("window-close")));
+        closeBtn->setToolTip(i18n("Close Research View (returns to single-pane editor)"));
+        closeBtn->setAutoRaise(true);
+        connect(closeBtn, &QToolButton::clicked, this, [this]() {
+            m_researchPane->hide();
+            if (m_researchDocument) m_researchDocument->closeUrl();
+        });
+        paneToolbar->addWidget(closeBtn);
+        paneLayout->addLayout(paneToolbar);
+        paneLayout->addWidget(m_researchView, 1);
+    }
+    m_editorSplitter->addWidget(m_researchPane);
+
     m_editorView->show();
-    m_researchView->hide(); // hidden until a research file is opened
+    m_researchPane->hide(); // hidden until a research file is opened
 
     // Shared signals for both editors
     auto setupConnections = [this](KTextEditor::Document *doc, KTextEditor::View *view) {
@@ -1017,7 +1050,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 
         if (isResearch) {
             qDebug() << "MainWindow: Opening as Research file.";
-            m_researchView->show();
+            m_researchPane->show();
             m_editorView->show();
             if (m_researchDocument->url() == url) {
                 qDebug() << "MainWindow: Research file already open, bringing to front.";
@@ -1029,7 +1062,12 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         } else {
             qDebug() << "MainWindow: Opening as Manuscript/General file.";
             m_editorView->show();
-            m_researchView->hide();
+            // Deliberately DO NOT hide m_researchView here. The split is a
+            // user-controlled mode: it's enabled by opening a research file,
+            // and stays on for subsequent navigation. Hiding it on every
+            // manuscript click forced single-pane mode and surprised users.
+            // The research pane is closed via the toolbar button on the
+            // research view itself.
             if (m_document->url() == url) {
                 qDebug() << "MainWindow: File already open, bringing to front.";
                 showCentralView(m_editorSplitter);
