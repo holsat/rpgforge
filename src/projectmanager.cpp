@@ -667,35 +667,89 @@ void ProjectManager::validateTree()
 
         // Fix type: leaf Folder (no children) whose path resolves to a file on
         // disk should be a File. Scrivener-imported projects often record
-        // documents as extensionless Folder entries; the on-disk file lives
-        // alongside with a .md/.markdown suffix. Without this correction the
-        // tree click handler treats the item as a folder and never opens it.
+        // documents as extensionless Folder entries — the on-disk file lives
+        // alongside with a .md/.markdown/.rtf suffix, or in a nested-leaf
+        // pattern (e.g. path "A/B" with the file at "A/B/B.md"). Without this
+        // correction the tree click handler treats the item as a folder and
+        // never opens it. Mirrors resolveFolderItemAsFile() in projecttreepanel.cpp.
         if (item->type == ProjectTreeItem::Folder
             && !item->path.isEmpty()
             && item->children.isEmpty()
             && !m_projectFilePath.isEmpty())
         {
-            QDir projectDir(projectPath());
-            const QStringList candidates = {
-                item->path,
-                item->path + QStringLiteral(".md"),
-                item->path + QStringLiteral(".markdown"),
-                item->path + QStringLiteral(".txt")
+            const QDir projectDir(projectPath());
+            static const QStringList kExts = {
+                QStringLiteral(""),
+                QStringLiteral(".md"),
+                QStringLiteral(".markdown"),
+                QStringLiteral(".mkd"),
+                QStringLiteral(".txt"),
+                QStringLiteral(".rtf")
             };
-            for (const QString &candidate : candidates) {
-                const QFileInfo fi(projectDir.absoluteFilePath(candidate));
-                if (fi.exists() && fi.isFile()) {
-                    qDebug() << "ProjectManager: validateTree: Correcting leaf Folder ->"
-                             << "File for" << item->name
-                             << "(path was" << item->path << ", on-disk file is"
-                             << fi.absoluteFilePath() << ")";
-                    item->type = ProjectTreeItem::File;
-                    if (item->path != candidate) {
-                        item->path = candidate;  // record the path with extension
-                    }
-                    changed = true;
-                    break;
+
+            QString resolved;
+
+            // Build path variants: as-is and with spaces -> underscores.
+            QStringList pathVariants{item->path};
+            if (item->path.contains(QLatin1Char(' '))) {
+                pathVariants.append(QString(item->path).replace(QLatin1Char(' '), QLatin1Char('_')));
+            }
+
+            // Strategy 1: exact path + extension variants
+            for (const QString &basePath : std::as_const(pathVariants)) {
+                if (!resolved.isEmpty()) break;
+                for (const QString &ext : kExts) {
+                    const QString candidate = basePath + ext;
+                    const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+                    if (fi.exists() && fi.isFile()) { resolved = candidate; break; }
                 }
+            }
+
+            // Strategy 2: nested-leaf pattern
+            if (resolved.isEmpty()) {
+                for (const QString &basePath : std::as_const(pathVariants)) {
+                    if (!resolved.isEmpty()) break;
+                    const QString leaf = QFileInfo(basePath).fileName();
+                    if (leaf.isEmpty()) continue;
+                    for (const QString &ext : kExts) {
+                        if (ext.isEmpty()) continue;
+                        const QString candidate = basePath + QLatin1Char('/') + leaf + ext;
+                        const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+                        if (fi.exists() && fi.isFile()) { resolved = candidate; break; }
+                    }
+                }
+            }
+
+            // Strategy 3: parent-directory scan, space/underscore-tolerant
+            if (resolved.isEmpty()) {
+                auto normalise = [](QString s) {
+                    s.replace(QLatin1Char('_'), QLatin1Char(' '));
+                    return s.toLower();
+                };
+                for (const QString &basePath : std::as_const(pathVariants)) {
+                    if (!resolved.isEmpty()) break;
+                    const QFileInfo expected(projectDir.absoluteFilePath(basePath));
+                    const QDir parent = expected.dir();
+                    if (!parent.exists()) continue;
+                    const QString leafNorm = normalise(expected.fileName());
+                    const QFileInfoList entries = parent.entryInfoList(QDir::Files);
+                    for (const QFileInfo &entry : entries) {
+                        if (normalise(entry.completeBaseName()) == leafNorm
+                            || normalise(entry.fileName()) == leafNorm) {
+                            resolved = projectDir.relativeFilePath(entry.absoluteFilePath());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!resolved.isEmpty()) {
+                qDebug() << "ProjectManager: validateTree: Correcting leaf Folder -> File for"
+                         << item->name << "(path was" << item->path
+                         << ", resolves to" << resolved << ")";
+                item->type = ProjectTreeItem::File;
+                if (item->path != resolved) item->path = resolved;
+                changed = true;
             }
         }
 
@@ -734,76 +788,16 @@ void ProjectManager::validateTree()
 
     validate(m_treeModel->rootItem());
 
-    // Ensure the three authoritative top-level folders (manuscript/,
-    // lorekeeper/, research/) exist in both the logical tree and on disk.
-    // The tree model treats these as protected roots — they must always be
-    // present, even if the user deleted them in an older version of the
-    // project file or if the project was created by an external tool.
-    struct AuthoritativeFolder {
-        const char *path;
-        const char *defaultName;
-        ProjectTreeItem::Category category;
-    };
-    static const AuthoritativeFolder kAuthoritativeFolders[] = {
-        {"manuscript", "Manuscript", ProjectTreeItem::Manuscript},
-        {"lorekeeper", "LoreKeeper", ProjectTreeItem::LoreKeeper},
-        {"research",   "Research",   ProjectTreeItem::Research},
-    };
-
-    ProjectTreeItem *root = m_treeModel->rootItem();
-    const QString projectDir = projectPath();
-
-    for (const auto &spec : kAuthoritativeFolders) {
-        const QString relPath = QString::fromLatin1(spec.path);
-
-        // Does a top-level child *exactly* representing this authoritative
-        // root already exist? Match is case-insensitive on the whole path,
-        // which also covers the legacy case where an older project file
-        // stored "Manuscript" or an empty path with a matching category
-        // field. We must NOT match a descendant folder like
-        // "manuscript/ch1" here — that would corrupt the descendant's path.
-        ProjectTreeItem *existing = nullptr;
-        for (auto *child : root->children) {
-            if (child->type != ProjectTreeItem::Folder) continue;
-
-            const bool pathMatches = child->path.compare(relPath, Qt::CaseInsensitive) == 0;
-            const bool legacyNameMatch = child->path.isEmpty()
-                                          && child->category == spec.category;
-
-            if (pathMatches || legacyNameMatch) {
-                existing = child;
-                break;
-            }
-        }
-
-        if (existing) {
-            // Heal the path and category in case old data had them wrong.
-            if (existing->path.compare(relPath, Qt::CaseInsensitive) != 0) {
-                qDebug() << "ProjectManager: validateTree: normalizing authoritative folder path"
-                         << existing->path << "->" << relPath;
-                existing->path = relPath;
-                changed = true;
-            }
-            if (existing->category != spec.category) {
-                existing->category = spec.category;
-                changed = true;
-            }
-        } else {
-            qDebug() << "ProjectManager: validateTree: creating missing authoritative folder" << relPath;
-            QModelIndex newIdx = m_treeModel->addFolder(i18n(spec.defaultName), relPath, QModelIndex());
-            ProjectTreeItem *newItem = m_treeModel->itemFromIndex(newIdx);
-            if (newItem) {
-                newItem->category = spec.category;
-            }
-            changed = true;
-        }
-
-        // Ensure the on-disk folder exists. Creating an already-existing
-        // directory is a no-op for mkpath, so this is safe.
-        if (!projectDir.isEmpty()) {
-            QDir(projectDir).mkpath(relPath);
-        }
-    }
+    // NOTE: previously this method auto-created top-level "manuscript",
+    // "lorekeeper", "research" folders as a "self-healing" measure. That
+    // behavior was wrong for imported projects (Scrivener etc.) whose tree
+    // structure does not match those exact paths — it added DUPLICATE
+    // folders instead of recognising the user's existing structure, and
+    // every project save cemented the duplicates further. Auto-creation
+    // belongs in setupDefaultProject (where it already lives) for fresh
+    // projects only. Imported projects keep their imported structure.
+    // Category is still derived from path via ProjectTreeModel; folder
+    // existence is no longer enforced here.
 
     if (changed) {
         qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";

@@ -151,7 +151,14 @@ void ProjectTreePanel::setupUi()
     m_treeView->setDragEnabled(true);
     m_treeView->setAcceptDrops(true);
     m_treeView->setDropIndicatorShown(true);
-    m_treeView->setDragDropMode(QAbstractItemView::DragDrop);
+    // InternalMove (NOT DragDrop) is critical: in DragDrop mode, after a
+    // successful Move drop Qt's QAbstractItemViewPrivate::clearOrRemove()
+    // calls model->removeRows() on the source persistent indexes. Our
+    // moveItem() already moved the rows atomically via beginMoveRows(), so
+    // the persistent indexes now point at the NEW location — and the
+    // auto-remove then destroys the item at its new home. InternalMove
+    // tells Qt the model handles the move itself; no auto-remove fires.
+    m_treeView->setDragDropMode(QAbstractItemView::InternalMove);
     m_treeView->setDefaultDropAction(Qt::MoveAction);
     m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -531,6 +538,13 @@ void ProjectTreePanel::updateExplorationList()
 // resolves; otherwise return an empty string. This compensates for legacy /
 // Scrivener-imported tree entries where documents were recorded as
 // extensionless Folder nodes.
+//
+// Resolution strategy (in order):
+//   1. exact path with each known extension appended
+//   2. exact path + nested-leaf pattern (e.g. "X/X.md", common after
+//      Scrivener export where each document is a folder containing one file)
+//   3. directory scan of the path's parent for any file whose stem matches
+//      the item's leaf name (case-insensitive)
 static QString resolveFolderItemAsFile(const ProjectTreeItem *item)
 {
     if (!item) return QString();
@@ -539,16 +553,66 @@ static QString resolveFolderItemAsFile(const ProjectTreeItem *item)
     if (!ProjectManager::instance().isProjectOpen()) return QString();
 
     const QDir projectDir(ProjectManager::instance().projectPath());
-    const QStringList candidates = {
-        item->path,
-        item->path + QStringLiteral(".md"),
-        item->path + QStringLiteral(".markdown"),
-        item->path + QStringLiteral(".txt")
+    static const QStringList kExts = {
+        QStringLiteral(""),         // path as-is, in case it's already a file
+        QStringLiteral(".md"),
+        QStringLiteral(".markdown"),
+        QStringLiteral(".mkd"),
+        QStringLiteral(".txt"),
+        QStringLiteral(".rtf")
     };
-    for (const QString &c : candidates) {
-        const QFileInfo fi(projectDir.absoluteFilePath(c));
-        if (fi.exists() && fi.isFile()) return c;
+
+    // Build path variants: as-is, and with spaces translated to underscores
+    // (Scrivener-imported projects often display underscored filenames as
+    // spaces, while the on-disk file keeps the underscore).
+    QStringList pathVariants{item->path};
+    if (item->path.contains(QLatin1Char(' '))) {
+        pathVariants.append(QString(item->path).replace(QLatin1Char(' '), QLatin1Char('_')));
     }
+
+    // Strategy 1: exact path + extension variants (each path variant)
+    for (const QString &basePath : std::as_const(pathVariants)) {
+        for (const QString &ext : kExts) {
+            const QString candidate = basePath + ext;
+            const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+            if (fi.exists() && fi.isFile()) return candidate;
+        }
+    }
+
+    // Strategy 2: nested-leaf pattern, e.g. path "A/B" maps to "A/B/B.md"
+    for (const QString &basePath : std::as_const(pathVariants)) {
+        const QString leaf = QFileInfo(basePath).fileName();
+        if (leaf.isEmpty()) continue;
+        for (const QString &ext : kExts) {
+            if (ext.isEmpty()) continue;
+            const QString candidate = basePath + QLatin1Char('/') + leaf + ext;
+            const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+            if (fi.exists() && fi.isFile()) return candidate;
+        }
+    }
+
+    // Strategy 3: scan parent directory for file whose stem matches the
+    // leaf name with space/underscore tolerance and case-insensitively.
+    auto normaliseForCompare = [](QString s) {
+        s.replace(QLatin1Char('_'), QLatin1Char(' '));
+        return s.toLower();
+    };
+
+    for (const QString &basePath : std::as_const(pathVariants)) {
+        const QFileInfo expected(projectDir.absoluteFilePath(basePath));
+        const QDir parent = expected.dir();
+        if (!parent.exists()) continue;
+        const QString leafNorm = normaliseForCompare(expected.fileName());
+        const QFileInfoList entries = parent.entryInfoList(QDir::Files);
+        for (const QFileInfo &entry : entries) {
+            const QString stemNorm = normaliseForCompare(entry.completeBaseName());
+            const QString fullNorm = normaliseForCompare(entry.fileName());
+            if (stemNorm == leafNorm || fullNorm == leafNorm) {
+                return projectDir.relativeFilePath(entry.absoluteFilePath());
+            }
+        }
+    }
+
     return QString();
 }
 
