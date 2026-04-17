@@ -13,7 +13,26 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml DBus)
+# DBus-exposed test automation interface. ON by default for Debug builds,
+# OFF for Release — the DBus adaptor and its registration in main.cpp are
+# compiled out entirely when this is OFF, so production binaries don't
+# expose an IPC surface.
+if(NOT DEFINED RPGFORGE_DBUS_TESTING)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        set(RPGFORGE_DBUS_TESTING_DEFAULT ON)
+    else()
+        set(RPGFORGE_DBUS_TESTING_DEFAULT OFF)
+    endif()
+endif()
+option(RPGFORGE_DBUS_TESTING
+    "Expose org.kde.rpgforge DBus adaptor for automated GUI testing"
+    ${RPGFORGE_DBUS_TESTING_DEFAULT})
+
+set(RPGFORGE_QT_COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
+if(RPGFORGE_DBUS_TESTING)
+    list(APPEND RPGFORGE_QT_COMPONENTS DBus)
+endif()
+find_package(Qt6 REQUIRED COMPONENTS ${RPGFORGE_QT_COMPONENTS})
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -154,10 +173,17 @@ add_executable(rpgforge
     src/corkboardcard.h
     src/pdfexporter.cpp
     src/pdfexporter.h
-    src/rpgforgedbus.cpp
-    src/rpgforgedbus.h
     src/resources.qrc
 )
+
+if(RPGFORGE_DBUS_TESTING)
+    target_sources(rpgforge PRIVATE
+        src/rpgforgedbus.cpp
+        src/rpgforgedbus.h
+    )
+    target_compile_definitions(rpgforge PRIVATE RPGFORGE_DBUS_TESTING=1)
+    target_link_libraries(rpgforge Qt6::DBus)
+endif()
 
 target_link_libraries(rpgforge
     Qt6::Widgets
@@ -168,7 +194,6 @@ target_link_libraries(rpgforge
     Qt6::Concurrent
     Qt6::Sql
     Qt6::Xml
-    Qt6::DBus
     KF6::CoreAddons
     KF6::I18n
     KF6::XmlGui
