@@ -164,6 +164,24 @@ Q_SIGNALS:
 public Q_SLOTS:
     void requestTreeUpdate(const QString &category, const QString &entityName, const QString &relativePath);
 
+    /**
+     * \brief Validate and self-heal the current tree.
+     *
+     * Public so importers can call it on a freshly-populated tree before
+     * the first save, ensuring the persisted JSON is correct from the
+     * very first write. Also called automatically by openProject().
+     *
+     * Performs:
+     *  - Fix item type (Folder vs File) based on extension and disk presence
+     *  - Convert leaf Folder items that resolve to files on disk to File
+     *    type, with the correct path/extension (handles Scrivener-style
+     *    space/underscore translation)
+     *  - Set canonical paths for the three authoritative top-level folders
+     *  - Create the three authoritative folders (Manuscript / LoreKeeper /
+     *    Research) on tree AND disk if they are not already present
+     */
+    void validateTree();
+
 private Q_SLOTS:
     void processTreeUpdateQueue();
 
@@ -172,7 +190,6 @@ private:
     
     void loadDefaults();
     bool migrate(QJsonObject &data);
-    void validateTree();
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
     int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;

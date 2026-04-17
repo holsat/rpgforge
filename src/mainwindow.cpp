@@ -2149,6 +2149,18 @@ void MainWindow::importScrivener()
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
             if (success) {
                 m_projectTree->model()->setProjectData(resultData);
+
+                // Validate the freshly-imported tree BEFORE saving so the
+                // first persisted JSON is already correct:
+                //   - top-level Manuscript / LoreKeeper / Research folders
+                //     are present (created if Scrivener did not include them)
+                //   - leaf Folder items that resolve to files on disk get
+                //     converted to File type with the correct path/extension
+                //   - empty-path system folders get canonical paths
+                // This prevents users from clicking Scrivener-imported
+                // documents that the importer recorded as folders.
+                ProjectManager::instance().validateTree();
+
                 ProjectManager::instance().saveProject();
                 QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
             }
