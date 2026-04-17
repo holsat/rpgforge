@@ -550,23 +550,110 @@ bool ProjectTreeModel::moveItem(ProjectTreeItem *item, ProjectTreeItem *newParen
         p = p->parent;
     }
 
-    QMutexLocker locker(&m_treeMutex);
+    {
+        QMutexLocker locker(&m_treeMutex);
 
-    ProjectTreeItem *oldParent = item->parent;
-    int oldRow = oldParent->children.indexOf(item);
+        ProjectTreeItem *oldParent = item->parent;
+        int oldRow = oldParent->children.indexOf(item);
 
-    QModelIndex sourceParent = indexForItem(oldParent);
-    QModelIndex destParent = indexForItem(newParent);
+        QModelIndex sourceParent = indexForItem(oldParent);
+        QModelIndex destParent = indexForItem(newParent);
 
-    if (!beginMoveRows(sourceParent, oldRow, oldRow, destParent, newRow)) return false;
+        if (!beginMoveRows(sourceParent, oldRow, oldRow, destParent, newRow)) return false;
 
-    oldParent->children.removeAt(oldRow);
-    if (newRow > newParent->children.count()) newRow = newParent->children.count();
-    newParent->children.insert(newRow, item);
-    item->parent = newParent;
+        oldParent->children.removeAt(oldRow);
+        if (newRow > newParent->children.count()) newRow = newParent->children.count();
+        newParent->children.insert(newRow, item);
+        item->parent = newParent;
 
-    endMoveRows();
+        endMoveRows();
+    }
+
+    // Re-derive the umbrella category for the moved subtree from its new
+    // position. JSON metadata for routing (compile, RAG, etc.) follows the
+    // logical move so a Chapter dragged into Research is routed as Research.
+    propagateCategoryFromParent(item);
+
     return true;
+}
+
+namespace {
+// Categorise the Category enum values into "umbrella" (top-level routing
+// category that propagates down a subtree) vs "sub-category" (user-set
+// tag that is independent of where the item lives in the tree).
+bool isUmbrellaCategory(ProjectTreeItem::Category cat)
+{
+    return cat == ProjectTreeItem::Manuscript
+        || cat == ProjectTreeItem::LoreKeeper
+        || cat == ProjectTreeItem::Research;
+}
+}
+
+void ProjectTreeModel::propagateCategoryFromParent(ProjectTreeItem *item)
+{
+    if (!item) return;
+
+    // Special case: the item IS an authoritative top-level folder (would
+    // only happen via a non-user code path; user moves are blocked). Its
+    // own category is the umbrella; cascade to children but do not touch
+    // the item itself.
+    const bool itemIsAuthoritativeUmbrella =
+        isUmbrellaCategory(item->category) && isAuthoritativeRoot(item);
+
+    // Determine the umbrella to propagate. Start from the PARENT's chain
+    // (not the item itself) so a moved item with a stale umbrella tag
+    // (e.g. a file that was Manuscript, dragged under Research) gets its
+    // own tag rewritten to match the new branch.
+    ProjectTreeItem::Category umbrella = ProjectTreeItem::None;
+    {
+        ProjectTreeItem *anc = itemIsAuthoritativeUmbrella ? item : item->parent;
+        while (anc) {
+            if (isUmbrellaCategory(anc->category)) {
+                umbrella = anc->category;
+                break;
+            }
+            anc = anc->parent;
+        }
+    }
+
+    // Moved out from under any umbrella (e.g. dragged to root outside the
+    // three authoritative folders): leave categories alone so user intent
+    // is not erased.
+    if (umbrella == ProjectTreeItem::None) return;
+
+    QList<ProjectTreeItem*> changedItems;
+
+    std::function<void(ProjectTreeItem*)> walk = [&](ProjectTreeItem *node) {
+        if (!node) return;
+
+        // Skip the umbrella ancestor itself when it is the moved item — its
+        // own category is the source of truth for the cascade.
+        const bool skipSelf = (node == item) && itemIsAuthoritativeUmbrella;
+
+        if (!skipSelf) {
+            const bool wasUmbrella = isUmbrellaCategory(node->category);
+            const bool wasNone     = node->category == ProjectTreeItem::None;
+            // Overwrite stale umbrellas and unset categories. Sub-category
+            // tags like Chapter / Scene / Characters survive.
+            if ((wasUmbrella || wasNone) && node->category != umbrella) {
+                node->category = umbrella;
+                changedItems.append(node);
+            }
+        }
+
+        for (auto *child : node->children) walk(child);
+    };
+
+    {
+        QMutexLocker locker(&m_treeMutex);
+        walk(item);
+    }
+
+    // Emit dataChanged so icons, status indicators, etc. refresh.
+    for (auto *node : std::as_const(changedItems)) {
+        const QModelIndex idx = indexForItem(node);
+        if (idx.isValid()) Q_EMIT dataChanged(idx, idx, {CategoryRole, Qt::DecorationRole});
+    }
 }
 
 QStringList ProjectTreeModel::allFiles() const

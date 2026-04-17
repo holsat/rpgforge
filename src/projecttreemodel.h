@@ -129,6 +129,23 @@ public:
     ProjectTreeItem::Category effectiveCategory(const ProjectTreeItem *item) const;
 
     /**
+     * @brief Recompute and propagate the umbrella category of a subtree.
+     *
+     * Called after an item is moved to a new parent, so JSON category
+     * metadata follows the move. Walks the subtree rooted at `item`. For
+     * each node:
+     *   - the *umbrella* category (Manuscript / LoreKeeper / Research) is
+     *     overwritten to match the new parent's effective umbrella;
+     *   - explicit *sub-category* tags (Chapter, Scene, Characters, Places,
+     *     Cultures, Stylesheet, Notes) are preserved — those are user
+     *     intent independent of where the item lives;
+     *   - items previously categorised None get the new umbrella too.
+     *
+     * Emits dataChanged for each updated index.
+     */
+    void propagateCategoryFromParent(ProjectTreeItem *item);
+
+    /**
      * @brief Returns true if the item is an authoritative top-level folder —
      * i.e. a Folder directly under the root whose path resolves to one of
      * the three authoritative categories (Manuscript / LoreKeeper / Research).

@@ -736,6 +736,79 @@ private Q_SLOTS:
         QVERIFY(!model.canDropMimeData(mime, Qt::MoveAction, -1, 0, customIdx));
         delete mime;
     }
+
+    void testMoveItem_propagatesUmbrellaToMovedSubtree()
+    {
+        // Set up: Manuscript root with a sub-folder containing a file;
+        // Research root.
+        ProjectTreeModel model;
+        QModelIndex manIdx = model.addFolder(QStringLiteral("Manuscript"),
+                                             QStringLiteral("manuscript"), QModelIndex());
+        model.setData(manIdx, static_cast<int>(ProjectTreeItem::Manuscript),
+                      ProjectTreeModel::CategoryRole);
+
+        QModelIndex resIdx = model.addFolder(QStringLiteral("Research"),
+                                             QStringLiteral("research"), QModelIndex());
+        model.setData(resIdx, static_cast<int>(ProjectTreeItem::Research),
+                      ProjectTreeModel::CategoryRole);
+
+        QModelIndex subFolderIdx = model.addFolder(QStringLiteral("Chapter"),
+                                                    QStringLiteral("manuscript/ch1"), manIdx);
+        model.setData(subFolderIdx, static_cast<int>(ProjectTreeItem::Chapter),
+                      ProjectTreeModel::CategoryRole);
+
+        QModelIndex sceneIdx = model.addFile(QStringLiteral("scene1"),
+                                              QStringLiteral("manuscript/ch1/scene1.md"),
+                                              subFolderIdx);
+
+        // Both descendants currently inherit from Manuscript.
+        ProjectTreeItem *subFolder = model.itemFromIndex(subFolderIdx);
+        ProjectTreeItem *scene = model.itemFromIndex(sceneIdx);
+        QVERIFY(subFolder);
+        QVERIFY(scene);
+
+        // The sub-folder is explicitly Chapter (a sub-category, not an
+        // umbrella). Set the leaf to None so we can verify it picks up
+        // Manuscript before the move and Research after.
+        scene->category = ProjectTreeItem::None;
+
+        // Move sub-folder (with its scene child) under Research.
+        ProjectTreeItem *resItem = model.itemFromIndex(resIdx);
+        QVERIFY(model.moveItem(subFolder, resItem, 0));
+
+        // The sub-folder kept its explicit Chapter tag (sub-category, not
+        // umbrella — survives moves).
+        QCOMPARE(subFolder->category, ProjectTreeItem::Chapter);
+
+        // The scene leaf was None (purely inherited); after the move it
+        // picks up Research from its new umbrella ancestor.
+        QCOMPARE(scene->category, ProjectTreeItem::Research);
+    }
+
+    void testMoveItem_overwritesStaleUmbrellaCategory()
+    {
+        // A descendant explicitly tagged Manuscript (umbrella) under
+        // Manuscript root, when moved under Research, must have its
+        // Manuscript tag overwritten with Research.
+        ProjectTreeModel model;
+        QModelIndex manIdx = model.addFolder(QStringLiteral("Manuscript"),
+                                             QStringLiteral("manuscript"), QModelIndex());
+        model.setData(manIdx, static_cast<int>(ProjectTreeItem::Manuscript),
+                      ProjectTreeModel::CategoryRole);
+        QModelIndex resIdx = model.addFolder(QStringLiteral("Research"),
+                                             QStringLiteral("research"), QModelIndex());
+        model.setData(resIdx, static_cast<int>(ProjectTreeItem::Research),
+                      ProjectTreeModel::CategoryRole);
+
+        QModelIndex itemIdx = model.addFile(QStringLiteral("Note"),
+                                             QStringLiteral("manuscript/note.md"), manIdx);
+        ProjectTreeItem *item = model.itemFromIndex(itemIdx);
+        item->category = ProjectTreeItem::Manuscript;  // explicit umbrella tag
+
+        ProjectTreeItem *resItem = model.itemFromIndex(resIdx);
+        QVERIFY(model.moveItem(item, resItem, 0));
+        QCOMPARE(item->category, ProjectTreeItem::Research);
+    }
 };
 
 QTEST_MAIN(TestProjectTreeModel)
