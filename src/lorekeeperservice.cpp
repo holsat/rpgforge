@@ -5,6 +5,7 @@
 #include "projecttreemodel.h"
 #include "projectkeys.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QTextStream>
 #include <QDebug>
@@ -84,13 +85,24 @@ void LoreKeeperService::scanManuscript()
 
     Q_EMIT scanningStarted();
     qDebug() << "Lore AI: Starting manuscript scan...";
-    
-    // 1. Get manuscript text from active files only
-    QStringList activeFiles = ProjectManager::instance().getActiveFiles();
-    QString combinedText;
 
-    for (const QString &filePath : activeFiles) {
-        if (filePath.contains(QStringLiteral("/manuscript/"), Qt::CaseInsensitive)) {
+    // 1. Get manuscript text by walking the manuscript/ directory on disk.
+    //    Previously we relied on ProjectManager::getActiveFiles(), but that
+    //    only returns files explicitly registered in the project tree —
+    //    projects whose manuscript .md files were never linked into the
+    //    tree (a common case for imported / Scrivener / out-of-band edits)
+    //    would yield an empty active list, causing the scan to silently
+    //    early-return at the combinedText.isEmpty() check below and never
+    //    drive any LLM calls or tree updates downstream.
+    const QDir manuscriptDir(QDir(m_projectPath).absoluteFilePath(QStringLiteral("manuscript")));
+    QString combinedText;
+    if (manuscriptDir.exists()) {
+        QDirIterator it(manuscriptDir.absolutePath(),
+                        QStringList{QStringLiteral("*.md"), QStringLiteral("*.markdown")},
+                        QDir::Files | QDir::Readable,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString filePath = it.next();
             QFile file(filePath);
             if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 combinedText += QString::fromUtf8(file.readAll()) + QStringLiteral("\n\n");
@@ -99,9 +111,13 @@ void LoreKeeperService::scanManuscript()
     }
 
     if (combinedText.isEmpty()) {
+        qDebug() << "Lore AI: No manuscript text found under" << manuscriptDir.absolutePath()
+                 << "— skipping scan.";
         Q_EMIT scanningFinished();
         return;
     }
+    qDebug() << "Lore AI: Collected" << combinedText.size() << "chars of manuscript text from"
+             << manuscriptDir.absolutePath();
 
     // 2. Process each category in the config
     QJsonArray categories = m_config.value(QStringLiteral("categories")).toArray();

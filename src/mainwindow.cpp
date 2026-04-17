@@ -100,6 +100,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QStackedLayout>
 #include <QWidgetAction>
 #include <QLineEdit>
 #include <QWebEngineView>
@@ -475,12 +476,15 @@ void MainWindow::setupSidebar()
     vbox->addWidget(m_conflictBanner);
 
     // Use a plain container with QVBoxLayout instead of QStackedWidget.
-    // QStackedWidget interferes with KateCompletionWidget popup positioning
-    // because it clips child widgets and affects coordinate mapping.
+    // QStackedLayout (NOT QStackedWidget) gives us "only one child visible at a time"
+    // semantics without the reparenting that breaks KateCompletionWidget popup
+    // positioning. Previously this was a QVBoxLayout with manual setVisible() calls,
+    // but if any view's visibility was toggled out of band the editor could end up
+    // sharing vertical space with another view (or get hidden behind it). With
+    // QStackedLayout::StackOne (default), setCurrentWidget() guarantees exclusivity.
     auto *viewContainer = new QWidget(editorContainer);
-    m_centralViewLayout = new QVBoxLayout(viewContainer);
+    m_centralViewLayout = new QStackedLayout(viewContainer);
     m_centralViewLayout->setContentsMargins(0, 0, 0, 0);
-    m_centralViewLayout->setSpacing(0);
 
     m_corkboardView = new CorkboardView(this);
     m_imagePreview = new ImagePreview(this);
@@ -1416,17 +1420,20 @@ void MainWindow::updateTitle()
 }
 void MainWindow::showCentralView(QWidget *widget)
 {
-    // The splitter should be visible if any of its children are the requested widget
-    bool showSplitter = (widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
-    m_editorSplitter->setVisible(showSplitter);
-    
-    m_corkboardView->setVisible(widget == m_corkboardView);
-    m_imagePreview->setVisible(widget == m_imagePreview);
-    m_diffView->setVisible(widget == m_diffView);
-    m_pdfViewer->setVisible(widget == m_pdfViewer);
+    // The editor splitter is what's actually parented in the stacked layout — if
+    // a caller asks for the inner editor or research views, surface the splitter.
+    QWidget *target = widget;
+    if (widget == m_editorView || widget == m_researchView) {
+        target = m_editorSplitter;
+    }
 
-    if (showSplitter) {
-        // Ensure the splitter has size
+    if (m_centralViewLayout->indexOf(target) >= 0) {
+        m_centralViewLayout->setCurrentWidget(target);
+    }
+
+    if (target == m_editorSplitter) {
+        // Ensure the centre column of the main splitter has size to actually
+        // render the editor (defensive: a previous resize may have starved it).
         QList<int> sizes = m_mainSplitter->sizes();
         if (sizes.size() >= 2 && sizes[1] < 100) {
             int total = sizes[0] + sizes[1] + (sizes.size() > 2 ? sizes[2] : 0);

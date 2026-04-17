@@ -51,6 +51,7 @@ class QUrl;
 class QSplitter;
 class QAction;
 class QVBoxLayout;
+class QStackedLayout;
 class QLabel;
 class QFrame;
 class QProgressBar;
@@ -208,7 +209,7 @@ private:
     KTextEditor::View *m_researchView = nullptr;
     QSplitter *m_editorSplitter = nullptr;
 
-    QVBoxLayout *m_centralViewLayout = nullptr;
+    QStackedLayout *m_centralViewLayout = nullptr;
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
     VisualDiffView *m_diffView = nullptr;
