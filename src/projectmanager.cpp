@@ -42,8 +42,29 @@ ProjectManager::ProjectManager(QObject *parent)
     m_treeUpdateTimer->setSingleShot(true);
     m_treeUpdateTimer->setInterval(200); // Debounce updates
     connect(m_treeUpdateTimer, &QTimer::timeout, this, &ProjectManager::processTreeUpdateQueue);
-    
+
+    // Proxy structural signals from the model so external code can react
+    // to tree changes without holding a raw model pointer.
+    connect(m_treeModel, &ProjectTreeModel::rowsInserted,
+            this, &ProjectManager::treeStructureChanged);
+    connect(m_treeModel, &ProjectTreeModel::rowsRemoved,
+            this, &ProjectManager::treeStructureChanged);
+    connect(m_treeModel, &ProjectTreeModel::modelReset,
+            this, &ProjectManager::treeStructureChanged);
+    connect(m_treeModel, &ProjectTreeModel::dataChanged,
+            this, [this](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
+        Q_EMIT treeItemDataChanged(roles);
+    });
+
     loadDefaults();
+}
+
+int ProjectManager::effectiveCategoryForPath(const QString &relativePath) const
+{
+    if (!m_treeModel) return ProjectTreeItem::None;
+    ProjectTreeItem *item = m_treeModel->findItem(relativePath);
+    if (!item) return ProjectTreeItem::None;
+    return static_cast<int>(m_treeModel->effectiveCategory(item));
 }
 
 void ProjectManager::loadDefaults()
@@ -634,6 +655,21 @@ void ProjectManager::processTreeUpdateQueue()
         saveProject();
         Q_EMIT treeChanged();
     }
+}
+
+QJsonObject ProjectManager::treeData() const
+{
+    if (!m_treeModel) return {};
+    return m_treeModel->projectData();
+}
+
+void ProjectManager::notifyTreeChanged()
+{
+    if (!m_treeModel) return;
+    // Re-applying the same data triggers beginResetModel/endResetModel so
+    // attached views refresh. Cheaper than scanning for what changed.
+    m_treeModel->setProjectData(m_treeModel->projectData());
+    Q_EMIT treeChanged();
 }
 
 bool ProjectManager::setTreeData(const QJsonObject &treeJson)

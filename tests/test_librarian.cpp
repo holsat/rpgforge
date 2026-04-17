@@ -55,17 +55,9 @@ private Q_SLOTS:
 )";
         file.close();
 
-        // 2. Register in logical tree (Source of Truth)
-        ProjectTreeModel *model = pm.model();
-        QModelIndex msIdx;
-        ProjectTreeItem *root = model->rootItem();
-        for (auto *c : root->children) {
-            if (c->category == ProjectTreeItem::Manuscript) {
-                msIdx = model->indexForItem(c);
-                break;
-            }
-        }
-        model->addFile(QStringLiteral("Intro"), QStringLiteral("manuscript/kabal_intro.md"), msIdx);
+        // 2. Register in logical tree via ProjectManager's public API
+        // (no direct model access).
+        pm.addFile(QStringLiteral("Intro"), QStringLiteral("manuscript/kabal_intro.md"), QStringLiteral("manuscript"));
         pm.saveProject();
 
         // 3. Trigger scan
@@ -134,16 +126,9 @@ private Q_SLOTS:
         f2.write("# Out of Project\nThis is Kabal RPG data that should be ignored.");
         f2.close();
 
-        // 2. Register ONLY in_project.md in the logical tree
-        ProjectTreeModel *model = pm.model();
-        QModelIndex msIdx;
-        for (auto *c : model->rootItem()->children) {
-            if (c->category == ProjectTreeItem::Manuscript) {
-                msIdx = model->indexForItem(c);
-                break;
-            }
-        }
-        model->addFile(QStringLiteral("InProject"), QStringLiteral("manuscript/in_project.md"), msIdx);
+        // 2. Register ONLY in_project.md in the logical tree via
+        // ProjectManager's public API.
+        pm.addFile(QStringLiteral("InProject"), QStringLiteral("manuscript/in_project.md"), QStringLiteral("manuscript"));
         pm.saveProject();
 
         // 3. Reindex

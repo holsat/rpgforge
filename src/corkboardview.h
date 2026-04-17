@@ -33,7 +33,16 @@ public:
     explicit CorkboardView(QWidget *parent = nullptr);
     ~CorkboardView() override;
 
-    void setModel(ProjectTreeModel *model) { m_model = model; }
+    /**
+     * \brief Bind this view to ProjectManager's tree model.
+     *
+     * Replaces the old setModel() pattern: the view pulls the model from
+     * ProjectManager (which it is friended on) so MainWindow no longer
+     * needs to reach the private model accessor for wiring. Call once
+     * after the corkboard view is constructed.
+     */
+    void attachToProjectTree();
+
     void setFolder(const QString &folderPath);
     QString currentFolderPath() const { return m_currentFolderPath; }
 

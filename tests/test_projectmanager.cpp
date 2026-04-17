@@ -55,7 +55,7 @@ private Q_SLOTS:
 
         // 3. Verify Model Integrity
         ProjectTreeModel model;
-        model.setProjectData(pm.model()->projectData());
+        model.setProjectData(pm.treeData());
         QVERIFY(model.rowCount(QModelIndex()) > 0);
 
         // 4. Close Project
@@ -142,7 +142,7 @@ private Q_SLOTS:
 
         // 3. Remove
         QVERIFY(pm.removeItem(relPath));
-        QVERIFY(pm.model()->findItem(relPath) == nullptr);
+        QVERIFY(pm.findItem(relPath) == nullptr);
 
         pm.closeProject();
     }
@@ -214,7 +214,7 @@ private Q_SLOTS:
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
         // After migration + load, the item should be File type
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research/notes.md"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("research/notes.md"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::File);
 
@@ -256,7 +256,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("lorekeeper"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("lorekeeper"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->category, ProjectTreeItem::LoreKeeper);
 
@@ -298,7 +298,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("manuscript/chapter1.md"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("manuscript/chapter1.md"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::File);
 
@@ -321,7 +321,7 @@ private Q_SLOTS:
         pm.setupDefaultProject(projPath, projName);
 
         // Inject a misclassified node: type=Folder but path has .md extension
-        QJsonObject data = pm.model()->projectData();
+        QJsonObject data = pm.treeData();
         QJsonArray children = data.value(QStringLiteral("children")).toArray();
 
         QJsonObject badNode;
@@ -346,7 +346,7 @@ private Q_SLOTS:
         // Re-open: validateTree should fix Folder->File
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research/misclassified.txt"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("research/misclassified.txt"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::File);
 
@@ -395,7 +395,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("bad"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("bad"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::Folder);
         QCOMPARE(item->children.count(), 1);
@@ -437,7 +437,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("research"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->path, QStringLiteral("research"));
 
@@ -474,7 +474,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("lorekeeper"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("lorekeeper"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->path, QStringLiteral("lorekeeper"));
 
@@ -511,7 +511,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("manuscript"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("manuscript"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->path, QStringLiteral("manuscript"));
 
@@ -559,12 +559,12 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *ch = pm.model()->findItem(QStringLiteral("manuscript/ch1"));
+        ProjectTreeItem *ch = pm.findItem(QStringLiteral("manuscript/ch1"));
         QVERIFY(ch != nullptr);
         QCOMPARE(ch->type, ProjectTreeItem::Folder);
         QCOMPARE(ch->category, ProjectTreeItem::Chapter);
 
-        ProjectTreeItem *scene = pm.model()->findItem(QStringLiteral("manuscript/ch1/scene.md"));
+        ProjectTreeItem *scene = pm.findItem(QStringLiteral("manuscript/ch1/scene.md"));
         QVERIFY(scene != nullptr);
         QCOMPARE(scene->type, ProjectTreeItem::File);
         QCOMPARE(scene->category, ProjectTreeItem::Scene);
@@ -606,7 +606,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("mystery"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("mystery"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->category, ProjectTreeItem::None);
 

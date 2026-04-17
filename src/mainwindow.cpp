@@ -559,11 +559,10 @@ void MainWindow::setupSidebar()
 
     m_problemsPanel = new ProblemsPanel(this);
 
-    SynopsisService::instance().setModel(ProjectManager::instance().model());
+    // SynopsisService is friended on ProjectManager and accesses the model
+    // directly during scanProject(); no setup wiring needed here.
 
-    connect(ProjectManager::instance().model(), &ProjectTreeModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
-        Q_UNUSED(topLeft);
-        Q_UNUSED(bottomRight);
+    connect(&ProjectManager::instance(), &ProjectManager::treeItemDataChanged, this, [this](const QList<int> &roles) {
         if (roles.contains(ProjectTreeModel::SynopsisRole) || roles.contains(ProjectTreeModel::StatusRole)) {
             // If the corkboard is showing a folder that contains one of these items, refresh it
             // Simple approach: if corkboard is visible, just refresh it.
@@ -659,7 +658,7 @@ void MainWindow::setupSidebar()
             // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
-    m_corkboardView->setModel(ProjectManager::instance().model());
+    m_corkboardView->attachToProjectTree();  // CorkboardView is friended on PM and pulls the model itself
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](const QString &folderPath) {
         if (folderPath.isEmpty()) return;
         const QString nameLower = folderPath.section(QDir::separator(), -1).toLower();
@@ -677,14 +676,10 @@ void MainWindow::setupSidebar()
         }
     });
     connect(m_corkboardView, &CorkboardView::itemsReordered, this, [](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
-        // Resolve the target row inside the parent. We need a brief read of
-        // the model here ONLY to compute the row index — the actual move
-        // goes through the validating ProjectManager::moveItem wrapper.
-        auto *model = ProjectManager::instance().model();
-        if (!model) return;
-        ProjectTreeItem *folder = model->findItem(folderPath);
+        // Compute target row via ProjectManager::findItem — no model leak.
+        ProjectTreeItem *folder = ProjectManager::instance().findItem(folderPath);
         if (!folder) return;
-        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : model->findItem(targetPath);
+        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : ProjectManager::instance().findItem(targetPath);
         const int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
         ProjectManager::instance().moveItem(draggedPath, folderPath, toIdx);
     });
@@ -799,9 +794,7 @@ void MainWindow::setupSidebar()
         }
         m_currentUrl = m_document->url();
     });
-    connect(ProjectManager::instance().model(), &ProjectTreeModel::modelReset, this, &MainWindow::updateProjectStats);
-    connect(ProjectManager::instance().model(), &ProjectTreeModel::rowsInserted, this, &MainWindow::updateProjectStats);
-    connect(ProjectManager::instance().model(), &ProjectTreeModel::rowsRemoved, this, &MainWindow::updateProjectStats);
+    connect(&ProjectManager::instance(), &ProjectManager::treeStructureChanged, this, &MainWindow::updateProjectStats);
 
     connect(&ProjectManager::instance(), &ProjectManager::totalWordCountUpdated, this, [this](int count) {
         m_projectStatsStatus->setText(i18n("Project: %1 words", count));
@@ -1034,7 +1027,8 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
             ProjectTreeItem *item = ProjectManager::instance().findItem(relPath);
             if (item) {
-                const auto cat = ProjectManager::instance().model()->effectiveCategory(item);
+                const auto cat = static_cast<ProjectTreeItem::Category>(
+                    ProjectManager::instance().effectiveCategoryForPath(relPath));
                 qDebug() << "MainWindow: Found item in tree for" << relPath
                          << "effectiveCategory:" << cat;
                 if (cat == ProjectTreeItem::LoreKeeper
@@ -2181,55 +2175,44 @@ void MainWindow::importWord()
     QString projectDir = ProjectManager::instance().projectPath();
     QString mediaDir = projectDir + QStringLiteral("/media");
     
-    ProjectTreeModel *model = ProjectManager::instance().model();
     SynopsisService::instance().pause();
 
-    // 1. Find Manuscript folder
+    // 1. Find the Manuscript folder via path lookup. The authoritative
+    // root is at "manuscript" — validateTree creates it on project open.
+    const bool hasManuscript = ProjectManager::instance().findItem(QStringLiteral("manuscript")) != nullptr;
 
-    QModelIndex manuscriptIdx;
-    ProjectTreeItem *rootItem = model->itemFromIndex(QModelIndex());
-    for (int i = 0; i < rootItem->children.count(); ++i) {
-        if (rootItem->children[i]->category == ProjectTreeItem::Manuscript) {
-            manuscriptIdx = model->index(i, 0, QModelIndex());
-            break;
-        }
-    }
-    
-    // Fallback to current selection or root if Manuscript not found
-    if (!manuscriptIdx.isValid()) {
-        manuscriptIdx = m_projectTree->currentIndex();
-    }
-    
     for (const QString &file : files) {
         QFileInfo info(file);
         QString baseName = info.baseName();
         QString safeName = DocumentConverter::sanitizePrefix(baseName);
-        
-        // Create a subfolder for this specific document
-        QString folderRelPath = QStringLiteral("manuscript/") + safeName;
-        if (!manuscriptIdx.isValid()) folderRelPath = safeName; // fallback
-        
-        QModelIndex targetFolderIdx = model->addFolder(baseName, folderRelPath, manuscriptIdx);
-        
+
+        // Create a per-document subfolder under Manuscript (or at root as
+        // a fallback if Manuscript is somehow missing).
+        QString folderRelPath = hasManuscript
+            ? (QStringLiteral("manuscript/") + safeName)
+            : safeName;
+        const QString parentPath = hasManuscript ? QStringLiteral("manuscript") : QString();
+        ProjectManager::instance().addFolder(baseName, folderRelPath, parentPath);
+
         auto result = converter.convertToMarkdown(file, safeName, mediaDir);
-        
+
         if (result.success) {
             QString relPath = folderRelPath + QDir::separator() + safeName + QStringLiteral(".md");
             QString absPath = QDir(projectDir).absoluteFilePath(relPath);
-            
+
             QDir().mkpath(QFileInfo(absPath).absolutePath());
-            
+
             QFile outFile(absPath);
             if (outFile.open(QIODevice::WriteOnly)) {
                 outFile.write(result.markdown.toUtf8());
                 outFile.close();
-                model->addFile(baseName, relPath, targetFolderIdx);
+                ProjectManager::instance().addFile(baseName, relPath, folderRelPath);
             }
         } else {
             QMessageBox::warning(this, i18n("Import Error"), i18n("Failed to convert %1: %2", baseName, result.error));
         }
     }
-    
+
     ProjectManager::instance().saveProject();
     SynopsisService::instance().resume();
 
@@ -2279,7 +2262,7 @@ void MainWindow::updateProjectPreview()
     if (!m_previewPanel || !ProjectManager::instance().isProjectOpen()) return;
 
     QString markdown;
-    auto treeData = ProjectManager::instance().model()->projectData();
+    auto treeData = ProjectManager::instance().treeData();
     ProjectTreeModel model;
     model.setProjectData(treeData);
     

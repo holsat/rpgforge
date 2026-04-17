@@ -72,15 +72,6 @@ I wake up, eyes closed, heart racing.
         file.close();
 
         // 2. Register in tree via authoritative API
-        ProjectTreeModel *model = pm.model();
-        QModelIndex msIdx;
-        for (auto *c : model->rootItem()->children) {
-            if (c->category == ProjectTreeItem::Manuscript) {
-                msIdx = model->indexForItem(c);
-                break;
-            }
-        }
-        
         // Add the Chapter 1 folder
         QString folderRelPath = QStringLiteral("manuscript/Chapter 1");
         pm.addFolder(QStringLiteral("Chapter 1"), folderRelPath, QString()); // Add to root for simplicity in test
@@ -112,18 +103,9 @@ I wake up, eyes closed, heart racing.
         QString charPath = m_testDirPath + QStringLiteral("/lorekeeper/Characters/OmoWale.md");
         QVERIFY(QFile::exists(charPath));
         
-        // Verify it was added to the tree
-        bool foundInTree = false;
-        std::function<void(ProjectTreeItem*)> search = [&](ProjectTreeItem *item) {
-            if (!item) return;
-            if (item->path == QLatin1String("lorekeeper/Characters/OmoWale.md")) foundInTree = true;
-            for (auto *c : item->children) {
-                if (foundInTree) break;
-                search(c);
-            }
-        };
-        search(model->rootItem());
-        QVERIFY(foundInTree);
+        // Verify it was added to the tree (ProjectManager::findItem walks
+        // from root for us — no model access required).
+        QVERIFY(pm.findItem(QStringLiteral("lorekeeper/Characters/OmoWale.md")) != nullptr);
     }
 
 private:

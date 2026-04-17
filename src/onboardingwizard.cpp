@@ -380,8 +380,11 @@ void OnboardingWizard::accept()
             loop.exec();
             
             if (success) {
-                ProjectManager::instance().model()->setProjectData(resultData);
-                ProjectManager::instance().saveProject();
+                // setTreeData runs validateTree (heals leaf-Folder-as-File,
+                // ensures the three authoritative top-level folders) and
+                // then saves — see ProjectManager. The first persisted
+                // JSON is already correct.
+                ProjectManager::instance().setTreeData(resultData);
             }
             progress->close();
             delete progress;

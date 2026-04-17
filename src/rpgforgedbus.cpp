@@ -278,7 +278,7 @@ QStringList RpgForgeDBus::projectFiles() const
     if (!projectOpen()) {
         return {};
     }
-    const QJsonObject root = ProjectManager::instance().model()->projectData();
+    const QJsonObject root = ProjectManager::instance().treeData();
     QStringList paths;
     collectFilesFromTree(root, paths);
     return paths;
@@ -304,7 +304,7 @@ QStringList RpgForgeDBus::projectFolders() const
     if (!projectOpen()) {
         return {};
     }
-    const QJsonObject root = ProjectManager::instance().model()->projectData();
+    const QJsonObject root = ProjectManager::instance().treeData();
     QStringList folders;
     collectFoldersFromTree(root, folders, true);
     return folders;

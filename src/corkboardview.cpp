@@ -50,6 +50,15 @@ CorkboardView::CorkboardView(QWidget *parent)
 
 CorkboardView::~CorkboardView() = default;
 
+void CorkboardView::attachToProjectTree()
+{
+    // CorkboardView is friended on ProjectManager so it can reach the
+    // private model() accessor — Qt's QAbstractItemView API requires a
+    // non-const QAbstractItemModel* to render the tree, and we cannot
+    // satisfy that through public ProjectManager helpers.
+    m_model = ProjectManager::instance().model();
+}
+
 void CorkboardView::setFolder(const QString &folderPath)
 {
     m_currentFolderPath = folderPath;
