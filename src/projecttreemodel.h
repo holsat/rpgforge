@@ -25,6 +25,8 @@
 #include <QList>
 #include <QRecursiveMutex>
 
+#include "treenodesnapshot.h"
+
 class QMimeData;
 
 struct ProjectTreeItem {
@@ -163,6 +165,17 @@ public:
     bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
 
     QStringList allFiles() const;
+
+    /**
+     * @brief Build a deep-copy TreeNodeSnapshot of the subtree rooted at `item`.
+     *
+     * Safe to call under external lock; does NOT take m_treeMutex itself —
+     * caller is expected to wrap this in executeUnderLock() if concurrent
+     * mutations are possible. Returns an empty snapshot if \a item is null.
+     * The returned snapshot contains no references to model-owned memory
+     * and is safe to carry across threads.
+     */
+    TreeNodeSnapshot snapshotFrom(const ProjectTreeItem *item) const;
 
     void beginBulkImport();
     void endBulkImport();

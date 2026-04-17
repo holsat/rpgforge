@@ -26,8 +26,10 @@
 #include <QTimer>
 #include <QQueue>
 #include <QMutex>
+#include <optional>
 
 #include "projectmetadata.h"
+#include "treenodesnapshot.h"
 
 class ProjectTreeModel;
 struct ProjectTreeItem;
@@ -93,17 +95,55 @@ public:
     void setLoreKeeperConfig(const QJsonObject &config);
 
     // Logical Tree Management — model() access is intentionally restricted
-    // to the view widgets that need a QAbstractItemModel pointer to render
-    // the tree (Qt's model/view framework requires this). All other code
-    // must use treeData() / setTreeData() / moveItem() / requestTreeUpdate()
-    // / notifyTreeChanged() so mutations stay funnelled through validating
-    // wrappers. New view-widget consumers should be added as friends here.
+    // to ProjectTreePanel. Qt's model/view framework requires a non-const
+    // QAbstractItemModel* to render a QTreeView; no other consumer needs
+    // the live model. All other code must use the snapshot API below,
+    // plus the mutation wrappers (addFile / addFolder / moveItem /
+    // removeItem / renameItem / setNodeSynopsis / requestTreeUpdate).
 private:
     friend class ProjectTreePanel;
-    friend class CorkboardView;
-    friend class SynopsisService;
     ProjectTreeModel* model() const { return m_treeModel; }
 public:
+
+    // ---- Snapshot-based read API (safe for non-view consumers) ----
+    //
+    // All return deep-copy POD structs built under m_treeModel's internal
+    // mutex. No raw pointers or QAbstractItemModel pointers escape.
+    // Snapshot producers run in O(subtree-size); fine for UI-scale trees.
+
+    /**
+     * \brief Returns a deep-copy snapshot of the whole project tree.
+     *
+     * Returns an empty TreeNodeSnapshot when no project is open. The
+     * returned value owns its data and is safe to carry across threads.
+     */
+    TreeNodeSnapshot treeSnapshot() const;
+
+    /**
+     * \brief Returns a snapshot of the node at \a relativePath, or nullopt
+     * if no such node is in the tree. Exact-match, case-sensitive.
+     */
+    std::optional<TreeNodeSnapshot> nodeSnapshot(const QString &relativePath) const;
+
+    /**
+     * \brief Returns a snapshot of the folder at \a relativePath, or nullopt
+     * if the path is not in the tree or resolves to a non-Folder node.
+     */
+    std::optional<TreeNodeSnapshot> folderSnapshot(const QString &relativePath) const;
+
+    /**
+     * \brief Flat list of every File-typed node's project-relative path.
+     *
+     * Unlike getActiveFiles() (which returns absolute paths for legacy
+     * consumers), allFilePaths() returns project-relative paths and is
+     * the preferred read for snapshot consumers.
+     */
+    QStringList allFilePaths() const;
+
+    /**
+     * \brief True if the tree contains a node at \a relativePath.
+     */
+    bool pathExists(const QString &relativePath) const;
     
     // Encapsulated Tree Mutations (The authoritative way to change project structure)
     bool addFile(const QString &name, const QString &relativePath, const QString &parentPath = QString());
@@ -111,6 +151,18 @@ public:
     bool moveItem(const QString &sourcePath, const QString &targetParentPath);
     bool removeItem(const QString &path);
     bool renameItem(const QString &path, const QString &newName);
+
+    /**
+     * \brief Write a synopsis for the node at \a relativePath.
+     *
+     * Routes the write through ProjectTreeModel::setData so dataChanged
+     * fires (and is proxied out via treeItemDataChanged), and persists
+     * the project immediately. Returns false if the path is not in the
+     * tree or the model rejects the setData call. Path-based wrapper
+     * used by SynopsisService so it does not need access to the live
+     * model.
+     */
+    bool setNodeSynopsis(const QString &relativePath, const QString &synopsis);
     
     // Authorization check for finding items
     ProjectTreeItem* findItem(const QString &path) const;

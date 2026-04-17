@@ -44,23 +44,18 @@ SynopsisService::SynopsisService(QObject *parent)
 
 SynopsisService::~SynopsisService() = default;
 
-void SynopsisService::setModel(ProjectTreeModel *model)
-{
-    m_model = model;
-}
-
 void SynopsisService::requestUpdate(const QString &relativePath, bool force)
 {
     if (relativePath.isEmpty()) return;
-    
+
     {
         QMutexLocker locker(&m_mutex);
         if (!force) {
-            ProjectTreeItem *item = nullptr;
-            if (m_model) {
-                item = m_model->findItem(relativePath);
-            }
-            if (item && !item->synopsis.isEmpty()) return;
+            // Only skip if a synopsis is already present. We look this up
+            // via the snapshot API so the service stays decoupled from the
+            // live model.
+            const auto snap = ProjectManager::instance().nodeSnapshot(relativePath);
+            if (snap && !snap->synopsis.isEmpty()) return;
         }
 
         if (!m_queue.contains(relativePath) && !m_activeRequests.contains(relativePath)) {
@@ -85,61 +80,44 @@ void SynopsisService::cancelRequest(const QString &relativePath)
 void SynopsisService::scanProject()
 {
     qDebug() << "Synopsis AI: Scanning project for missing synopses...";
-    if (!m_model) {
-        qDebug() << "Synopsis AI: Scan aborted - No model set.";
-        return;
-    }
     if (!ProjectManager::instance().isProjectOpen()) {
         qDebug() << "Synopsis AI: Scan aborted - Project not open.";
         return;
     }
-    
-    struct ItemInfo {
-        QString path;
-        ProjectTreeItem::Type type;
-        bool isManuscript;
-        bool hasSynopsis;
-    };
-    QList<ItemInfo> items;
 
-    m_model->executeUnderLock([&]() {
-        ProjectTreeItem *root = m_model->rootItem();
-        if (!root || root->children.isEmpty()) return;
+    const TreeNodeSnapshot root = ProjectManager::instance().treeSnapshot();
+    if (root.children.isEmpty()) return;
 
-        std::function<void(ProjectTreeItem*, bool)> scan = [&](ProjectTreeItem *item, bool inManuscript) {
-            if (!item) return;
-            
-            bool manuscript = inManuscript || (item->category == ProjectTreeItem::Manuscript);
-            
-            if (item != root) {
-                items.append({item->path, item->type, manuscript, !item->synopsis.isEmpty()});
-            }
-            for (auto *child : item->children) {
-                scan(child, manuscript);
-            }
-        };
-        scan(root, false);
-    });
+    scanSnapshot(root, /*inManuscript=*/false);
+}
 
-    if (items.isEmpty()) return;
+void SynopsisService::scanSnapshot(const TreeNodeSnapshot &node, bool inManuscript)
+{
+    const bool manuscript = inManuscript
+        || (node.category == static_cast<int>(ProjectTreeItem::Manuscript));
 
-    qDebug() << "Synopsis AI: Found" << items.count() << "items to check.";
-
-    // Prioritize files to build leaf-level data first
-    for (const auto &info : items) {
-        if (info.type == ProjectTreeItem::File) {
-            if (info.isManuscript && !info.hasSynopsis && !info.path.isEmpty()) {
-                requestUpdate(info.path);
-            }
+    // Prioritize leaf files under Manuscript — folder synopses depend on
+    // child data being present first. Non-manuscript folders are also
+    // enqueued (below) but only after the manuscript pass has primed the
+    // queue.
+    if (!node.path.isEmpty() && !node.isTransient) {
+        if (node.type == static_cast<int>(ProjectTreeItem::File)
+            && manuscript
+            && node.synopsis.isEmpty()) {
+            requestUpdate(node.path);
         }
     }
-    
-    // Then request folders
-    for (const auto &info : items) {
-        if (info.type == ProjectTreeItem::Folder) {
-            if (!info.hasSynopsis && !info.path.isEmpty()) {
-                requestUpdate(info.path);
-            }
+
+    for (const auto &child : node.children) {
+        scanSnapshot(child, manuscript);
+    }
+
+    // Folder-level enqueue at the tail of recursion so children are
+    // queued first — the processor is FIFO so files end up before folders.
+    if (!node.path.isEmpty() && !node.isTransient) {
+        if (node.type == static_cast<int>(ProjectTreeItem::Folder)
+            && node.synopsis.isEmpty()) {
+            requestUpdate(node.path);
         }
     }
 }
@@ -159,13 +137,13 @@ void SynopsisService::resume()
         QMutexLocker locker(&m_mutex);
         if (!m_paused) return;
         m_paused = false;
-        
+
         if (!m_queue.isEmpty() && !m_isProcessing) {
             m_isProcessing = true;
             startProcessing = true;
         }
     }
-    
+
     if (startProcessing) {
         QTimer::singleShot(0, this, &SynopsisService::processNext);
     }
@@ -184,12 +162,8 @@ void SynopsisService::processNext()
         m_activeRequests.insert(relPath);
     }
 
-    ProjectTreeItem *item = nullptr;
-    if (m_model) {
-        item = m_model->findItem(relPath);
-    }
-    
-    if (!item) {
+    const auto snap = ProjectManager::instance().nodeSnapshot(relPath);
+    if (!snap) {
         qDebug() << "Synopsis AI: Item no longer in tree, skipping:" << relPath;
         {
             QMutexLocker locker(&m_mutex);
@@ -199,36 +173,56 @@ void SynopsisService::processNext()
         return;
     }
 
-    if (item->type == ProjectTreeItem::File) {
-        QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
+    if (snap->type == static_cast<int>(ProjectTreeItem::File)) {
+        const QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
         if (!QFile::exists(fullPath)) {
-            m_activeRequests.remove(relPath);
+            {
+                QMutexLocker locker(&m_mutex);
+                m_activeRequests.remove(relPath);
+            }
             QTimer::singleShot(0, this, &SynopsisService::processNext);
             return;
         }
 
         QFile file(fullPath);
         if (file.open(QIODevice::ReadOnly)) {
-            QString content = QString::fromUtf8(file.readAll());
-            updateFileSynopsis(item, content);
+            const QString content = QString::fromUtf8(file.readAll());
+            updateFileSynopsis(relPath, content);
         } else {
-            m_activeRequests.remove(relPath);
+            {
+                QMutexLocker locker(&m_mutex);
+                m_activeRequests.remove(relPath);
+            }
             QTimer::singleShot(0, this, &SynopsisService::processNext);
         }
     } else {
-        updateFolderSynopsis(item);
+        QStringList childSynopses;
+        for (const auto &child : snap->children) {
+            if (!child.synopsis.isEmpty()) childSynopses << child.synopsis;
+        }
+
+        if (childSynopses.isEmpty()) {
+            {
+                QMutexLocker locker(&m_mutex);
+                m_activeRequests.remove(relPath);
+            }
+            QTimer::singleShot(0, this, &SynopsisService::processNext);
+            return;
+        }
+
+        updateFolderSynopsis(relPath, childSynopses);
     }
 }
 
-void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &content)
+void SynopsisService::updateFileSynopsis(const QString &relativePath, const QString &content)
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    
+
     // Use agent-specific settings first, then fall back to global
-    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_file_provider"), 
+    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_file_provider"),
                                      settings.value(QStringLiteral("llm/provider"), 0)).toInt();
     LLMProvider provider = static_cast<LLMProvider>(providerIdx);
-    
+
     QString model = settings.value(QStringLiteral("synopsis/synopsis_file_model")).toString();
     if (model.isEmpty()) {
         // Fallback to provider default model
@@ -248,51 +242,29 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this document in one short sentence: %1", content.left(2000))};
     req.stream = false;
 
-    QString relPath = item->path;
     QPointer<SynopsisService> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relPath](const QString &response) {
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relativePath](const QString &response) {
         if (!weakThis) return;
-        
-        ProjectTreeItem *resItem = nullptr;
-        if (weakThis->m_model) {
-            resItem = weakThis->m_model->findItem(relPath);
-        }
 
-        if (resItem) {
-            resItem->synopsis = response.trimmed();
-            QModelIndex idx = weakThis->m_model->indexForItem(resItem);
-            if (idx.isValid()) Q_EMIT weakThis->m_model->dataChanged(idx, idx, {ProjectTreeModel::SynopsisRole});
-        }
-        
+        ProjectManager::instance().setNodeSynopsis(relativePath, response.trimmed());
+
         {
             QMutexLocker locker(&weakThis->m_mutex);
-            weakThis->m_activeRequests.remove(relPath);
+            weakThis->m_activeRequests.remove(relativePath);
         }
         QTimer::singleShot(0, weakThis.data(), &SynopsisService::processNext);
     });
 }
 
-void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
+void SynopsisService::updateFolderSynopsis(const QString &relativePath,
+                                            const QStringList &childSynopses)
 {
-    // Folder synopsis is a synthesis of its children's synopses
-    QString relPath = item->path;
-    QStringList childSynopses;
-    for (auto *child : item->children) {
-        if (!child->synopsis.isEmpty()) childSynopses << child->synopsis;
-    }
-
-    if (childSynopses.isEmpty()) {
-        m_activeRequests.remove(relPath);
-        QTimer::singleShot(0, this, &SynopsisService::processNext);
-        return;
-    }
-
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    
-    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_folder_provider"), 
+
+    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_folder_provider"),
                                      settings.value(QStringLiteral("llm/provider"), 0)).toInt();
     LLMProvider provider = static_cast<LLMProvider>(providerIdx);
-    
+
     QString model = settings.value(QStringLiteral("synopsis/synopsis_folder_model")).toString();
     if (model.isEmpty()) {
         QString sk = LLMService::providerSettingsKey(provider);
@@ -312,23 +284,14 @@ void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
     req.stream = false;
 
     QPointer<SynopsisService> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relPath](const QString &response) {
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relativePath](const QString &response) {
         if (!weakThis) return;
-        
-        ProjectTreeItem *resItem = nullptr;
-        if (weakThis->m_model) {
-            resItem = weakThis->m_model->findItem(relPath);
-        }
 
-        if (resItem) {
-            resItem->synopsis = response.trimmed();
-            QModelIndex idx = weakThis->m_model->indexForItem(resItem);
-            if (idx.isValid()) Q_EMIT weakThis->m_model->dataChanged(idx, idx, {ProjectTreeModel::SynopsisRole});
-        }
-        
+        ProjectManager::instance().setNodeSynopsis(relativePath, response.trimmed());
+
         {
             QMutexLocker locker(&weakThis->m_mutex);
-            weakThis->m_activeRequests.remove(relPath);
+            weakThis->m_activeRequests.remove(relativePath);
         }
         QTimer::singleShot(0, weakThis.data(), &SynopsisService::processNext);
     });

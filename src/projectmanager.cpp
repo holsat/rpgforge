@@ -392,6 +392,79 @@ ProjectTreeItem* ProjectManager::findItem(const QString &path) const
     return m_treeModel->findItem(path);
 }
 
+bool ProjectManager::setNodeSynopsis(const QString &relativePath, const QString &synopsis)
+{
+    if (!m_treeModel) return false;
+    ProjectTreeItem *item = m_treeModel->findItem(relativePath);
+    if (!item) return false;
+    const QModelIndex idx = m_treeModel->indexForItem(item);
+    if (!idx.isValid()) return false;
+    if (!m_treeModel->setData(idx, synopsis, ProjectTreeModel::SynopsisRole)) return false;
+    saveProject();
+    return true;
+}
+
+TreeNodeSnapshot ProjectManager::treeSnapshot() const
+{
+    TreeNodeSnapshot out;
+    if (!m_treeModel) return out;
+    m_treeModel->executeUnderLock([&] {
+        out = m_treeModel->snapshotFrom(m_treeModel->rootItem());
+    });
+    return out;
+}
+
+std::optional<TreeNodeSnapshot> ProjectManager::nodeSnapshot(const QString &relativePath) const
+{
+    if (!m_treeModel) return std::nullopt;
+    std::optional<TreeNodeSnapshot> out;
+    m_treeModel->executeUnderLock([&] {
+        ProjectTreeItem *item = m_treeModel->findItem(relativePath);
+        if (item) out = m_treeModel->snapshotFrom(item);
+    });
+    return out;
+}
+
+std::optional<TreeNodeSnapshot> ProjectManager::folderSnapshot(const QString &relativePath) const
+{
+    if (!m_treeModel) return std::nullopt;
+    std::optional<TreeNodeSnapshot> out;
+    m_treeModel->executeUnderLock([&] {
+        ProjectTreeItem *item = m_treeModel->findItem(relativePath);
+        if (item && item->type == ProjectTreeItem::Folder) {
+            out = m_treeModel->snapshotFrom(item);
+        }
+    });
+    return out;
+}
+
+QStringList ProjectManager::allFilePaths() const
+{
+    QStringList paths;
+    if (!m_treeModel) return paths;
+    m_treeModel->executeUnderLock([&] {
+        std::function<void(ProjectTreeItem*)> walk = [&](ProjectTreeItem *item) {
+            if (!item) return;
+            if (item->type == ProjectTreeItem::File) {
+                paths.append(item->path);
+            }
+            for (auto *child : item->children) walk(child);
+        };
+        walk(m_treeModel->rootItem());
+    });
+    return paths;
+}
+
+bool ProjectManager::pathExists(const QString &relativePath) const
+{
+    if (!m_treeModel) return false;
+    bool exists = false;
+    m_treeModel->executeUnderLock([&] {
+        exists = (m_treeModel->findItem(relativePath) != nullptr);
+    });
+    return exists;
+}
+
 bool ProjectManager::migrate(QJsonObject &data)
 {
     int version = data.value(QLatin1String(ProjectKeys::Version)).toInt(1);

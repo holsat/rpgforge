@@ -319,6 +319,57 @@ bool RpgForgeDBus::projectContains(const QString &relativePath) const
         || projectFolders().contains(relativePath);
 }
 
+// -------- Tree snapshot introspection (Phase 2) --------
+
+namespace {
+QVariantMap snapshotToVariant(const TreeNodeSnapshot &node)
+{
+    QVariantMap map;
+    map.insert(QStringLiteral("name"), node.name);
+    map.insert(QStringLiteral("path"), node.path);
+    map.insert(QStringLiteral("synopsis"), node.synopsis);
+    map.insert(QStringLiteral("status"), node.status);
+    map.insert(QStringLiteral("type"), node.type);
+    map.insert(QStringLiteral("category"), node.category);
+    map.insert(QStringLiteral("diskPresent"), node.diskPresent);
+    map.insert(QStringLiteral("isTransient"), node.isTransient);
+
+    QVariantList kids;
+    kids.reserve(node.children.size());
+    for (const auto &child : node.children) {
+        kids.append(snapshotToVariant(child));
+    }
+    map.insert(QStringLiteral("children"), kids);
+    return map;
+}
+} // namespace
+
+QVariantMap RpgForgeDBus::treeSnapshotJson()
+{
+    if (!projectOpen()) {
+        return {};
+    }
+    return snapshotToVariant(ProjectManager::instance().treeSnapshot());
+}
+
+QVariantMap RpgForgeDBus::folderSnapshotJson(const QString &path)
+{
+    if (!projectOpen()) {
+        return {};
+    }
+    const auto snap = ProjectManager::instance().folderSnapshot(path);
+    if (!snap) return {};
+    return snapshotToVariant(*snap);
+}
+
+bool RpgForgeDBus::pathExists(const QString &path)
+{
+    if (!projectOpen() || path.isEmpty()) {
+        return false;
+    }
+    return ProjectManager::instance().pathExists(path);
+}
+
 // -------- Explorations / Git queries --------
 
 QStringList RpgForgeDBus::explorationNames() const

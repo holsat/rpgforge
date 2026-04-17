@@ -559,8 +559,8 @@ void MainWindow::setupSidebar()
 
     m_problemsPanel = new ProblemsPanel(this);
 
-    // SynopsisService is friended on ProjectManager and accesses the model
-    // directly during scanProject(); no setup wiring needed here.
+    // SynopsisService consumes ProjectManager snapshots and writes back via
+    // the public setNodeSynopsis() wrapper; no setup wiring needed here.
 
     connect(&ProjectManager::instance(), &ProjectManager::treeItemDataChanged, this, [this](const QList<int> &roles) {
         if (roles.contains(ProjectTreeModel::SynopsisRole) || roles.contains(ProjectTreeModel::StatusRole)) {
@@ -658,7 +658,7 @@ void MainWindow::setupSidebar()
             // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
-    m_corkboardView->attachToProjectTree();  // CorkboardView is friended on PM and pulls the model itself
+    m_corkboardView->subscribe();  // Consumes snapshots + PM signals — no friended model access.
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](const QString &folderPath) {
         if (folderPath.isEmpty()) return;
         const QString nameLower = folderPath.section(QDir::separator(), -1).toLower();

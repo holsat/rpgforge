@@ -117,6 +117,24 @@ public Q_SLOTS:
     /** \brief True if the given relative path is present in the project tree. */
     bool projectContains(const QString &relativePath) const;
 
+    // ---------------- Tree snapshot introspection (Phase 2) ----------------
+    /** \brief Returns the whole-tree snapshot serialised as a QVariantMap.
+     *  Keys: name, path, synopsis, status, type, category, diskPresent,
+     *  isTransient, children (QVariantList of nested maps). Empty map
+     *  when no project is open. */
+    QVariantMap treeSnapshotJson();
+
+    /** \brief Snapshot for a single folder, with the same shape as
+     *  treeSnapshotJson(). Empty map when no project is open, when the
+     *  path is missing, or when the path resolves to a non-Folder node. */
+    QVariantMap folderSnapshotJson(const QString &path);
+
+    /** \brief True if the given project-relative path is present in the tree.
+     *  Thin wrapper over ProjectManager::pathExists; exposed as a dedicated
+     *  introspection endpoint so test harnesses do not need to pull the
+     *  full snapshot just to assert presence. */
+    bool pathExists(const QString &path);
+
     // ---------------- Explorations / Git queries ----------------
     /** \brief Returns names of all explorations (branches). */
     QStringList explorationNames() const;

@@ -656,6 +656,30 @@ void ProjectTreeModel::propagateCategoryFromParent(ProjectTreeItem *item)
     }
 }
 
+TreeNodeSnapshot ProjectTreeModel::snapshotFrom(const ProjectTreeItem *item) const
+{
+    TreeNodeSnapshot snap;
+    if (!item) return snap;
+
+    snap.name = item->name;
+    snap.path = item->path;
+    snap.synopsis = item->synopsis;
+    snap.status = item->status;
+    snap.type = static_cast<int>(item->type);
+    snap.category = static_cast<int>(item->category);
+    // diskPresent: populated from disk in Phase 6; keep permissive default.
+    snap.diskPresent = true;
+    // isTransient: the ProjectTreeItem `isTransient` flag is introduced in a
+    // later phase; keep false until then.
+    snap.isTransient = false;
+
+    snap.children.reserve(item->children.size());
+    for (const ProjectTreeItem *child : item->children) {
+        snap.children.append(snapshotFrom(child));
+    }
+    return snap;
+}
+
 QStringList ProjectTreeModel::allFiles() const
 {
     QStringList files;

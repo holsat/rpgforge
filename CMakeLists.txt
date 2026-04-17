@@ -56,6 +56,8 @@ add_library(rpgforge_core STATIC
     src/projectmanager.h
     src/projectmetadata.cpp
     src/projectmetadata.h
+    src/treenodesnapshot.cpp
+    src/treenodesnapshot.h
     src/projecttreemodel.cpp
     src/projecttreemodel.h
     src/variablemanager.cpp
@@ -244,6 +246,10 @@ add_test(NAME project_manager_test COMMAND test_projectmanager)
 add_executable(test_projectmetadata tests/test_projectmetadata.cpp)
 target_link_libraries(test_projectmetadata rpgforge_core Qt6::Test)
 add_test(NAME project_metadata_test COMMAND test_projectmetadata)
+
+add_executable(test_treesnapshot tests/test_treesnapshot.cpp)
+target_link_libraries(test_treesnapshot rpgforge_core Qt6::Test)
+add_test(NAME tree_snapshot_test COMMAND test_treesnapshot)
 
 add_executable(test_lorekeeper_smoke tests/test_lorekeeper_smoke.cpp)
 target_link_libraries(test_lorekeeper_smoke rpgforge_core Qt6::Test)
