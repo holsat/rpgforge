@@ -533,6 +533,9 @@ void MainWindow::setupSidebar()
             m_document->openUrl(QUrl::fromLocalFile(path));
         }
     });
+    connect(m_diffView, &VisualDiffView::closeRequested, this, [this]() {
+        showCentralView(m_editorSplitter);
+    });
     m_pdfViewer = new QWebEngineView(this);
 
     m_centralViewLayout->addWidget(m_editorSplitter);

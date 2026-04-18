@@ -28,6 +28,20 @@ option(RPGFORGE_DBUS_TESTING
     "Expose org.kde.rpgforge DBus adaptor for automated GUI testing"
     ${RPGFORGE_DBUS_TESTING_DEFAULT})
 
+# Diagnostic RPGFORGE_DLOG() macros (src/debuglog.h) compile to real
+# qDebug() calls when ON, and to no-ops otherwise. Leave per-feature debug
+# tracing in the code permanently; it vanishes from production binaries.
+if(NOT DEFINED RPGFORGE_DEBUG_LOGS)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        set(RPGFORGE_DEBUG_LOGS_DEFAULT ON)
+    else()
+        set(RPGFORGE_DEBUG_LOGS_DEFAULT OFF)
+    endif()
+endif()
+option(RPGFORGE_DEBUG_LOGS
+    "Enable RPGFORGE_DLOG() diagnostic logging (recommended for Debug builds)"
+    ${RPGFORGE_DEBUG_LOGS_DEFAULT})
+
 set(RPGFORGE_QT_COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
 if(RPGFORGE_DBUS_TESTING)
     list(APPEND RPGFORGE_QT_COMPONENTS DBus)
@@ -57,6 +71,7 @@ add_library(rpgforge_core STATIC
     src/projectmetadata.cpp
     src/projectmetadata.h
     src/reconciliationtypes.h
+    src/debuglog.h
     src/treenodesnapshot.cpp
     src/treenodesnapshot.h
     src/projecttreemodel.cpp
@@ -131,6 +146,14 @@ target_link_libraries(rpgforge_core
     PkgConfig::LIBGIT2
     PkgConfig::CMARK_GFM
 )
+
+# RPGFORGE_DEBUG_LOGS: propagates to every target consuming rpgforge_core
+# so RPGFORGE_DLOG() in any translation unit sees the same compile-time
+# state. PUBLIC because headers (src/debuglog.h, and its transitive includers)
+# branch on the define.
+if(RPGFORGE_DEBUG_LOGS)
+    target_compile_definitions(rpgforge_core PUBLIC RPGFORGE_DEBUG_LOGS=1)
+endif()
 
 # Main Executable
 add_executable(rpgforge

@@ -828,26 +828,20 @@ void ProjectTreePanel::renameFile()
     ProjectTreeItem *item = m_model->itemFromIndex(index);
     if (!item || item->type != ProjectTreeItem::File) return;
 
-    QString projectPath = ProjectManager::instance().projectPath();
-    QString oldAbsPath = QDir(projectPath).absoluteFilePath(item->path);
-    QFileInfo fi(oldAbsPath);
+    const QString oldBasename = QFileInfo(item->path).fileName();
 
     bool ok = false;
-    QString newName = QInputDialog::getText(this, i18n("File Rename"),
-        i18n("New file name:"), QLineEdit::Normal, fi.fileName(), &ok);
-    if (!ok || newName.isEmpty() || newName == fi.fileName()) return;
+    QString newFileName = QInputDialog::getText(this, i18n("File Rename"),
+        i18n("New file name:"), QLineEdit::Normal, oldBasename, &ok);
+    if (!ok || newFileName.isEmpty() || newFileName == oldBasename) return;
 
-    QString newAbsPath = fi.dir().filePath(newName);
-    if (!QFile::rename(oldAbsPath, newAbsPath)) {
+    // Route through PM::renameItem so disk + tree name + path cascade
+    // happen atomically and the display name follows the new filename.
+    const QString newDisplayName = QFileInfo(newFileName).completeBaseName();
+    if (!ProjectManager::instance().renameItem(item->path, newDisplayName)) {
         QMessageBox::warning(this, i18n("File Rename"),
-            i18n("Could not rename \"%1\" to \"%2\".", fi.fileName(), newName));
-        return;
+            i18n("Could not rename \"%1\" to \"%2\".", oldBasename, newFileName));
     }
-
-    // Update the stored relative path
-    item->path = QDir(projectPath).relativeFilePath(newAbsPath);
-    Q_EMIT m_model->dataChanged(index, index);
-    saveTree();
 }
 
 void ProjectTreePanel::editMetadata()

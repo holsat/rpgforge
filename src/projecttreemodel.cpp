@@ -247,9 +247,23 @@ bool ProjectTreeModel::setData(const QModelIndex &index, const QVariant &value, 
     ProjectTreeItem *item = static_cast<ProjectTreeItem*>(index.internalPointer());
 
     if (role == Qt::EditRole) {
-        item->name = value.toString();
-        Q_EMIT dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole});
-        return true;
+        const QString newName = value.toString();
+        if (newName.isEmpty() || newName == item->name) return false;
+
+        // Re-entrant path: ProjectManager::renameItem() calls us after it
+        // has already renamed on disk and is updating the in-memory name.
+        // Just apply the name change and emit; PM handles the path cascade.
+        if (m_inPmRename) {
+            item->name = newName;
+            Q_EMIT dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole});
+            return true;
+        }
+
+        // Top-level path (e.g. QTreeView inline F2 commit): route through
+        // ProjectManager so the disk file is renamed, item->path cascades
+        // to descendants, and the project file is persisted atomically.
+        // PM::renameItem will call back into setData with m_inPmRename set.
+        return ProjectManager::instance().renameItem(item->path, newName);
     } else if (role == CategoryRole) {
         item->category = static_cast<ProjectTreeItem::Category>(value.toInt());
         Q_EMIT dataChanged(index, index, {Qt::DecorationRole, CategoryRole});
@@ -767,8 +781,23 @@ bool ProjectTreeModel::removeItem(const QModelIndex &index)
 
 bool ProjectTreeModel::removeRows(int row, int count, const QModelIndex &parent)
 {
+    // Drop-auto-remove guard: QAbstractItemView::startDrag() calls
+    // clearOrRemove() after a successful Move drop. Our custom dropMimeData()
+    // has already performed an atomic move via beginMoveRows/endMoveRows
+    // which updates Qt's persistent indexes to follow the move. By the time
+    // clearOrRemove() runs, the source-row persistent index points at the
+    // item's NEW location, so the auto-remove would destroy the moved item
+    // at its destination. Short-circuit while a drop is in flight.
+    if (m_dropInProgress) {
+        qDebug() << "ProjectTreeModel::removeRows: blocked by drop-in-progress guard"
+                 << "(row=" << row << "count=" << count << ")";
+        return false;
+    }
+
     ProjectTreeItem *parentItem = itemFromIndex(parent);
-    if (!parentItem || row < 0 || row + count > parentItem->children.count()) return false;
+    if (!parentItem || row < 0 || row + count > parentItem->children.count()) {
+        return false;
+    }
 
     QMutexLocker locker(&m_treeMutex);
 
@@ -789,6 +818,7 @@ bool ProjectTreeModel::removeRows(int row, int count, const QModelIndex &parent)
         delete parentItem->children.takeAt(row);
     }
     endRemoveRows();
+
     return true;
 }
 
@@ -1076,6 +1106,17 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
 
     if (!data || action != Qt::MoveAction) return false;
     if (!data->hasFormat(QStringLiteral("application/x-rpgforge-treeitem"))) return false;
+
+    // Arm the drop-in-progress guard. QAbstractItemView will call
+    // removeRows() on us synchronously after this function returns as part
+    // of its post-Move clearOrRemove() pass; removeRows() checks this flag
+    // and short-circuits while it's set. The flag is cleared on the next
+    // event-loop tick (QueuedConnection) so legitimate post-drop removals
+    // triggered by the user still work.
+    m_dropInProgress = true;
+    QMetaObject::invokeMethod(this, [this] {
+        m_dropInProgress = false;
+    }, Qt::QueuedConnection);
 
     ProjectTreeItem *targetItem = itemFromIndex(parent);
     if (!targetItem) return false;

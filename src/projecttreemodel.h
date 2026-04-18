@@ -254,7 +254,27 @@ private:
 
     ProjectTreeItem *m_rootItem;
     bool m_bulkImporting = false;
+    // Set to true for the duration of our custom dropMimeData() and cleared
+    // on the next event-loop tick. While set, removeRows() short-circuits
+    // to block QAbstractItemView::startDrag()'s post-drop clearOrRemove()
+    // from deleting the moved item at its new (destination) location. The
+    // atomic move inside dropMimeData has already updated Qt's persistent
+    // indexes to follow the move, so the view's auto-remove would otherwise
+    // target the destination parent + destination row — destroying the
+    // moved row at its new home.
+    bool m_dropInProgress = false;
+
+    // Guard against recursion when ProjectManager::renameItem() calls our
+    // setData(EditRole) internally. When set, setData(EditRole) only
+    // updates the in-memory name (PM already handled disk + path). When
+    // clear, setData(EditRole) routes through PM::renameItem() so inline
+    // F2 edits get the full disk+tree+path atomic treatment.
+    bool m_inPmRename = false;
     mutable QRecursiveMutex m_treeMutex;
+
+    // ProjectManager needs access to m_inPmRename to arm the re-entry guard
+    // around its internal setData(EditRole) call during renameItem().
+    friend class ProjectManager;
 };
 
 #endif // PROJECTTREEMODEL_H
