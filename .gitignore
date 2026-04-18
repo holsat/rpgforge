@@ -23,3 +23,9 @@ dbg.txt
 *.db-wal
 
 llm_debug.log
+
+# Debug / runtime logs and their rotation backups
+*.log
+*.log.bak
+*.log.*.bak
+rpgforge_debug.log*
