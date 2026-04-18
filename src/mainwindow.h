@@ -34,6 +34,7 @@ class ImagePreview;
 class VisualDiffView;
 class FileExplorer;
 class GitPanel;
+class ExplorationsPanel;
 class OutlinePanel;
 class PreviewPanel;
 class ProjectTreePanel;
@@ -50,7 +51,9 @@ class QUrl;
 class QSplitter;
 class QAction;
 class QVBoxLayout;
+class QStackedLayout;
 class QLabel;
+class QFrame;
 class QProgressBar;
 class QLineEdit;
 #include <QPair>
@@ -58,6 +61,8 @@ class QLineEdit;
 #include <QUrl>
 #include "analyzerservice.h"
 #include "llmservice.h"
+#include "gitservice.h"
+#include "reconciliationtypes.h"
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -117,10 +122,82 @@ private Q_SLOTS:
     void onModelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
     void onForceLoreScan();
 
+    // Explorations slots
+    void onSwitchExplorationRequested(const QString &branchName);
+    void onIntegrateExplorationRequested(const QString &sourceBranch);
+    void onCreateLandmarkRequested(const QString &hash);
+    void onRecallVersionRequested(const QString &hashOrPath);
+    void onIntegrateFailed();
+    void showNextConflict();
+    void onVersionSelected(const QString &filePath, const QString &commitHash);
+
+    /**
+     * @brief Show the reconciliation dialog in response to
+     *        ProjectManager::reconciliationRequired.
+     *
+     * Populates a ReconciliationDialog with the supplied entries. If the
+     * user applies, the entries' user-chosen actions are forwarded to
+     * ProjectManager inside a beginBatch()/endBatch() window.
+     */
+    void showReconciliationDialog(const QList<ReconciliationEntry> &entries);
+
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }
     KTextEditor::View* activeView() const;
     KTextEditor::Document* activeDocument() const;
+
+    /**
+     * @brief Returns the KTextEditor document currently open in the main editor,
+     *        or nullptr if no document is loaded. Used by the DBus adaptor.
+     */
+    KTextEditor::Document* currentDocument() const { return m_document; }
+
+    /**
+     * @brief Returns the identifier of the central view that is currently visible.
+     *
+     * The returned value is one of: "editor", "diff", "corkboard",
+     * "imagepreview", "pdf", or an empty string if no central widget is
+     * visible. Used by the DBus adaptor.
+     */
+    QString currentViewId() const;
+
+    /**
+     * @brief Returns the application's sidebar widget (non-owning pointer).
+     *
+     * Used by the DBus adaptor to enumerate and switch panels.
+     */
+    Sidebar* sidebar() const { return m_sidebar; }
+
+    /**
+     * @brief Saves every open KTextEditor document that has an associated URL.
+     *
+     * Intended for "Save All" — also used by the DBus adaptor. Returns true if
+     * every open document with a URL saved successfully (or if there was
+     * nothing to save). Used by the DBus adaptor.
+     */
+    bool saveAllDocuments();
+
+    /**
+     * @brief Returns the path of the conflict file currently shown in the
+     *        conflict banner, or an empty string if no integration conflict
+     *        is active. Used by the DBus adaptor.
+     */
+    QString activeConflictFile() const;
+
+    /**
+     * @brief Returns conflict-resolution progress as [currentIndex, totalConflicts].
+     *
+     * currentIndex is zero-based. If no conflict resolution is active, both
+     * values are zero. Used by the DBus adaptor.
+     */
+    QList<int> conflictProgress() const;
+
+    /**
+     * @brief Synchronous wrapper over onVersionSelected() so callers (e.g. the
+     *        DBus adaptor) can trigger a version-recall without first showing
+     *        the VersionRecallBrowser dialog.
+     */
+    void invokeVersionRecall(const QString &filePath, const QString &commitHash);
 
 private Q_SLOTS:
     void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
@@ -135,15 +212,26 @@ private:
     void showCentralView(QWidget *widget);
     void insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &items);
 
+    /**
+     * @brief Forward a user-confirmed reconciliation entry to ProjectManager.
+     *
+     * Called by showReconciliationDialog() for each row the user applied. The
+     * caller wraps the whole batch in ProjectManager::beginBatch/endBatch so
+     * there is exactly one save and one treeStructureChanged emission at the
+     * end.
+     */
+    void applyReconciliationEntry(const ReconciliationEntry &entry);
+
     KTextEditor::Editor *m_editor = nullptr;
     KTextEditor::Document *m_document = nullptr;
     KTextEditor::View *m_editorView = nullptr;
 
     KTextEditor::Document *m_researchDocument = nullptr;
     KTextEditor::View *m_researchView = nullptr;
+    QWidget *m_researchPane = nullptr; // wraps m_researchView with title + close btn
     QSplitter *m_editorSplitter = nullptr;
 
-    QVBoxLayout *m_centralViewLayout = nullptr;
+    QStackedLayout *m_centralViewLayout = nullptr;
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
     VisualDiffView *m_diffView = nullptr;
@@ -154,6 +242,7 @@ private:
     ProjectTreePanel *m_projectTree = nullptr;
     OutlinePanel *m_outlinePanel = nullptr;
     GitPanel *m_gitPanel = nullptr;
+    ExplorationsPanel *m_explorationsPanel = nullptr;
     BreadcrumbBar *m_breadcrumbBar = nullptr;
     PreviewPanel *m_previewPanel = nullptr;
     VariablesPanel *m_variablesPanel = nullptr;
@@ -175,11 +264,13 @@ private:
     QTimer *m_cursorDebounce = nullptr;
     QTimer *m_textChangeDebounce = nullptr;
     QTimer *m_analyzerDebounce = nullptr;
+    QTimer *m_saveExplorationDataTimer = nullptr; // debounces colorMapChanged -> disk persistence
 
     int m_fileExplorerId = -1;
     int m_projectTreeId = -1;
     int m_outlineId = -1;
     int m_gitId = -1;
+    int m_explorationsId = -1;
     int m_variablesId = -1;
     int m_chatId = -1;
     int m_simulationId = -1;
@@ -191,6 +282,13 @@ private:
     QUrl m_currentUrl;
     LibrarianService *m_librarianService = nullptr;
     QString m_lastSearchText;
+
+    // Conflict resolution state
+    QList<ConflictFile> m_conflictFiles;
+    int m_conflictIndex = 0;
+    QFrame *m_conflictBanner = nullptr;
+    QLabel *m_conflictBannerLabel = nullptr;
+    QPushButton *m_conflictNextBtn = nullptr;
 };
 
 #endif // MAINWINDOW_H

@@ -55,7 +55,7 @@ private Q_SLOTS:
 
         // 3. Verify Model Integrity
         ProjectTreeModel model;
-        model.setProjectData(pm.model()->projectData());
+        model.setProjectData(pm.treeData());
         QVERIFY(model.rowCount(QModelIndex()) > 0);
 
         // 4. Close Project
@@ -121,28 +121,31 @@ private Q_SLOTS:
         QVERIFY(pm.createProject(projPath, projName));
         pm.setupDefaultProject(projPath, projName);
 
-        // 1. Add file (Must exist physically)
+        // 1. Add file. As of Phase 3, addFile creates the empty file on disk
+        // if it doesn't exist — no need to pre-create.
         QString relPath = QStringLiteral("research/notes.md");
-        QString absPath = QDir(projPath).absoluteFilePath(relPath);
-        QFile file(absPath);
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        file.write("Authoritative content");
-        file.close();
 
         QVERIFY(pm.addFile(QStringLiteral("Notes"), relPath, QStringLiteral("research")));
 
-        // Verify in model via authoritative wrapper
+        // Verify in model via authoritative wrapper AND on disk.
         ProjectTreeItem *item = pm.findItem(relPath);
         QVERIFY(item != nullptr);
         QCOMPARE(item->name, QStringLiteral("Notes"));
+        QVERIFY(QFileInfo(QDir(projPath).absoluteFilePath(relPath)).isFile());
 
-        // 2. Rename
+        // 2. Rename — Phase 3 renames on disk too and updates the path field.
         QVERIFY(pm.renameItem(relPath, QStringLiteral("Project Notes")));
         QCOMPARE(item->name, QStringLiteral("Project Notes"));
 
-        // 3. Remove
-        QVERIFY(pm.removeItem(relPath));
-        QVERIFY(pm.model()->findItem(relPath) == nullptr);
+        const QString newRelPath = QStringLiteral("research/Project Notes.md");
+        QCOMPARE(item->path, newRelPath);
+        QVERIFY(!QFileInfo(QDir(projPath).absoluteFilePath(relPath)).exists());
+        QVERIFY(QFileInfo(QDir(projPath).absoluteFilePath(newRelPath)).isFile());
+
+        // 3. Remove via the new path.
+        QVERIFY(pm.removeItem(newRelPath));
+        QVERIFY(pm.findItem(newRelPath) == nullptr);
+        QVERIFY(!QFileInfo(QDir(projPath).absoluteFilePath(newRelPath)).exists());
 
         pm.closeProject();
     }
@@ -210,11 +213,17 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: disk is authoritative; create the backing file.
+        QDir(projPath).mkpath(QStringLiteral("research"));
+        QFile notesFile(QDir(projPath).absoluteFilePath(QStringLiteral("research/notes.md")));
+        QVERIFY(notesFile.open(QIODevice::WriteOnly));
+        notesFile.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
         // After migration + load, the item should be File type
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research/notes.md"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("research/notes.md"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::File);
 
@@ -256,7 +265,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("lorekeeper"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("lorekeeper"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->category, ProjectTreeItem::LoreKeeper);
 
@@ -295,10 +304,16 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: materialise the backing file on disk.
+        QDir(projPath).mkpath(QStringLiteral("manuscript"));
+        QFile chFile(QDir(projPath).absoluteFilePath(QStringLiteral("manuscript/chapter1.md")));
+        QVERIFY(chFile.open(QIODevice::WriteOnly));
+        chFile.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("manuscript/chapter1.md"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("manuscript/chapter1.md"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::File);
 
@@ -321,7 +336,7 @@ private Q_SLOTS:
         pm.setupDefaultProject(projPath, projName);
 
         // Inject a misclassified node: type=Folder but path has .md extension
-        QJsonObject data = pm.model()->projectData();
+        QJsonObject data = pm.treeData();
         QJsonArray children = data.value(QStringLiteral("children")).toArray();
 
         QJsonObject badNode;
@@ -343,10 +358,17 @@ private Q_SLOTS:
         pm.closeProject();
         writeProjectFile(projPath, projectObj);
 
-        // Re-open: validateTree should fix Folder->File
+        // Phase 6: materialise the real file on disk — buildFromDisk sees
+        // it as a File (it's a regular file), which is the correct shape
+        // regardless of what the legacy JSON said.
+        QFile f(QDir(projPath).absoluteFilePath(QStringLiteral("research/misclassified.txt")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+
+        // Re-open: buildFromDisk sees a real file and creates a File node.
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research/misclassified.txt"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("research/misclassified.txt"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::File);
 
@@ -392,10 +414,17 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: materialise the folder + child on disk. buildFromDisk
+        // creates a Folder for the directory and a File for the child.
+        QDir(projPath).mkpath(QStringLiteral("bad"));
+        QFile nested(QDir(projPath).absoluteFilePath(QStringLiteral("bad/nested.md")));
+        QVERIFY(nested.open(QIODevice::WriteOnly));
+        nested.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("bad"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("bad"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->type, ProjectTreeItem::Folder);
         QCOMPARE(item->children.count(), 1);
@@ -437,7 +466,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("research"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("research"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->path, QStringLiteral("research"));
 
@@ -474,7 +503,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("lorekeeper"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("lorekeeper"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->path, QStringLiteral("lorekeeper"));
 
@@ -511,7 +540,7 @@ private Q_SLOTS:
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("manuscript"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("manuscript"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->path, QStringLiteral("manuscript"));
 
@@ -556,15 +585,26 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: tree is sourced from disk, so the fixture directories
+        // and files that the legacy JSON declared must actually exist for
+        // the tree to carry them through. Create the disk structure that
+        // matches the JSON above; the legacy-metadata migration then
+        // decorates the tree nodes with the Chapter / Scene categories
+        // via nodeMetadata.categoryOverride.
+        QDir(projPath).mkpath(QStringLiteral("manuscript/ch1"));
+        QFile sceneFile(QDir(projPath).absoluteFilePath(QStringLiteral("manuscript/ch1/scene.md")));
+        QVERIFY(sceneFile.open(QIODevice::WriteOnly));
+        sceneFile.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *ch = pm.model()->findItem(QStringLiteral("manuscript/ch1"));
+        ProjectTreeItem *ch = pm.findItem(QStringLiteral("manuscript/ch1"));
         QVERIFY(ch != nullptr);
         QCOMPARE(ch->type, ProjectTreeItem::Folder);
         QCOMPARE(ch->category, ProjectTreeItem::Chapter);
 
-        ProjectTreeItem *scene = pm.model()->findItem(QStringLiteral("manuscript/ch1/scene.md"));
+        ProjectTreeItem *scene = pm.findItem(QStringLiteral("manuscript/ch1/scene.md"));
         QVERIFY(scene != nullptr);
         QCOMPARE(scene->type, ProjectTreeItem::File);
         QCOMPARE(scene->category, ProjectTreeItem::Scene);
@@ -602,11 +642,12 @@ private Q_SLOTS:
         project[QLatin1String(ProjectKeys::Tree)] = tree;
 
         writeProjectFile(projPath, project);
+        QDir(projPath).mkpath(QStringLiteral("mystery"));
 
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
-        ProjectTreeItem *item = pm.model()->findItem(QStringLiteral("mystery"));
+        ProjectTreeItem *item = pm.findItem(QStringLiteral("mystery"));
         QVERIFY(item != nullptr);
         QCOMPARE(item->category, ProjectTreeItem::None);
 

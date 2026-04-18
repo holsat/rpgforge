@@ -20,12 +20,19 @@
 #include "markdownparser.h"
 #include "mcpservice.h"
 
+#ifdef RPGFORGE_DBUS_TESTING
+#include "rpgforgedbus.h"
+#include <QDBusConnection>
+#include <QDBusError>
+#endif
+
 #include <KAboutData>
 #include <KLocalizedString>
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
+#include <QDebug>
 #include <QIcon>
 
 #include <QWebEngineProfile>
@@ -131,6 +138,25 @@ int main(int argc, char *argv[])
 
     auto *window = new MainWindow();
     window->show();
+
+#ifdef RPGFORGE_DBUS_TESTING
+    // Register the DBus adaptor so automated test tools can drive the app
+    // without AT-SPI/ydotool. The adaptor is parented to the MainWindow so
+    // Qt handles teardown automatically. Only compiled into debug builds —
+    // see the RPGFORGE_DBUS_TESTING CMake option.
+    new RpgForgeDBus(window);
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected()) {
+        qWarning() << "DBus session bus not available; skipping DBus registration";
+    } else {
+        if (!bus.registerService(QStringLiteral("org.kde.rpgforge"))) {
+            qWarning() << "Could not register DBus service:" << bus.lastError().message();
+        }
+        if (!bus.registerObject(QStringLiteral("/org/kde/rpgforge/MainWindow"), window)) {
+            qWarning() << "Could not register DBus object:" << bus.lastError().message();
+        }
+    }
+#endif
 
     return app.exec();
 }

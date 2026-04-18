@@ -13,7 +13,26 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
+# DBus-exposed test automation interface. ON by default for Debug builds,
+# OFF for Release — the DBus adaptor and its registration in main.cpp are
+# compiled out entirely when this is OFF, so production binaries don't
+# expose an IPC surface.
+if(NOT DEFINED RPGFORGE_DBUS_TESTING)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        set(RPGFORGE_DBUS_TESTING_DEFAULT ON)
+    else()
+        set(RPGFORGE_DBUS_TESTING_DEFAULT OFF)
+    endif()
+endif()
+option(RPGFORGE_DBUS_TESTING
+    "Expose org.kde.rpgforge DBus adaptor for automated GUI testing"
+    ${RPGFORGE_DBUS_TESTING_DEFAULT})
+
+set(RPGFORGE_QT_COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
+if(RPGFORGE_DBUS_TESTING)
+    list(APPEND RPGFORGE_QT_COMPONENTS DBus)
+endif()
+find_package(Qt6 REQUIRED COMPONENTS ${RPGFORGE_QT_COMPONENTS})
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -35,6 +54,11 @@ find_library(KOMPAREINTERFACE_LIB kompareinterface REQUIRED)
 add_library(rpgforge_core STATIC
     src/projectmanager.cpp
     src/projectmanager.h
+    src/projectmetadata.cpp
+    src/projectmetadata.h
+    src/reconciliationtypes.h
+    src/treenodesnapshot.cpp
+    src/treenodesnapshot.h
     src/projecttreemodel.cpp
     src/projecttreemodel.h
     src/variablemanager.cpp
@@ -121,6 +145,14 @@ add_executable(rpgforge
     src/githubonboardingdialog.h
     src/historydialog.cpp
     src/historydialog.h
+    src/versionrecallbrowser.cpp
+    src/versionrecallbrowser.h
+    src/unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.h
+    src/explorationsgraphview.cpp
+    src/explorationsgraphview.h
+    src/explorationspanel.cpp
+    src/explorationspanel.h
     src/visualdiffview.cpp
     src/visualdiffview.h
     src/clonedialog.cpp
@@ -139,6 +171,8 @@ add_executable(rpgforge
     src/projectsettingsdialog.h
     src/projecttreepanel.cpp
     src/projecttreepanel.h
+    src/reconciliationdialog.cpp
+    src/reconciliationdialog.h
     src/metadatadialog.cpp
     src/metadatadialog.h
     src/problemspanel.cpp
@@ -172,6 +206,15 @@ add_executable(rpgforge
     src/resources.qrc
 )
 
+if(RPGFORGE_DBUS_TESTING)
+    target_sources(rpgforge PRIVATE
+        src/rpgforgedbus.cpp
+        src/rpgforgedbus.h
+    )
+    target_compile_definitions(rpgforge PRIVATE RPGFORGE_DBUS_TESTING=1)
+    target_link_libraries(rpgforge Qt6::DBus)
+endif()
+
 target_link_libraries(rpgforge
     rpgforge_core
     Qt6::WebEngineWidgets
@@ -203,6 +246,26 @@ add_executable(test_projectmanager tests/test_projectmanager.cpp)
 target_link_libraries(test_projectmanager rpgforge_core Qt6::Test)
 add_test(NAME project_manager_test COMMAND test_projectmanager)
 
+add_executable(test_projectmanager_mutations tests/test_projectmanager_mutations.cpp)
+target_link_libraries(test_projectmanager_mutations rpgforge_core Qt6::Test)
+add_test(NAME project_manager_mutations_test COMMAND test_projectmanager_mutations)
+
+add_executable(test_projectmanager_disk_authority tests/test_projectmanager_disk_authority.cpp)
+target_link_libraries(test_projectmanager_disk_authority rpgforge_core Qt6::Test)
+add_test(NAME project_manager_disk_authority_test COMMAND test_projectmanager_disk_authority)
+
+add_executable(test_reconciliation tests/test_reconciliation.cpp)
+target_link_libraries(test_reconciliation rpgforge_core Qt6::Test)
+add_test(NAME reconciliation_test COMMAND test_reconciliation)
+
+add_executable(test_projectmetadata tests/test_projectmetadata.cpp)
+target_link_libraries(test_projectmetadata rpgforge_core Qt6::Test)
+add_test(NAME project_metadata_test COMMAND test_projectmetadata)
+
+add_executable(test_treesnapshot tests/test_treesnapshot.cpp)
+target_link_libraries(test_treesnapshot rpgforge_core Qt6::Test)
+add_test(NAME tree_snapshot_test COMMAND test_treesnapshot)
+
 add_executable(test_lorekeeper_smoke tests/test_lorekeeper_smoke.cpp)
 target_link_libraries(test_lorekeeper_smoke rpgforge_core Qt6::Test)
 add_test(NAME lorekeeper_smoke_test COMMAND test_lorekeeper_smoke)
@@ -210,3 +273,30 @@ add_test(NAME lorekeeper_smoke_test COMMAND test_lorekeeper_smoke)
 add_executable(test_projecttreemodel tests/test_projecttreemodel.cpp)
 target_link_libraries(test_projecttreemodel rpgforge_core Qt6::Test)
 add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
+
+add_executable(test_fswatcher tests/test_fswatcher.cpp)
+target_link_libraries(test_fswatcher rpgforge_core Qt6::Test)
+add_test(NAME fs_watcher_test COMMAND test_fswatcher)
+
+# Explorations feature tests
+add_executable(test_gitservice tests/test_gitservice.cpp)
+target_link_libraries(test_gitservice rpgforge_core Qt6::Test)
+add_test(NAME git_service_test COMMAND test_gitservice)
+
+add_executable(test_explorationgraphview
+    tests/test_explorationgraphview.cpp
+    src/explorationsgraphview.cpp
+    src/explorationsgraphview.h
+)
+target_link_libraries(test_explorationgraphview rpgforge_core Qt6::Test Qt6::Widgets)
+add_test(NAME exploration_graph_view_test COMMAND test_explorationgraphview)
+set_tests_properties(exploration_graph_view_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_unsavedchangesdialog
+    tests/test_unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.h
+)
+target_link_libraries(test_unsavedchangesdialog rpgforge_core Qt6::Test Qt6::Widgets KF6::I18n)
+add_test(NAME unsaved_changes_dialog_test COMMAND test_unsavedchangesdialog)
+set_tests_properties(unsaved_changes_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

@@ -21,9 +21,9 @@
 
 #include <QScrollArea>
 
+#include "treenodesnapshot.h"
+
 class QGridLayout;
-class ProjectTreeModel;
-struct ProjectTreeItem;
 
 class CorkboardView : public QScrollArea
 {
@@ -33,7 +33,17 @@ public:
     explicit CorkboardView(QWidget *parent = nullptr);
     ~CorkboardView() override;
 
-    void setModel(ProjectTreeModel *model) { m_model = model; }
+    /**
+     * \brief Subscribe to ProjectManager's public signals and rebuild the
+     * corkboard whenever the tree changes.
+     *
+     * Replaces the old attachToProjectTree() pattern, which reached the
+     * private model via friended access. The view now consumes only
+     * snapshots (via folderSnapshot) and public signals. Call once after
+     * construction.
+     */
+    void subscribe();
+
     void setFolder(const QString &folderPath);
     QString currentFolderPath() const { return m_currentFolderPath; }
 
@@ -48,13 +58,14 @@ protected:
     void dropEvent(QDropEvent *event) override;
 
 private:
-    void clear();
-    void addCard(ProjectTreeItem *item);
+    void refresh();
+    void rebuildFromSnapshot();
+    void clearCards();
+    void addCard(const TreeNodeSnapshot &node);
     void updateDropIndicator(const QPoint &pos);
 
     QWidget *m_contentWidget = nullptr;
     QGridLayout *m_layout = nullptr;
-    ProjectTreeModel *m_model = nullptr;
     QString m_currentFolderPath;
     QWidget *m_dropIndicator = nullptr;
 };

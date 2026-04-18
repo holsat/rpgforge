@@ -21,6 +21,9 @@
 
 #include <QWidget>
 #include <QVector>
+#include <QMap>
+#include <QString>
+#include <QStringList>
 
 class KMultiTabBar;
 class QStackedWidget;
@@ -50,6 +53,17 @@ public:
     // Show a panel by ID (without toggling)
     void showPanel(int id);
 
+    // Returns the display names of all registered panels, in tab order.
+    QStringList panelNames() const;
+
+    // Returns the display name of the panel with the given ID, or an empty
+    // string if no such panel exists.
+    QString panelName(int id) const;
+
+    // Returns the ID of the panel with the given display name, or -1 if no
+    // such panel exists.
+    int panelIdFromName(const QString &name) const;
+
 Q_SIGNALS:
     void panelVisibilityChanged(int id, bool visible);
 
@@ -58,6 +72,7 @@ private:
     QStackedWidget *m_stack = nullptr;
     int m_currentId = -1;
     int m_nextId = 0;
+    QMap<int, QString> m_idToName;
 };
 
 #endif // SIDEBAR_H
