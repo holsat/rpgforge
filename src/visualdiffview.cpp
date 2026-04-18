@@ -28,28 +28,67 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QToolButton>
+#include <QToolBar>
+#include <QAction>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QUrl>
 #include <QMessageBox>
 
 VisualDiffView::VisualDiffView(QWidget *parent)
     : QWidget(parent)
 {
-    m_tempOld = QDir::tempPath() + QStringLiteral("/rpgforge_diff_old.md");
-    m_tempNew = QDir::tempPath() + QStringLiteral("/rpgforge_diff_new.md");
-    m_tempAncestor = QDir::tempPath() + QStringLiteral("/rpgforge_diff_ancestor.md");
-    m_tempOurs = QDir::tempPath() + QStringLiteral("/rpgforge_diff_ours.md");
-    m_tempTheirs = QDir::tempPath() + QStringLiteral("/rpgforge_diff_theirs.md");
+    m_scratchDir = std::make_unique<QTemporaryDir>(
+        QDir::tempPath() + QStringLiteral("/rpgforge_diff_XXXXXX"));
+    // The three-way conflict temps keep fixed names — they're semantically
+    // distinct (ancestor / ours / theirs), not real project files.
+    if (m_scratchDir->isValid()) {
+        m_tempAncestor = m_scratchDir->filePath(QStringLiteral("ancestor.md"));
+        m_tempOurs     = m_scratchDir->filePath(QStringLiteral("ours.md"));
+        m_tempTheirs   = m_scratchDir->filePath(QStringLiteral("theirs.md"));
+    }
     setupUi();
 }
 
 VisualDiffView::~VisualDiffView()
 {
-    for (const QString &path : {m_tempOld, m_tempNew, m_tempAncestor, m_tempOurs, m_tempTheirs}) {
-        if (!path.isEmpty() && QFile::exists(path))
-            QFile::remove(path);
+    // m_scratchDir's destructor removes the whole directory and its contents.
+}
+
+void VisualDiffView::allocateScratchPaths(const QString &oldSourceBasename,
+                                           const QString &newSourceBasename,
+                                           const QString &oldLabel,
+                                           const QString &newLabel)
+{
+    if (!m_scratchDir || !m_scratchDir->isValid()) {
+        m_tempOld = QDir::tempPath() + QStringLiteral("/rpgforge_diff_old.md");
+        m_tempNew = QDir::tempPath() + QStringLiteral("/rpgforge_diff_new.md");
+        return;
     }
+
+    // If the two source basenames differ, use them verbatim — that's the
+    // common case (comparing two distinct project files like Chapter_1.md
+    // vs Chapter_1_Conflicted_Copy.md) and Kompare will show each side's
+    // real filename in its header.
+    if (!oldSourceBasename.isEmpty()
+        && !newSourceBasename.isEmpty()
+        && oldSourceBasename != newSourceBasename) {
+        m_tempOld = m_scratchDir->filePath(oldSourceBasename);
+        m_tempNew = m_scratchDir->filePath(newSourceBasename);
+        return;
+    }
+
+    // Same source file, two versions (e.g. working copy vs commit). Prefix
+    // the basename with a label so the user can tell which side is which.
+    const QString base = !oldSourceBasename.isEmpty() ? oldSourceBasename : newSourceBasename;
+    const QString stem = QFileInfo(base).completeBaseName();
+    const QString suffix = QFileInfo(base).suffix();
+    const QString extPart = suffix.isEmpty() ? QString() : QStringLiteral(".") + suffix;
+    m_tempOld = m_scratchDir->filePath(
+        QStringLiteral("%1 (%2)%3").arg(stem, oldLabel, extPart));
+    m_tempNew = m_scratchDir->filePath(
+        QStringLiteral("%1 (%2)%3").arg(stem, newLabel, extPart));
 }
 
 void VisualDiffView::setupUi()
@@ -81,6 +120,14 @@ void VisualDiffView::setupUi()
     connect(swapBtn, &QToolButton::clicked, this, &VisualDiffView::swapDiff);
     toolbar->addWidget(swapBtn);
 
+    auto *closeBtn = new QToolButton(this);
+    closeBtn->setIcon(QIcon::fromTheme(QStringLiteral("window-close")));
+    closeBtn->setText(i18n("Close View"));
+    closeBtn->setToolTip(i18n("Close the diff view and return to the editor"));
+    closeBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    connect(closeBtn, &QToolButton::clicked, this, &VisualDiffView::closeRequested);
+    toolbar->addWidget(closeBtn);
+
     toolbar->addStretch();
     
     auto *reloadBtn = new QToolButton(this);
@@ -101,12 +148,79 @@ void VisualDiffView::setupUi()
 
     loadKomparePart();
 
+    // Secondary toolbar dedicated to the Kompare KPart's own diff actions
+    // (Previous/Next Difference, Apply/Unapply, etc.). The main window's
+    // toolbar merges these via KXMLGUI but they fall off the right edge at
+    // typical window widths; this keeps them permanently visible.
+    m_kompareToolbar = new QToolBar(this);
+    m_kompareToolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_kompareToolbar->setMovable(false);
+    m_kompareToolbar->setFloatable(false);
+    layout->addWidget(m_kompareToolbar);
+    populateKompareToolbar();
+
     if (m_part && m_part->widget()) {
         layout->addWidget(m_part->widget(), 1);
     } else {
         auto *errorLabel = new QLabel(i18n("Could not load Kompare plugin. Ensure 'kompare' is installed."), this);
         errorLabel->setAlignment(Qt::AlignCenter);
         layout->addWidget(errorLabel, 1);
+    }
+}
+
+void VisualDiffView::populateKompareToolbar()
+{
+    if (!m_kompareToolbar) return;
+    m_kompareToolbar->clear();
+    if (!m_part) {
+        m_kompareToolbar->hide();
+        return;
+    }
+
+    KActionCollection *ac = m_part->actionCollection();
+    if (!ac) {
+        m_kompareToolbar->hide();
+        return;
+    }
+
+    // Kompare's action names differ across versions; rather than guessing,
+    // pull every action the KPart's collection exposes and add any that
+    // look diff-related. Filter out separators, invisible actions, and the
+    // catch-all file-management actions that would duplicate the host's.
+    const QList<QAction*> allActions = ac->actions();
+    bool addedAny = false;
+    for (QAction *action : allActions) {
+        if (!action) continue;
+        if (action->isSeparator()) continue;
+        if (!action->isVisible()) continue;
+        // Skip file open/close actions — those belong to the host window.
+        const QString objName = action->objectName();
+        if (objName == QLatin1String("file_open")
+            || objName == QLatin1String("file_close")
+            || objName == QLatin1String("file_save_as")
+            || objName == QLatin1String("file_quit")) {
+            continue;
+        }
+        m_kompareToolbar->addAction(action);
+        addedAny = true;
+    }
+
+    m_kompareToolbar->setVisible(addedAny);
+    if (!addedAny) {
+        qDebug() << "VisualDiffView: Kompare KPart action collection is empty at this time;"
+                 << "will retry on next show.";
+    }
+}
+
+void VisualDiffView::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    // The Kompare KPart's action collection may populate lazily — e.g. only
+    // after the part has been added as a KXMLGUI client, which MainWindow
+    // does when the diff view becomes active. Re-populate on show to catch
+    // those actions without requiring a manual rebuild step.
+    if (m_kompareToolbar && m_kompareToolbar->actions().isEmpty()) {
+        populateKompareToolbar();
     }
 }
 
@@ -131,8 +245,15 @@ void VisualDiffView::setDiff(const QString &filePath, const QString &oldHash, co
 
     if (!m_kompareInterface) return;
 
+    // Same source file, two versions: label the temp files with the short
+    // commit hash (or "working copy") so Kompare's header disambiguates them.
+    const QString base = QFileInfo(filePath).fileName();
+    const QString oldLabel = oldHash.left(7);
+    const QString newLabel = newHash.isEmpty() ? i18n("working copy") : newHash.left(7);
+    allocateScratchPaths(base, base, oldLabel, newLabel);
+
     auto oldFuture = GitService::instance().extractVersion(filePath, oldHash, m_tempOld);
-    
+
     oldFuture.then(this, [this, filePath, newHash](bool success) {
         if (!success) return;
 
@@ -160,17 +281,24 @@ void VisualDiffView::setFiles(const QString &file1, const QString &file2)
     m_file1 = file1;
     m_file2 = file2;
     m_filePath.clear();
-    
-    if (m_kompareInterface) {
-        if (QFile::exists(m_tempOld)) QFile::remove(m_tempOld);
-        if (QFile::exists(m_tempNew)) QFile::remove(m_tempNew);
-        QFile::copy(file1, m_tempOld);
-        QFile::copy(file2, m_tempNew);
-        QFile(m_tempOld).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-        QFile(m_tempNew).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 
-        m_kompareInterface->compareFiles(QUrl::fromLocalFile(m_tempOld), QUrl::fromLocalFile(m_tempNew));
-    }
+    if (!m_kompareInterface) return;
+
+    // Two distinct project files — preserve their real basenames so the
+    // Kompare header shows them verbatim (e.g. "Chapter_1.md" on one side,
+    // "Chapter_1_Conflicted_Copy.md" on the other).
+    const QString base1 = QFileInfo(file1).fileName();
+    const QString base2 = QFileInfo(file2).fileName();
+    allocateScratchPaths(base1, base2, i18n("original"), i18n("changed"));
+
+    if (QFile::exists(m_tempOld)) QFile::remove(m_tempOld);
+    if (QFile::exists(m_tempNew)) QFile::remove(m_tempNew);
+    QFile::copy(file1, m_tempOld);
+    QFile::copy(file2, m_tempNew);
+    QFile(m_tempOld).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    QFile(m_tempNew).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+
+    m_kompareInterface->compareFiles(QUrl::fromLocalFile(m_tempOld), QUrl::fromLocalFile(m_tempNew));
 }
 
 void VisualDiffView::swapDiff()

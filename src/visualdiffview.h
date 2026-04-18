@@ -21,9 +21,12 @@
 
 #include <QWidget>
 #include <QString>
+#include <QTemporaryDir>
+#include <memory>
 #include <KParts/ReadWritePart>
 
 class KompareInterface;
+class QToolBar;
 
 class VisualDiffView : public QWidget
 {
@@ -63,6 +66,10 @@ public:
 Q_SIGNALS:
     void saveRequested(const QString &filePath);
     void reloadRequested(const QString &filePath);
+    void closeRequested();
+
+protected:
+    void showEvent(QShowEvent *event) override;
 
 private Q_SLOTS:
     void saveChanges();
@@ -83,6 +90,28 @@ private:
     QString m_tempOurs;
     QString m_tempTheirs;
     bool m_swapped = false;
+
+    // Per-instance scratch directory so Kompare sees real filenames in its
+    // header (e.g. "Chapter_1.md" instead of "rpgforge_diff_old.md"). Auto-
+    // cleaned on destruction.
+    std::unique_ptr<QTemporaryDir> m_scratchDir;
+
+    // Dedicated toolbar for the Kompare KPart's own navigation actions
+    // (Previous/Next Difference, Unapply All, etc.) so they remain visible
+    // even when the main window toolbar runs out of horizontal space.
+    QToolBar *m_kompareToolbar = nullptr;
+
+    // Recompute m_tempOld / m_tempNew paths inside m_scratchDir using the
+    // supplied source basenames. oldLabel / newLabel are prefixes added only
+    // when the two source basenames collide (e.g. same file, two versions).
+    void allocateScratchPaths(const QString &oldSourceBasename,
+                              const QString &newSourceBasename,
+                              const QString &oldLabel,
+                              const QString &newLabel);
+
+    // Populate m_kompareToolbar with actions from the KPart's action
+    // collection. Safe to call multiple times.
+    void populateKompareToolbar();
 
     KParts::ReadWritePart *m_part = nullptr;
     KompareInterface *m_kompareInterface = nullptr;

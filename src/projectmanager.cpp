@@ -742,7 +742,12 @@ bool ProjectManager::renameItem(const QString &path, const QString &newName)
 
     const QString oldPathSaved = item->path;
     const QModelIndex idx = m_treeModel->indexForItem(item);
-    if (!m_treeModel->setData(idx, newName, Qt::EditRole)) {
+    // Arm the re-entry guard so setData(EditRole) just updates the name
+    // instead of routing back through this function.
+    m_treeModel->m_inPmRename = true;
+    const bool setOk = m_treeModel->setData(idx, newName, Qt::EditRole);
+    m_treeModel->m_inPmRename = false;
+    if (!setOk) {
         // Rollback: undo the disk rename if we made one.
         if (onDiskRenameNeeded && oldFi.exists()) {
             QDir(parentAbsDir).rename(newBasename, oldBasename);
