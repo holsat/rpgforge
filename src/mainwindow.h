@@ -62,6 +62,7 @@ class QLineEdit;
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "gitservice.h"
+#include "reconciliationtypes.h"
 
 class MainWindow : public KXmlGuiWindow
 {
@@ -129,6 +130,16 @@ private Q_SLOTS:
     void onIntegrateFailed();
     void showNextConflict();
     void onVersionSelected(const QString &filePath, const QString &commitHash);
+
+    /**
+     * @brief Show the reconciliation dialog in response to
+     *        ProjectManager::reconciliationRequired.
+     *
+     * Populates a ReconciliationDialog with the supplied entries. If the
+     * user applies, the entries' user-chosen actions are forwarded to
+     * ProjectManager inside a beginBatch()/endBatch() window.
+     */
+    void showReconciliationDialog(const QList<ReconciliationEntry> &entries);
 
 public:
     KTextEditor::Document* editorDocument() const { return m_document; }
@@ -200,6 +211,16 @@ private:
     void restoreSession();
     void showCentralView(QWidget *widget);
     void insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &items);
+
+    /**
+     * @brief Forward a user-confirmed reconciliation entry to ProjectManager.
+     *
+     * Called by showReconciliationDialog() for each row the user applied. The
+     * caller wraps the whole batch in ProjectManager::beginBatch/endBatch so
+     * there is exactly one save and one treeStructureChanged emission at the
+     * end.
+     */
+    void applyReconciliationEntry(const ReconciliationEntry &entry);
 
     KTextEditor::Editor *m_editor = nullptr;
     KTextEditor::Document *m_document = nullptr;

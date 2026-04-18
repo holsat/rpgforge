@@ -56,6 +56,7 @@ add_library(rpgforge_core STATIC
     src/projectmanager.h
     src/projectmetadata.cpp
     src/projectmetadata.h
+    src/reconciliationtypes.h
     src/treenodesnapshot.cpp
     src/treenodesnapshot.h
     src/projecttreemodel.cpp
@@ -170,6 +171,8 @@ add_executable(rpgforge
     src/projectsettingsdialog.h
     src/projecttreepanel.cpp
     src/projecttreepanel.h
+    src/reconciliationdialog.cpp
+    src/reconciliationdialog.h
     src/metadatadialog.cpp
     src/metadatadialog.h
     src/problemspanel.cpp
@@ -246,6 +249,10 @@ add_test(NAME project_manager_test COMMAND test_projectmanager)
 add_executable(test_projectmanager_mutations tests/test_projectmanager_mutations.cpp)
 target_link_libraries(test_projectmanager_mutations rpgforge_core Qt6::Test)
 add_test(NAME project_manager_mutations_test COMMAND test_projectmanager_mutations)
+
+add_executable(test_reconciliation tests/test_reconciliation.cpp)
+target_link_libraries(test_reconciliation rpgforge_core Qt6::Test)
+add_test(NAME reconciliation_test COMMAND test_reconciliation)
 
 add_executable(test_projectmetadata tests/test_projectmetadata.cpp)
 target_link_libraries(test_projectmetadata rpgforge_core Qt6::Test)

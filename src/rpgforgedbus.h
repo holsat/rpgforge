@@ -24,6 +24,8 @@
 #include <QStringList>
 #include <QVariantList>
 
+#include "reconciliationtypes.h"
+
 class MainWindow;
 
 /**
@@ -159,6 +161,24 @@ public Q_SLOTS:
     /** \brief Remove the item at \a path from both tree and disk. */
     bool removeItemAt(const QString &path);
 
+    // ---------------- Reconciliation (Phase 4) ----------------
+    /** \brief Last-emitted ReconciliationRequired payload as a list of
+     *  QVariantMap with keys: path, displayName, category, type, action,
+     *  resolvedPath, suggestedPath. Empty list when no reconciliation is
+     *  pending or no project is open. */
+    QVariantList pendingReconciliation();
+
+    /** \brief Drive a Locate action for \a oldPath using \a newPath. Bypasses
+     *  the dialog for scripted runs. Returns the ProjectManager result. */
+    bool applyReconciliationLocate(const QString &oldPath, const QString &newPath);
+
+    /** \brief Drive a Remove action for \a oldPath. Bypasses the dialog. */
+    bool applyReconciliationRemove(const QString &oldPath);
+
+    /** \brief Drive a RecreateEmpty action for \a oldPath. Creates an empty
+     *  file at the path on disk if it does not already exist. */
+    bool applyReconciliationRecreate(const QString &oldPath);
+
     // ---------------- Explorations / Git queries ----------------
     /** \brief Returns names of all explorations (branches). */
     QStringList explorationNames() const;
@@ -259,6 +279,7 @@ public Q_SLOTS:
 
 private:
     MainWindow *m_window;
+    QList<ReconciliationEntry> m_pendingReconciliation;
 };
 
 #endif // RPGFORGEDBUS_H

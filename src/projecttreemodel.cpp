@@ -29,6 +29,75 @@
 #include <QDebug>
 #include <KLocalizedString>
 
+// Shared on-disk resolver used by both ProjectManager::validateTree() and
+// ProjectTreePanel's click handlers. See header for strategy documentation.
+QString tryResolveOnDisk(const QDir &projectDir, const QString &relativePath)
+{
+    if (relativePath.isEmpty()) return QString();
+    if (!projectDir.exists()) return QString();
+
+    static const QStringList kExts = {
+        QStringLiteral(""),        // path as-is, in case it's already a file
+        QStringLiteral(".md"),
+        QStringLiteral(".markdown"),
+        QStringLiteral(".mkd"),
+        QStringLiteral(".txt"),
+        QStringLiteral(".rtf")
+    };
+
+    // Path variants: as-is, and with spaces translated to underscores
+    // (Scrivener-imported projects often display underscored filenames as
+    // spaces, while the on-disk file keeps the underscore).
+    QStringList pathVariants{relativePath};
+    if (relativePath.contains(QLatin1Char(' '))) {
+        pathVariants.append(QString(relativePath).replace(QLatin1Char(' '), QLatin1Char('_')));
+    }
+
+    // Strategy 1: exact path + extension variants
+    for (const QString &basePath : std::as_const(pathVariants)) {
+        for (const QString &ext : kExts) {
+            const QString candidate = basePath + ext;
+            const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+            if (fi.exists() && fi.isFile()) return candidate;
+        }
+    }
+
+    // Strategy 2: nested-leaf pattern, e.g. path "A/B" -> "A/B/B.md"
+    for (const QString &basePath : std::as_const(pathVariants)) {
+        const QString leaf = QFileInfo(basePath).fileName();
+        if (leaf.isEmpty()) continue;
+        for (const QString &ext : kExts) {
+            if (ext.isEmpty()) continue;
+            const QString candidate = basePath + QLatin1Char('/') + leaf + ext;
+            const QFileInfo fi(projectDir.absoluteFilePath(candidate));
+            if (fi.exists() && fi.isFile()) return candidate;
+        }
+    }
+
+    // Strategy 3: parent-directory scan, space/underscore and case tolerant.
+    auto normaliseForCompare = [](QString s) {
+        s.replace(QLatin1Char('_'), QLatin1Char(' '));
+        return s.toLower();
+    };
+
+    for (const QString &basePath : std::as_const(pathVariants)) {
+        const QFileInfo expected(projectDir.absoluteFilePath(basePath));
+        const QDir parent = expected.dir();
+        if (!parent.exists()) continue;
+        const QString leafNorm = normaliseForCompare(expected.fileName());
+        const QFileInfoList entries = parent.entryInfoList(QDir::Files);
+        for (const QFileInfo &entry : entries) {
+            const QString stemNorm = normaliseForCompare(entry.completeBaseName());
+            const QString fullNorm = normaliseForCompare(entry.fileName());
+            if (stemNorm == leafNorm || fullNorm == leafNorm) {
+                return projectDir.relativeFilePath(entry.absoluteFilePath());
+            }
+        }
+    }
+
+    return QString();
+}
+
 ProjectTreeItem::Category ProjectTreeModel::categoryForPath(const QString &relativePath)
 {
     if (relativePath.isEmpty()) return ProjectTreeItem::None;

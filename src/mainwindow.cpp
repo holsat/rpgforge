@@ -38,6 +38,7 @@
 #include "variablecompletionmodel.h"
 #include "projectmanager.h"
 #include "projectsettingsdialog.h"
+#include "reconciliationdialog.h"
 #include "settingsdialog.h"
 #include "chatpanel.h"
 #include "simulationpanel.h"
@@ -756,6 +757,12 @@ void MainWindow::setupSidebar()
         updateProjectStats();
         KnowledgeBase::instance().reindexProject();
     });
+
+    // Reconciliation: ProjectManager emits this when validateTree() finds tree
+    // entries whose backing files are missing on disk. Show the batch dialog
+    // so the user can Locate / Remove / Recreate each missing entry.
+    connect(&ProjectManager::instance(), &ProjectManager::reconciliationRequired,
+            this, &MainWindow::showReconciliationDialog);
 
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
         // Save exploration data before closing
@@ -2732,4 +2739,99 @@ QList<int> MainWindow::conflictProgress() const
 void MainWindow::invokeVersionRecall(const QString &filePath, const QString &commitHash)
 {
     onVersionSelected(filePath, commitHash);
+}
+
+void MainWindow::showReconciliationDialog(const QList<ReconciliationEntry> &entries)
+{
+    if (entries.isEmpty()) return;
+
+    ReconciliationDialog dlg(entries, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    const QList<ReconciliationEntry> applied = dlg.entries();
+    ProjectManager &pm = ProjectManager::instance();
+    pm.beginBatch();
+    for (const ReconciliationEntry &entry : applied) {
+        applyReconciliationEntry(entry);
+    }
+    pm.endBatch();
+}
+
+void MainWindow::applyReconciliationEntry(const ReconciliationEntry &entry)
+{
+    ProjectManager &pm = ProjectManager::instance();
+    if (!pm.isProjectOpen()) return;
+
+    switch (entry.action) {
+    case ReconciliationEntry::None:
+        // User left this row unresolved — nothing to do.
+        break;
+
+    case ReconciliationEntry::Locate: {
+        if (entry.resolvedPath.isEmpty() || entry.resolvedPath == entry.path) {
+            qDebug() << "MainWindow::applyReconciliationEntry: Locate with no change for"
+                     << entry.path;
+            break;
+        }
+        // Compute whether the parent directory changed. If so we need a
+        // move + (possibly) a rename. Otherwise a pure rename suffices.
+        const QString oldParent = QFileInfo(entry.path).path();
+        const QString newParent = QFileInfo(entry.resolvedPath).path();
+        const QString newBasename = QFileInfo(entry.resolvedPath).fileName();
+
+        if (oldParent == newParent) {
+            // Same parent — rename-only.
+            if (!pm.renameItem(entry.path, newBasename)) {
+                qWarning() << "MainWindow::applyReconciliationEntry: rename failed for"
+                           << entry.path << "->" << newBasename;
+            }
+        } else {
+            // Different parent — move, then rename if the basename also changed.
+            const QString sourceBasename = QFileInfo(entry.path).fileName();
+            if (!pm.moveItem(entry.path, newParent)) {
+                qWarning() << "MainWindow::applyReconciliationEntry: move failed for"
+                           << entry.path << "->" << newParent;
+                break;
+            }
+            if (sourceBasename != newBasename) {
+                const QString movedPath = newParent.isEmpty()
+                    ? sourceBasename
+                    : (newParent + QLatin1Char('/') + sourceBasename);
+                if (!pm.renameItem(movedPath, newBasename)) {
+                    qWarning() << "MainWindow::applyReconciliationEntry: rename after move failed for"
+                               << movedPath << "->" << newBasename;
+                }
+            }
+        }
+        break;
+    }
+
+    case ReconciliationEntry::Remove:
+        if (!pm.removeItem(entry.path)) {
+            qWarning() << "MainWindow::applyReconciliationEntry: remove failed for"
+                       << entry.path;
+        }
+        break;
+
+    case ReconciliationEntry::RecreateEmpty: {
+        const QString absPath = QDir(pm.projectPath()).absoluteFilePath(entry.path);
+        QFileInfo fi(absPath);
+        if (!fi.exists()) {
+            if (!QDir().mkpath(fi.absolutePath())) {
+                qWarning() << "MainWindow::applyReconciliationEntry: mkpath failed for"
+                           << fi.absolutePath();
+                break;
+            }
+            QFile f(absPath);
+            if (!f.open(QIODevice::WriteOnly)) {
+                qWarning() << "MainWindow::applyReconciliationEntry: failed to create"
+                           << absPath;
+                break;
+            }
+            f.close();
+            qDebug() << "MainWindow::applyReconciliationEntry: recreated empty file at" << absPath;
+        }
+        break;
+    }
+    }
 }

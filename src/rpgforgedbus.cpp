@@ -57,6 +57,19 @@ RpgForgeDBus::RpgForgeDBus(MainWindow *window)
     , m_window(window)
 {
     setAutoRelaySignals(false);
+
+    // Cache the last reconciliationRequired payload so scripted tests can
+    // read it via pendingReconciliation() without racing the UI dialog.
+    QObject::connect(&ProjectManager::instance(),
+                     &ProjectManager::reconciliationRequired,
+                     this,
+                     [this](const QList<ReconciliationEntry> &entries) {
+        m_pendingReconciliation = entries;
+    });
+    QObject::connect(&ProjectManager::instance(),
+                     &ProjectManager::projectClosed,
+                     this,
+                     [this]() { m_pendingReconciliation.clear(); });
 }
 
 // -------- Application lifecycle --------
@@ -400,6 +413,70 @@ bool RpgForgeDBus::removeItemAt(const QString &path)
 {
     if (!projectOpen()) return false;
     return ProjectManager::instance().removeItem(path);
+}
+
+// -------- Reconciliation (Phase 4) --------
+
+QVariantList RpgForgeDBus::pendingReconciliation()
+{
+    QVariantList out;
+    out.reserve(m_pendingReconciliation.size());
+    for (const ReconciliationEntry &e : m_pendingReconciliation) {
+        QVariantMap m;
+        m.insert(QStringLiteral("path"), e.path);
+        m.insert(QStringLiteral("displayName"), e.displayName);
+        m.insert(QStringLiteral("category"), e.category);
+        m.insert(QStringLiteral("type"), e.type);
+        m.insert(QStringLiteral("action"), static_cast<int>(e.action));
+        m.insert(QStringLiteral("resolvedPath"), e.resolvedPath);
+        m.insert(QStringLiteral("suggestedPath"), e.suggestedPath);
+        out.append(m);
+    }
+    return out;
+}
+
+bool RpgForgeDBus::applyReconciliationLocate(const QString &oldPath, const QString &newPath)
+{
+    if (!projectOpen()) return false;
+    if (oldPath.isEmpty() || newPath.isEmpty()) return false;
+    if (oldPath == newPath) return true; // no-op
+
+    ProjectManager &pm = ProjectManager::instance();
+    const QString oldParent = QFileInfo(oldPath).path();
+    const QString newParent = QFileInfo(newPath).path();
+    const QString newBasename = QFileInfo(newPath).fileName();
+
+    if (oldParent == newParent) {
+        return pm.renameItem(oldPath, newBasename);
+    }
+
+    const QString sourceBasename = QFileInfo(oldPath).fileName();
+    if (!pm.moveItem(oldPath, newParent)) return false;
+    if (sourceBasename == newBasename) return true;
+
+    const QString movedPath = newParent.isEmpty()
+        ? sourceBasename
+        : (newParent + QLatin1Char('/') + sourceBasename);
+    return pm.renameItem(movedPath, newBasename);
+}
+
+bool RpgForgeDBus::applyReconciliationRemove(const QString &oldPath)
+{
+    if (!projectOpen()) return false;
+    return ProjectManager::instance().removeItem(oldPath);
+}
+
+bool RpgForgeDBus::applyReconciliationRecreate(const QString &oldPath)
+{
+    if (!projectOpen()) return false;
+    const QString absPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(oldPath);
+    QFileInfo fi(absPath);
+    if (fi.exists()) return true;
+    if (!QDir().mkpath(fi.absolutePath())) return false;
+    QFile f(absPath);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    f.close();
+    return true;
 }
 
 // -------- Explorations / Git queries --------

@@ -29,6 +29,7 @@
 #include <optional>
 
 #include "projectmetadata.h"
+#include "reconciliationtypes.h"
 #include "treenodesnapshot.h"
 
 class ProjectTreeModel;
@@ -240,6 +241,17 @@ Q_SIGNALS:
      */
     void treeItemDataChanged(const QList<int> &roles);
 
+    /**
+     * \brief Fires when validateTree() discovers tree entries pointing at
+     *        paths that can't be resolved on disk.
+     *
+     * Payload is one entry per missing node. Each entry may carry a
+     * fuzzy-matched \c suggestedPath. MainWindow handles this by opening a
+     * ReconciliationDialog; scripted / headless runs can consume it via
+     * the RpgForgeDBus::pendingReconciliation() accessor.
+     */
+    void reconciliationRequired(const QList<ReconciliationEntry> &entries);
+
 public Q_SLOTS:
     void requestTreeUpdate(const QString &category, const QString &entityName, const QString &relativePath);
 
@@ -319,8 +331,29 @@ public Q_SLOTS:
      *  - Set canonical paths for the three authoritative top-level folders
      *  - Create the three authoritative folders (Manuscript / LoreKeeper /
      *    Research) on tree AND disk if they are not already present
+     *  - Scan all File / leaf-Folder nodes for missing on-disk paths. Any
+     *    that cannot be auto-healed are collected into a
+     *    ReconciliationEntry list and emitted via reconciliationRequired().
      */
     void validateTree();
+
+    /**
+     * \brief Begin a batch of mutations.
+     *
+     * While a batch is open, saveProject() is deferred (mutations still
+     * update tree + disk) and the batched save is flushed once by endBatch().
+     * Nestable via a counter; the outermost endBatch() triggers the save +
+     * a single treeStructureChanged emission.
+     */
+    void beginBatch();
+
+    /**
+     * \brief End a batch of mutations.
+     *
+     * If this is the outermost endBatch() call and at least one save was
+     * deferred, saveProject() runs and treeStructureChanged is emitted once.
+     */
+    void endBatch();
 
 private Q_SLOTS:
     void processTreeUpdateQueue();
@@ -345,6 +378,17 @@ private:
     QTimer *m_treeUpdateTimer;
     QQueue<TreeUpdateRequest> m_treeUpdateQueue;
     QMutex m_queueMutex;
+
+    // Batch state: beginBatch()/endBatch() defer saveProject() across many
+    // mutations. A non-zero m_batchDepth counts nested opens; mutation paths
+    // call maybeSaveAfterMutation() which becomes a no-op while a batch is
+    // open and sets m_batchPendingSave = true for the eventual flush.
+    int m_batchDepth = 0;
+    bool m_batchPendingSave = false;
+
+    // Internal helper: save now if no batch is open, otherwise remember to
+    // save when the outermost endBatch() runs.
+    bool maybeSaveAfterMutation();
 };
 
 #endif // PROJECTMANAGER_H

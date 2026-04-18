@@ -533,18 +533,11 @@ void ProjectTreePanel::updateExplorationList()
     m_explorationCombo->blockSignals(false);
 }
 
-// If `item` is typed as Folder but is a leaf whose path resolves to a real
-// file on disk (with or without a markdown suffix), return the path that
-// resolves; otherwise return an empty string. This compensates for legacy /
-// Scrivener-imported tree entries where documents were recorded as
+// Thin wrapper around tryResolveOnDisk() shared with ProjectManager::validateTree.
+// Returns the on-disk relative path a leaf Folder-typed item should really be
+// pointing at, or an empty string if none can be found. Compensates for
+// legacy / Scrivener-imported tree entries where documents were recorded as
 // extensionless Folder nodes.
-//
-// Resolution strategy (in order):
-//   1. exact path with each known extension appended
-//   2. exact path + nested-leaf pattern (e.g. "X/X.md", common after
-//      Scrivener export where each document is a folder containing one file)
-//   3. directory scan of the path's parent for any file whose stem matches
-//      the item's leaf name (case-insensitive)
 static QString resolveFolderItemAsFile(const ProjectTreeItem *item)
 {
     if (!item) return QString();
@@ -553,67 +546,7 @@ static QString resolveFolderItemAsFile(const ProjectTreeItem *item)
     if (!ProjectManager::instance().isProjectOpen()) return QString();
 
     const QDir projectDir(ProjectManager::instance().projectPath());
-    static const QStringList kExts = {
-        QStringLiteral(""),         // path as-is, in case it's already a file
-        QStringLiteral(".md"),
-        QStringLiteral(".markdown"),
-        QStringLiteral(".mkd"),
-        QStringLiteral(".txt"),
-        QStringLiteral(".rtf")
-    };
-
-    // Build path variants: as-is, and with spaces translated to underscores
-    // (Scrivener-imported projects often display underscored filenames as
-    // spaces, while the on-disk file keeps the underscore).
-    QStringList pathVariants{item->path};
-    if (item->path.contains(QLatin1Char(' '))) {
-        pathVariants.append(QString(item->path).replace(QLatin1Char(' '), QLatin1Char('_')));
-    }
-
-    // Strategy 1: exact path + extension variants (each path variant)
-    for (const QString &basePath : std::as_const(pathVariants)) {
-        for (const QString &ext : kExts) {
-            const QString candidate = basePath + ext;
-            const QFileInfo fi(projectDir.absoluteFilePath(candidate));
-            if (fi.exists() && fi.isFile()) return candidate;
-        }
-    }
-
-    // Strategy 2: nested-leaf pattern, e.g. path "A/B" maps to "A/B/B.md"
-    for (const QString &basePath : std::as_const(pathVariants)) {
-        const QString leaf = QFileInfo(basePath).fileName();
-        if (leaf.isEmpty()) continue;
-        for (const QString &ext : kExts) {
-            if (ext.isEmpty()) continue;
-            const QString candidate = basePath + QLatin1Char('/') + leaf + ext;
-            const QFileInfo fi(projectDir.absoluteFilePath(candidate));
-            if (fi.exists() && fi.isFile()) return candidate;
-        }
-    }
-
-    // Strategy 3: scan parent directory for file whose stem matches the
-    // leaf name with space/underscore tolerance and case-insensitively.
-    auto normaliseForCompare = [](QString s) {
-        s.replace(QLatin1Char('_'), QLatin1Char(' '));
-        return s.toLower();
-    };
-
-    for (const QString &basePath : std::as_const(pathVariants)) {
-        const QFileInfo expected(projectDir.absoluteFilePath(basePath));
-        const QDir parent = expected.dir();
-        if (!parent.exists()) continue;
-        const QString leafNorm = normaliseForCompare(expected.fileName());
-        const QFileInfoList entries = parent.entryInfoList(QDir::Files);
-        for (const QFileInfo &entry : entries) {
-            const QString stemNorm = normaliseForCompare(entry.completeBaseName());
-            const QString fullNorm = normaliseForCompare(entry.fileName());
-            if (stemNorm == leafNorm || fullNorm == leafNorm) {
-                return projectDir.relativeFilePath(entry.absoluteFilePath());
-            }
-        }
-    }
-
-    return QString();
+    return tryResolveOnDisk(projectDir, item->path);
 }
 
 void ProjectTreePanel::onItemClicked(const QModelIndex &index)

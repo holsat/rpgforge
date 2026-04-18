@@ -24,6 +24,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QMetaType>
 #include <QDebug>
 #include <KLocalizedString>
 #include <QtConcurrent/QtConcurrent>
@@ -37,6 +38,11 @@ ProjectManager& ProjectManager::instance()
 ProjectManager::ProjectManager(QObject *parent)
     : QObject(parent)
 {
+    // Ensure queued connections and QVariant use across the
+    // reconciliationRequired signal work out of the box.
+    qRegisterMetaType<ReconciliationEntry>("ReconciliationEntry");
+    qRegisterMetaType<QList<ReconciliationEntry>>("QList<ReconciliationEntry>");
+
     m_treeModel = new ProjectTreeModel(this);
     m_treeUpdateTimer = new QTimer(this);
     m_treeUpdateTimer->setSingleShot(true);
@@ -347,7 +353,7 @@ bool ProjectManager::addFile(const QString &name, const QString &relativePath, c
         return false;
     }
 
-    return saveProject();
+    return maybeSaveAfterMutation();
 }
 
 bool ProjectManager::addFolder(const QString &name, const QString &relativePath, const QString &parentPath)
@@ -393,7 +399,7 @@ bool ProjectManager::addFolder(const QString &name, const QString &relativePath,
         return false;
     }
 
-    return saveProject();
+    return maybeSaveAfterMutation();
 }
 
 bool ProjectManager::moveItem(const QString &sourcePath, const QString &targetParentPath)
@@ -460,7 +466,7 @@ bool ProjectManager::removeItem(const QString &path)
         return false;
     }
 
-    return saveProject();
+    return maybeSaveAfterMutation();
 }
 
 bool ProjectManager::renameItem(const QString &path, const QString &newName)
@@ -526,7 +532,7 @@ bool ProjectManager::renameItem(const QString &path, const QString &newName)
         m_treeModel->updatePathsAfterMoveOrRename(item, oldPathSaved, newRelPath);
     }
 
-    return saveProject();
+    return maybeSaveAfterMutation();
 }
 
 ProjectTreeItem* ProjectManager::findItem(const QString &path) const
@@ -545,6 +551,34 @@ bool ProjectManager::setNodeSynopsis(const QString &relativePath, const QString 
     if (!m_treeModel->setData(idx, synopsis, ProjectTreeModel::SynopsisRole)) return false;
     saveProject();
     return true;
+}
+
+void ProjectManager::beginBatch()
+{
+    ++m_batchDepth;
+}
+
+void ProjectManager::endBatch()
+{
+    if (m_batchDepth <= 0) {
+        qWarning() << "ProjectManager::endBatch: called with no open batch — ignoring";
+        return;
+    }
+    --m_batchDepth;
+    if (m_batchDepth == 0 && m_batchPendingSave) {
+        m_batchPendingSave = false;
+        saveProject();
+        Q_EMIT treeStructureChanged();
+    }
+}
+
+bool ProjectManager::maybeSaveAfterMutation()
+{
+    if (m_batchDepth > 0) {
+        m_batchPendingSave = true;
+        return true;
+    }
+    return saveProject();
 }
 
 TreeNodeSnapshot ProjectManager::treeSnapshot() const
@@ -1004,7 +1038,7 @@ bool ProjectManager::moveItem(const QString &draggedPath,
         m_treeModel->updatePathsAfterMoveOrRename(dragged, oldPathSaved, newRelPath);
     }
 
-    saveProject();
+    maybeSaveAfterMutation();
     return true;
 }
 
@@ -1013,6 +1047,7 @@ void ProjectManager::validateTree()
     if (!m_treeModel || !m_treeModel->rootItem()) return;
 
     bool changed = false;
+    QList<ReconciliationEntry> reconciliation;
 
     static const QStringList fileSuffixes = {
         QStringLiteral("md"), QStringLiteral("markdown"), QStringLiteral("mkd"),
@@ -1022,6 +1057,20 @@ void ProjectManager::validateTree()
         QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
         QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
         QStringLiteral("bmp"), QStringLiteral("pdf")
+    };
+
+    const QDir projectDir(projectPath());
+    const bool haveProjectDir = !m_projectFilePath.isEmpty() && projectDir.exists();
+
+    // Helper: build a ReconciliationEntry for a missing File/leaf-Folder node.
+    auto makeEntry = [](const ProjectTreeItem *item, const QString &suggestion) {
+        ReconciliationEntry e;
+        e.path = item->path;
+        e.displayName = item->name;
+        e.category = static_cast<int>(item->category);
+        e.type = static_cast<int>(item->type);
+        e.suggestedPath = suggestion;
+        return e;
     };
 
     std::function<void(ProjectTreeItem*)> validate = [&](ProjectTreeItem *item) {
@@ -1041,87 +1090,59 @@ void ProjectManager::validateTree()
         // disk should be a File. Scrivener-imported projects often record
         // documents as extensionless Folder entries — the on-disk file lives
         // alongside with a .md/.markdown/.rtf suffix, or in a nested-leaf
-        // pattern (e.g. path "A/B" with the file at "A/B/B.md"). Without this
-        // correction the tree click handler treats the item as a folder and
-        // never opens it. Mirrors resolveFolderItemAsFile() in projecttreepanel.cpp.
+        // pattern (e.g. path "A/B" with the file at "A/B/B.md").
+        //
+        // Auto-heal is limited to the low-risk extension-only case (same
+        // basename, different extension). Any resolution that changes the
+        // basename or the parent directory is instead surfaced to the user
+        // via reconciliationRequired so they can confirm or override.
         if (item->type == ProjectTreeItem::Folder
             && !item->path.isEmpty()
             && item->children.isEmpty()
-            && !m_projectFilePath.isEmpty())
+            && haveProjectDir)
         {
-            const QDir projectDir(projectPath());
-            static const QStringList kExts = {
-                QStringLiteral(""),
-                QStringLiteral(".md"),
-                QStringLiteral(".markdown"),
-                QStringLiteral(".mkd"),
-                QStringLiteral(".txt"),
-                QStringLiteral(".rtf")
-            };
-
-            QString resolved;
-
-            // Build path variants: as-is and with spaces -> underscores.
-            QStringList pathVariants{item->path};
-            if (item->path.contains(QLatin1Char(' '))) {
-                pathVariants.append(QString(item->path).replace(QLatin1Char(' '), QLatin1Char('_')));
-            }
-
-            // Strategy 1: exact path + extension variants
-            for (const QString &basePath : std::as_const(pathVariants)) {
-                if (!resolved.isEmpty()) break;
-                for (const QString &ext : kExts) {
-                    const QString candidate = basePath + ext;
-                    const QFileInfo fi(projectDir.absoluteFilePath(candidate));
-                    if (fi.exists() && fi.isFile()) { resolved = candidate; break; }
-                }
-            }
-
-            // Strategy 2: nested-leaf pattern
-            if (resolved.isEmpty()) {
-                for (const QString &basePath : std::as_const(pathVariants)) {
-                    if (!resolved.isEmpty()) break;
-                    const QString leaf = QFileInfo(basePath).fileName();
-                    if (leaf.isEmpty()) continue;
-                    for (const QString &ext : kExts) {
-                        if (ext.isEmpty()) continue;
-                        const QString candidate = basePath + QLatin1Char('/') + leaf + ext;
-                        const QFileInfo fi(projectDir.absoluteFilePath(candidate));
-                        if (fi.exists() && fi.isFile()) { resolved = candidate; break; }
-                    }
-                }
-            }
-
-            // Strategy 3: parent-directory scan, space/underscore-tolerant
-            if (resolved.isEmpty()) {
-                auto normalise = [](QString s) {
-                    s.replace(QLatin1Char('_'), QLatin1Char(' '));
-                    return s.toLower();
-                };
-                for (const QString &basePath : std::as_const(pathVariants)) {
-                    if (!resolved.isEmpty()) break;
-                    const QFileInfo expected(projectDir.absoluteFilePath(basePath));
-                    const QDir parent = expected.dir();
-                    if (!parent.exists()) continue;
-                    const QString leafNorm = normalise(expected.fileName());
-                    const QFileInfoList entries = parent.entryInfoList(QDir::Files);
-                    for (const QFileInfo &entry : entries) {
-                        if (normalise(entry.completeBaseName()) == leafNorm
-                            || normalise(entry.fileName()) == leafNorm) {
-                            resolved = projectDir.relativeFilePath(entry.absoluteFilePath());
-                            break;
-                        }
-                    }
-                }
-            }
+            const QString resolved = tryResolveOnDisk(projectDir, item->path);
 
             if (!resolved.isEmpty()) {
-                qDebug() << "ProjectManager: validateTree: Correcting leaf Folder -> File for"
-                         << item->name << "(path was" << item->path
-                         << ", resolves to" << resolved << ")";
-                item->type = ProjectTreeItem::File;
-                if (item->path != resolved) item->path = resolved;
-                changed = true;
+                const QString originalLeaf = QFileInfo(item->path).completeBaseName();
+                const QString resolvedLeaf = QFileInfo(resolved).completeBaseName();
+                const QString originalParent = QFileInfo(item->path).path();
+                const QString resolvedParent = QFileInfo(resolved).path();
+                const bool extensionOnly = (originalLeaf == resolvedLeaf
+                                            && originalParent == resolvedParent);
+                if (extensionOnly) {
+                    qDebug() << "ProjectManager: validateTree: Correcting leaf Folder -> File for"
+                             << item->name << "(path was" << item->path
+                             << ", resolves to" << resolved << ")";
+                    item->type = ProjectTreeItem::File;
+                    if (item->path != resolved) item->path = resolved;
+                    changed = true;
+                } else {
+                    // Resolution found, but basename/location differs — user
+                    // should confirm. Collect as a reconciliation entry with
+                    // the suggestion pre-populated.
+                    qDebug() << "ProjectManager: validateTree: Suggesting leaf Folder"
+                             << item->path << "-> File" << resolved
+                             << "(user confirmation required)";
+                    reconciliation.append(makeEntry(item, resolved));
+                }
+            } else if (!QFileInfo(projectDir.absoluteFilePath(item->path)).exists()) {
+                // Leaf Folder that cannot be resolved on disk at all.
+                reconciliation.append(makeEntry(item, QString()));
+            }
+        }
+
+        // File-typed node whose path does not exist on disk: surface for user
+        // reconciliation. The fuzzy resolver's suggestion (if any) is stored
+        // on the entry so the dialog can offer "accept suggestion".
+        if (item->type == ProjectTreeItem::File
+            && !item->path.isEmpty()
+            && haveProjectDir)
+        {
+            const QString absPath = projectDir.absoluteFilePath(item->path);
+            if (!QFileInfo(absPath).exists()) {
+                const QString suggestion = tryResolveOnDisk(projectDir, item->path);
+                reconciliation.append(makeEntry(item, suggestion));
             }
         }
 
@@ -1182,7 +1203,7 @@ void ProjectManager::validateTree()
     };
 
     ProjectTreeItem *root = m_treeModel->rootItem();
-    const QString projectDir = projectPath();
+    const QString projectDirPath = projectPath();
 
     for (const auto &spec : kAuthoritativeFolders) {
         const QString canonicalPath = QString::fromLatin1(spec.path);
@@ -1233,14 +1254,20 @@ void ProjectManager::validateTree()
 
         // Always ensure the on-disk folder exists. mkpath is a no-op when
         // the directory is already there, so this is safe to call every time.
-        if (!projectDir.isEmpty()) {
-            QDir(projectDir).mkpath(canonicalPath);
+        if (!projectDirPath.isEmpty()) {
+            QDir(projectDirPath).mkpath(canonicalPath);
         }
     }
 
     if (changed) {
         qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";
         saveProject();
+    }
+
+    if (!reconciliation.isEmpty()) {
+        qDebug() << "ProjectManager: validateTree: emitting reconciliationRequired with"
+                 << reconciliation.size() << "entries";
+        Q_EMIT reconciliationRequired(reconciliation);
     }
 }
 

@@ -27,7 +27,25 @@
 
 #include "treenodesnapshot.h"
 
+class QDir;
 class QMimeData;
+
+/**
+ * \brief Try to resolve a tree-stored project-relative path to an actual file
+ *        on disk within \a projectDir.
+ *
+ * Returns the on-disk project-relative path if found, or an empty string if
+ * no resolution could be made. Shared by ProjectManager::validateTree() and
+ * ProjectTreePanel's click handlers so the healing heuristics remain DRY.
+ *
+ * Strategy (tried in order, with as-is and space->underscore path variants):
+ *   1) exact path with each of the known text-file extensions appended
+ *      ("" / .md / .markdown / .mkd / .txt / .rtf)
+ *   2) nested-leaf pattern (path "X" -> file "X/X.ext", common from Scrivener)
+ *   3) parent-directory scan with normalised (space/underscore, case-insensitive)
+ *      stem comparison
+ */
+QString tryResolveOnDisk(const QDir &projectDir, const QString &relativePath);
 
 struct ProjectTreeItem {
     enum Type {
