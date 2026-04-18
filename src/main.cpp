@@ -20,20 +20,78 @@
 #include "markdownparser.h"
 #include "mcpservice.h"
 
+#ifdef RPGFORGE_DBUS_TESTING
+#include "rpgforgedbus.h"
+#include <QDBusConnection>
+#include <QDBusError>
+#endif
+
 #include <KAboutData>
 #include <KLocalizedString>
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
+#include <QDebug>
 #include <QIcon>
 
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
 
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
+
+// Custom message handler to log to file and console
+static QTextStream *logStream = nullptr;
+static QFile *logFile = nullptr;
+
+void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    // Also print to original console
+    fprintf(stderr, "%s\n", msg.toLocal8Bit().constData());
+    
+    if (!logStream) return;
+
+    QString level;
+    switch (type) {
+        case QtDebugMsg:    level = QStringLiteral("DEBUG"); break;
+        case QtInfoMsg:     level = QStringLiteral("INFO"); break;
+        case QtWarningMsg:  level = QStringLiteral("WARN"); break;
+        case QtCriticalMsg: level = QStringLiteral("CRITICAL"); break;
+        case QtFatalMsg:    level = QStringLiteral("FATAL"); break;
+    }
+    
+    QString formattedMessage = QStringLiteral("%1 [%2] %3 (%4:%5, %6)\n")
+        .arg(QDateTime::currentDateTime().toString(Qt::ISODate), 
+             level, 
+             msg,
+             context.file ? context.file : "unknown", 
+             QString::number(context.line), 
+             context.function ? context.function : "unknown");
+
+    *logStream << formattedMessage;
+    logStream->flush();
+}
+
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+
+    // Setup logging
+    QString logFileName = QStringLiteral("rpgforge_debug.log");
+    logFile = new QFile(logFileName);
+    if (logFile->exists()) {
+        QString backupName = QStringLiteral("%1.%2.bak").arg(logFileName, QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")));
+        logFile->rename(backupName);
+    }
+    if (logFile->open(QIODevice::WriteOnly | QIODevice::Append)) {
+        logStream = new QTextStream(logFile);
+        qInstallMessageHandler(messageHandler);
+    } else {
+        qWarning() << "Could not open log file for writing:" << logFileName;
+    }
 
     // Disable and clear WebEngine cache for debugging and safety
     QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);
@@ -80,6 +138,25 @@ int main(int argc, char *argv[])
 
     auto *window = new MainWindow();
     window->show();
+
+#ifdef RPGFORGE_DBUS_TESTING
+    // Register the DBus adaptor so automated test tools can drive the app
+    // without AT-SPI/ydotool. The adaptor is parented to the MainWindow so
+    // Qt handles teardown automatically. Only compiled into debug builds —
+    // see the RPGFORGE_DBUS_TESTING CMake option.
+    new RpgForgeDBus(window);
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected()) {
+        qWarning() << "DBus session bus not available; skipping DBus registration";
+    } else {
+        if (!bus.registerService(QStringLiteral("org.kde.rpgforge"))) {
+            qWarning() << "Could not register DBus service:" << bus.lastError().message();
+        }
+        if (!bus.registerObject(QStringLiteral("/org/kde/rpgforge/MainWindow"), window)) {
+            qWarning() << "Could not register DBus object:" << bus.lastError().message();
+        }
+    }
+#endif
 
     return app.exec();
 }

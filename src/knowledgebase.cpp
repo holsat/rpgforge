@@ -18,6 +18,8 @@
 
 #include "knowledgebase.h"
 #include "llmservice.h"
+#include "projectmanager.h"
+#include "projectkeys.h"
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
@@ -34,6 +36,7 @@
 #include <QUuid>
 #include <KLocalizedString>
 #include <QPointer>
+#include <QThread>
 
 KnowledgeBase& KnowledgeBase::instance()
 {
@@ -57,21 +60,28 @@ void KnowledgeBase::initForProject(const QString &projectPath)
 {
     if (projectPath.isEmpty()) return;
     qDebug() << "KnowledgeBase: Initializing for project:" << projectPath;
+    
+    QMutexLocker locker(&m_dbMutex);
     close();
 
     m_projectPath = projectPath;
     m_dbPath = QDir(projectPath).absoluteFilePath(QStringLiteral(".rpgforge-vectors.db"));
     m_pendingFiles.clear();
 
-    setupDatabase();
+    if (!setupDatabase()) {
+        qWarning() << "Failed to initialize vector database schema.";
+    }
 }
 
 void KnowledgeBase::close()
 {
     QMutexLocker locker(&m_dbMutex);
-    if (QSqlDatabase::contains(QStringLiteral("rpgforge_vectors"))) {
-        QSqlDatabase::removeDatabase(QStringLiteral("rpgforge_vectors"));
+    QString connectionName = QStringLiteral("kb_thread_") + QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    if (QSqlDatabase::contains(connectionName)) {
+        QSqlDatabase::database(connectionName).close();
+        QSqlDatabase::removeDatabase(connectionName);
     }
+
     if (m_watcher) {
         QStringList files = m_watcher->files();
         if (!files.isEmpty()) m_watcher->removePaths(files);
@@ -80,44 +90,61 @@ void KnowledgeBase::close()
     m_pendingFiles.clear();
 }
 
-void KnowledgeBase::setupDatabase()
+bool KnowledgeBase::setupDatabase()
 {
-    QMutexLocker locker(&m_dbMutex);
-    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("rpgforge_vectors"));
-    db.setDatabaseName(m_dbPath);
-
-    if (!db.open()) {
-        qWarning() << "Failed to open vector database:" << db.lastError().text();
-        return;
-    }
+    QSqlDatabase db = database();
+    if (!db.isOpen()) return false;
 
     QSqlQuery query(db);
-    query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS chunks ("
+    if (!query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS chunks ("
                               "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                               "file_path TEXT,"
                               "heading TEXT,"
                               "content TEXT,"
                               "file_hash TEXT,"
-                              "embedding BLOB)"));
+                              "embedding BLOB)"))) {
+        qWarning() << "KnowledgeBase: Failed to create schema:" << query.lastError().text();
+        return false;
+    }
+    return true;
 }
 
-QSqlDatabase KnowledgeBase::getDatabase() const
+QSqlDatabase KnowledgeBase::database() const
 {
-    QString connectionName = QStringLiteral("kb_thread_") + QString::number(size_t(QThread::currentThreadId()));
-    if (QSqlDatabase::contains(connectionName)) {
-        return QSqlDatabase::database(connectionName);
-    }
+    if (m_dbPath.isEmpty()) return QSqlDatabase();
+
+    QString connectionName = QStringLiteral("kb_thread_") + QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
     
+    QMutexLocker locker(&m_dbMutex);
+
+    if (QSqlDatabase::contains(connectionName)) {
+        QSqlDatabase db = QSqlDatabase::database(connectionName, false);
+        if (db.isOpen()) {
+            return db;
+        }
+    }
+
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
     db.setDatabaseName(m_dbPath);
-    db.open();
+
+    if (!db.open()) {
+        qWarning() << "KnowledgeBase: Failed to open database on thread" << QThread::currentThreadId() << ":" << db.lastError().text();
+    } else {
+        QSqlQuery q(db);
+        q.exec(QStringLiteral("PRAGMA journal_mode=WAL;"));
+    }
     return db;
 }
+
 
 void KnowledgeBase::indexFile(const QString &filePath)
 {
     if (m_projectPath.isEmpty() || filePath.isEmpty()) return;
     
+    if (!ProjectManager::instance().getActiveFiles().contains(filePath)) {
+        return;
+    }
+
     if (m_paused) {
         if (!m_pendingFiles.contains(filePath)) m_pendingFiles.append(filePath);
         return;
@@ -145,8 +172,7 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     QByteArray currentHash = QCryptographicHash::hash(content.toUtf8(), QCryptographicHash::Md5).toHex();
 
     {
-        QMutexLocker locker(&m_dbMutex);
-        QSqlDatabase db = getDatabase();
+        QSqlDatabase db = database();
         if (db.isOpen()) {
             QSqlQuery query(db);
             query.prepare(QStringLiteral("SELECT file_hash FROM chunks WHERE file_path = ? LIMIT 1"));
@@ -168,8 +194,7 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
     {
-        QMutexLocker locker(&m_dbMutex);
-        QSqlDatabase db = getDatabase();
+        QSqlDatabase db = database();
         if (db.isOpen()) {
             QSqlQuery query(db);
             query.prepare(QStringLiteral("DELETE FROM chunks WHERE file_path = ?"));
@@ -207,8 +232,7 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
 
 void KnowledgeBase::storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding, const QByteArray &fileHash)
 {
-    QMutexLocker locker(&m_dbMutex);
-    QSqlDatabase db = getDatabase();
+    QSqlDatabase db = database();
     if (!db.isOpen()) return;
 
     QByteArray blob;
@@ -251,6 +275,19 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
 {
     if (m_projectPath.isEmpty() || !callback) return;
 
+    // Get the list of active files from the project manager to ensure we only return relevant lore.
+    QStringList activeFiles = ProjectManager::instance().getActiveFiles();
+    if (activeFiles.isEmpty()) {
+        if (callback) callback({});
+        return;
+    }
+
+    // Convert absolute paths to relative for DB matching
+    QStringList relativeActiveFiles;
+    for (const QString &abs : activeFiles) {
+        relativeActiveFiles.append(QDir(m_projectPath).relativeFilePath(abs));
+    }
+
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     if (provider == LLMProvider::Anthropic) { callback({}); return; }
@@ -258,27 +295,32 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
     QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
 
     QPointer<KnowledgeBase> weakThis(this);
-    LLMService::instance().generateEmbedding(provider, model, queryText, [weakThis, topK, excludeFile, callback](const QVector<float> &queryVector) {
+    LLMService::instance().generateEmbedding(provider, model, queryText, [weakThis, topK, excludeFile, relativeActiveFiles, callback](const QVector<float> &queryVector) {
         if (!weakThis || queryVector.isEmpty()) {
             if (callback) callback({});
             return;
         }
 
-        QtConcurrent::run([weakThis, queryVector, topK, excludeFile, callback]() {
+        QtConcurrent::run([weakThis, queryVector, topK, excludeFile, relativeActiveFiles, callback]() {
             if (!weakThis) return;
             
             QList<SearchResult> results;
             {
-                QMutexLocker locker(&weakThis->m_dbMutex);
-                QSqlDatabase db = weakThis->getDatabase();
+                QSqlDatabase db = weakThis->database();
                 if (db.isOpen()) {
                     QSqlQuery query(db);
-                    query.prepare(QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?"));
+                    // Filter chunks to only those belonging to files currently in the project manager's logical tree.
+                    QString sql = QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?");
+                    
+                    query.prepare(sql);
                     query.addBindValue(excludeFile);
                     if (query.exec()) {
                         while (query.next()) {
+                            QString chunkPath = query.value(0).toString();
+                            if (!relativeActiveFiles.contains(chunkPath)) continue;
+
                             SearchResult res;
-                            res.filePath = query.value(0).toString();
+                            res.filePath = chunkPath;
                             res.heading = query.value(1).toString();
                             res.content = query.value(2).toString();
                             QByteArray blob = query.value(3).toByteArray();
@@ -305,4 +347,19 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             }, Qt::QueuedConnection);
         });
     });
+}
+
+void KnowledgeBase::reindexProject()
+{
+    if (m_projectPath.isEmpty()) return;
+    
+    qDebug() << "KnowledgeBase: Performing full project reindex...";
+    QStringList files = ProjectManager::instance().getActiveFiles();
+    
+    for (const QString &path : files) {
+        QString suffix = QFileInfo(path).suffix().toLower();
+        if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+            indexFile(path);
+        }
+    }
 }

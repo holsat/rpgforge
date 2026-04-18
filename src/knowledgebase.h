@@ -24,7 +24,7 @@
 #include <QVector>
 #include <QList>
 #include <QSqlDatabase>
-#include <QMutex>
+#include <QRecursiveMutex>
 #include <functional>
 
 class QFileSystemWatcher;
@@ -50,6 +50,7 @@ public:
     void close();
 
     void indexFile(const QString &filePath);
+    void reindexProject();
     void search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback);
 
     void pause();
@@ -66,18 +67,18 @@ private:
     explicit KnowledgeBase(QObject *parent = nullptr);
     ~KnowledgeBase();
 
-    void setupDatabase();
+    bool setupDatabase();
     void chunkAndEmbed(const QString &filePath, const QString &content);
     void storeChunk(const QString &filePath, const QString &heading, const QString &content, const QVector<float> &embedding, const QByteArray &fileHash);
     float cosineSimilarity(const QVector<float> &a, const QVector<float> &b);
     
-    QSqlDatabase getDatabase() const;
+    QSqlDatabase database() const;
 
     QString m_projectPath;
     QString m_dbPath;
     QFileSystemWatcher *m_watcher = nullptr;
     int m_pendingEmbeddings = 0;
-    QMutex m_dbMutex;
+    mutable QRecursiveMutex m_dbMutex;
     bool m_paused = false;
     QStringList m_pendingFiles;
 };

@@ -37,7 +37,8 @@ enum class LLMProvider {
     Anthropic,
     Ollama,
     Grok,
-    Gemini
+    Gemini,
+    LMStudio
 };
 
 struct LLMMessage {
@@ -99,7 +100,7 @@ public:
     /**
      * @brief Sends a request to the LLM without interrupting the active stream, useful for background tasks.
      */
-    void sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback);
+    virtual void sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback);
 
     /**
      * @brief Pings the Anthropic API to verify connectivity.
@@ -150,9 +151,11 @@ Q_SIGNALS:
      */
     void modelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
 
-private:
+protected:
     explicit LLMService(QObject *parent = nullptr);
-    ~LLMService() override;
+    virtual ~LLMService();
+
+private:
 
     LLMService(const LLMService&) = delete;
     LLMService& operator=(const LLMService&) = delete;

@@ -25,6 +25,8 @@
 
 class QTreeWidgetItem;
 class QToolButton;
+class QLabel;
+class QProgressBar;
 
 /**
  * QTreeWidget subclass that supports dragging variable names into the editor.
@@ -68,6 +70,11 @@ public:
 
 Q_SIGNALS:
     void variablesChanged();
+    void forceLoreKeeperScan();
+
+public Q_SLOTS:
+    void onLoreScanStarted(const QString &filePath);
+    void onLoreScanFinished(const QString &filePath);
 
 private Q_SLOTS:
     void addVariable();
@@ -84,6 +91,8 @@ private:
     QToolButton *m_addVariantButton;
     QToolButton *m_removeButton;
     QToolButton *m_reindexButton;
+    QToolButton *m_loreScanButton;
+    QProgressBar *m_loreScanProgress;
 
     LibrarianService *m_librarianService = nullptr;
     QTreeWidgetItem *m_customVarsRoot = nullptr;

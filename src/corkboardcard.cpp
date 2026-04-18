@@ -31,17 +31,17 @@
 #include <QFile>
 #include <QDir>
 
-CorkboardCard::CorkboardCard(ProjectTreeItem *item, QWidget *parent)
+CorkboardCard::CorkboardCard(const TreeNodeSnapshot &node, QWidget *parent)
     : QFrame(parent)
 {
-    m_itemPath = item->path;
-    m_title = item->name;
-    m_status = item->status;
-    m_synopsis = item->synopsis;
+    m_itemPath = node.path;
+    m_title = node.name;
+    m_status = node.status;
+    m_synopsis = node.synopsis;
 
-    if (item->type == ProjectTreeItem::File) {
+    if (node.type == static_cast<int>(ProjectTreeItem::File)) {
         QString projectPath = ProjectManager::instance().projectPath();
-        QString fullPath = QDir(projectPath).absoluteFilePath(item->path);
+        QString fullPath = QDir(projectPath).absoluteFilePath(node.path);
         QFile file(fullPath);
         if (file.open(QIODevice::ReadOnly)) {
             QString content = QString::fromUtf8(file.readAll());

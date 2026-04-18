@@ -47,6 +47,7 @@ Q_SIGNALS:
     void fileActivated(const QString &relativePath);
     void folderActivated(const QString &relativeFolderPath);
     void diffRequested(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
+    void recallVersionRequested(const QString &filePath);
     void syncStarted();
     void syncProgress(int value, const QString &message);
     void syncFinished(bool success, const QString &message);
@@ -54,6 +55,7 @@ Q_SIGNALS:
 private Q_SLOTS:
     void onProjectOpened();
     void onProjectClosed();
+    void onItemClicked(const QModelIndex &index);
     void onItemActivated(const QModelIndex &index);
     void onCustomContextMenu(const QPoint &pos);
     
@@ -87,6 +89,7 @@ private:
     QToolButton *m_syncBtn = nullptr;
     QComboBox *m_explorationCombo = nullptr;
     QToolButton *m_newExplorationBtn = nullptr;
+    bool m_isSaving = false;
 };
 
 #endif // PROJECTTREEPANEL_H

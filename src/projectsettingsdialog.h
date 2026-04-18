@@ -25,6 +25,8 @@ class QLineEdit;
 class QComboBox;
 class QDoubleSpinBox;
 class QCheckBox;
+class QTableWidget;
+class QPlainTextEdit;
 
 class ProjectSettingsDialog : public QDialog
 {
@@ -49,6 +51,10 @@ private:
     QDoubleSpinBox *m_marginBottomSpin = nullptr;
     QCheckBox *m_showPageNumbersCheck = nullptr;
     QLineEdit *m_stylesheetEdit = nullptr;
+
+    // LoreKeeper
+    QTableWidget *m_lkTable = nullptr;
+    QPlainTextEdit *m_lkPromptEdit = nullptr;
 };
 
 #endif // PROJECTSETTINGSDIALOG_H

@@ -1,4 +1,5 @@
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon L.
@@ -37,6 +38,7 @@
 #include "variablecompletionmodel.h"
 #include "projectmanager.h"
 #include "projectsettingsdialog.h"
+#include "reconciliationdialog.h"
 #include "settingsdialog.h"
 #include "chatpanel.h"
 #include "simulationpanel.h"
@@ -46,7 +48,7 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
-#include "characterdossierservice.h"
+#include "lorekeeperservice.h"
 #include "agentgatekeeper.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -60,9 +62,14 @@
 #include "onboardingwizard.h"
 #include "scrivenerimporter.h"
 #include "documentconverter.h"
+#include "explorationspanel.h"
+#include "explorationsgraphview.h"
+#include "versionrecallbrowser.h"
+#include "unsavedchangesdialog.h"
 
 #include <KActionCollection>
 #include <KLocalizedString>
+#include <KMessageBox>
 #include <KStandardAction>
 #include <KToolBar>
 #include <KTextEditor/MovingRange>
@@ -90,14 +97,18 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QStackedLayout>
 #include <QWidgetAction>
 #include <QLineEdit>
 #include <QWebEngineView>
 
+#include <QFrame>
 #include <QLabel>
+#include <QToolButton>
 #include <QStatusBar>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -107,7 +118,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_librarianService = new LibrarianService(&LLMService::instance(), this);
     AgentGatekeeper::instance().setLibrarianService(m_librarianService);
-    CharacterDossierService::instance().init(&LLMService::instance(), m_librarianService);
+    LoreKeeperService::instance().init(&LLMService::instance(), m_librarianService);
 
     connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
     connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
@@ -117,6 +128,9 @@ MainWindow::MainWindow(QWidget *parent)
     setupSidebar();
     if (m_variablesPanel) {
         m_variablesPanel->setLibrarianService(m_librarianService);
+        connect(m_variablesPanel, &VariablesPanel::forceLoreKeeperScan, this, &MainWindow::onForceLoreScan);
+        connect(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdateStarted, m_variablesPanel, &VariablesPanel::onLoreScanStarted);
+        connect(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdateFinished, m_variablesPanel, &VariablesPanel::onLoreScanFinished);
     }
     setupActions();
 
@@ -212,8 +226,41 @@ void MainWindow::setupEditor()
 
     m_editorSplitter = new QSplitter(Qt::Horizontal, this);
     m_editorSplitter->addWidget(m_editorView);
-    m_editorSplitter->addWidget(m_researchView);
-    m_researchView->hide(); // hidden until a research file is opened
+
+    // Wrap the research view in a small container that includes a close
+    // button at the top, so the user has an obvious way to dismiss the
+    // split when they are done with it. Hidden by default; only shown when
+    // the user opens a Research file (which switches the split mode on).
+    m_researchPane = new QWidget(this);
+    {
+        auto *paneLayout = new QVBoxLayout(m_researchPane);
+        paneLayout->setContentsMargins(0, 0, 0, 0);
+        paneLayout->setSpacing(0);
+
+        auto *paneToolbar = new QHBoxLayout();
+        paneToolbar->setContentsMargins(4, 2, 4, 2);
+        auto *paneTitle = new QLabel(i18n("Research"), m_researchPane);
+        QFont titleFont = paneTitle->font();
+        titleFont.setBold(true);
+        paneTitle->setFont(titleFont);
+        paneToolbar->addWidget(paneTitle);
+        paneToolbar->addStretch();
+        auto *closeBtn = new QToolButton(m_researchPane);
+        closeBtn->setIcon(QIcon::fromTheme(QStringLiteral("window-close")));
+        closeBtn->setToolTip(i18n("Close Research View (returns to single-pane editor)"));
+        closeBtn->setAutoRaise(true);
+        connect(closeBtn, &QToolButton::clicked, this, [this]() {
+            m_researchPane->hide();
+            if (m_researchDocument) m_researchDocument->closeUrl();
+        });
+        paneToolbar->addWidget(closeBtn);
+        paneLayout->addLayout(paneToolbar);
+        paneLayout->addWidget(m_researchView, 1);
+    }
+    m_editorSplitter->addWidget(m_researchPane);
+
+    m_editorView->show();
+    m_researchPane->hide(); // hidden until a research file is opened
 
     // Shared signals for both editors
     auto setupConnections = [this](KTextEditor::Document *doc, KTextEditor::View *view) {
@@ -262,7 +309,7 @@ void MainWindow::setupEditor()
 
     // Step 1: Seamless Version Control (Auto-Sync)
     auto setupAutoSync = [this](KTextEditor::Document *doc) {
-        connect(doc, &KTextEditor::Document::documentSavedOrUploaded, this, [this](KTextEditor::Document *d) {
+        connect(doc, &KTextEditor::Document::documentSavedOrUploaded, this, [](KTextEditor::Document *d) {
             if (ProjectManager::instance().isProjectOpen() && ProjectManager::instance().autoSync()) {
                 GitService::instance().autoCommit(d->url().toLocalFile());
             }
@@ -308,6 +355,7 @@ void MainWindow::setupSidebar()
     
     m_outlinePanel = new OutlinePanel(this);
     m_gitPanel = new GitPanel(this);
+    m_explorationsPanel = new ExplorationsPanel(this);
     m_breadcrumbBar = new BreadcrumbBar(this);
     m_previewPanel = new PreviewPanel(this);
     m_variablesPanel = new VariablesPanel(this);
@@ -336,6 +384,10 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("media-playback-start-symbolic")),
         i18n("Rule Simulation"),
         m_simulationPanel);
+    m_explorationsId = m_sidebar->addPanel(
+        QIcon::fromTheme(QStringLiteral("vcs-branch")),
+        i18n("Explorations"),
+        m_explorationsPanel);
 
     connect(m_chatPanel, &ChatPanel::insertTextAtCursor, this, [this](const QString &text) {
         if (m_document && m_editorView) {
@@ -362,6 +414,29 @@ void MainWindow::setupSidebar()
 
     connect(m_projectTree->createButton(), &QPushButton::clicked, this, &MainWindow::newProject);
 
+    // Explorations panel connections
+    connect(m_explorationsPanel, &ExplorationsPanel::switchRequested,
+            this, &MainWindow::onSwitchExplorationRequested);
+    connect(m_explorationsPanel, &ExplorationsPanel::integrateRequested,
+            this, &MainWindow::onIntegrateExplorationRequested);
+    connect(m_explorationsPanel, &ExplorationsPanel::createLandmarkRequested,
+            this, &MainWindow::onCreateLandmarkRequested);
+
+    connect(&GitService::instance(), &GitService::explorationSwitchFailed,
+            this, [this](const QString &reason) {
+                KMessageBox::error(this, reason, i18n("Switch Failed"));
+            });
+    connect(&GitService::instance(), &GitService::stashApplyBlockedByDirtyTree,
+            this, [this] {
+                KMessageBox::information(this,
+                    i18n("Please save or park your current changes before restoring parked changes."),
+                    i18n("Cannot Restore"));
+            });
+
+    // ProjectTreePanel recall version
+    connect(m_projectTree, &ProjectTreePanel::recallVersionRequested,
+            this, &MainWindow::onRecallVersionRequested);
+
     // Show explorer by default
     m_sidebar->showPanel(m_fileExplorerId);
 
@@ -378,14 +453,72 @@ void MainWindow::setupSidebar()
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
     vbox->addWidget(m_breadcrumbBar);
-    
+
+    // Conflict resolution banner (hidden by default). Uses palette tokens so it
+    // adapts to the active theme and meets WCAG 2.1 AA contrast requirements.
+    m_conflictBanner = new QFrame(this);
+    m_conflictBanner->setFrameShape(QFrame::StyledPanel);
+    m_conflictBanner->setStyleSheet(
+        QStringLiteral("QFrame { background: palette(alternate-base); "
+                       "border-left: 3px solid #FF8F00; padding: 4px; }"));
+    m_conflictBanner->setVisible(false);
+    {
+        auto *bl = new QHBoxLayout(m_conflictBanner);
+        bl->setContentsMargins(8, 4, 8, 4);
+        m_conflictBannerLabel = new QLabel(m_conflictBanner);
+        m_conflictBannerLabel->setStyleSheet(
+            QStringLiteral("color: palette(text); font-weight: bold;"));
+        const QString buttonStyle = QStringLiteral(
+            "QPushButton { color: palette(button-text); background: palette(button); "
+            "border: 1px solid palette(mid); border-radius: 3px; padding: 4px 12px; "
+            "font-weight: bold; }"
+            "QPushButton:hover { background: palette(light); }");
+        m_conflictNextBtn = new QPushButton(i18n("Next Conflict →"), m_conflictBanner);
+        m_conflictNextBtn->setStyleSheet(buttonStyle);
+        auto *resolveAllBtn = new QPushButton(i18n("Complete Integration"), m_conflictBanner);
+        resolveAllBtn->setStyleSheet(buttonStyle);
+        bl->addWidget(m_conflictBannerLabel, 1);
+        bl->addWidget(m_conflictNextBtn);
+        bl->addWidget(resolveAllBtn);
+
+        connect(m_conflictNextBtn, &QPushButton::clicked, this, [this] {
+            ++m_conflictIndex;
+            showNextConflict();
+        });
+        connect(resolveAllBtn, &QPushButton::clicked, this, [this] {
+            QString repoPath = ProjectManager::instance().projectPath();
+            GitService::instance().getConflictingFiles(repoPath)
+                .then(this, [this, repoPath](QList<ConflictFile> remaining) {
+                    if (!remaining.isEmpty()) {
+                        KMessageBox::information(this,
+                            i18n("There are still %1 unresolved conflicts. "
+                                 "Please resolve all conflicts before completing the integration.",
+                                 remaining.size()),
+                            i18n("Conflicts Remaining"));
+                        return;
+                    }
+                    GitService::instance().commitAll(repoPath, i18n("Integrated exploration"))
+                        .then(this, [this](bool) {
+                            m_conflictBanner->setVisible(false);
+                            m_conflictFiles.clear();
+                            m_conflictIndex = 0;
+                            m_explorationsPanel->refresh();
+                        });
+                });
+        });
+    }
+    vbox->addWidget(m_conflictBanner);
+
     // Use a plain container with QVBoxLayout instead of QStackedWidget.
-    // QStackedWidget interferes with KateCompletionWidget popup positioning
-    // because it clips child widgets and affects coordinate mapping.
+    // QStackedLayout (NOT QStackedWidget) gives us "only one child visible at a time"
+    // semantics without the reparenting that breaks KateCompletionWidget popup
+    // positioning. Previously this was a QVBoxLayout with manual setVisible() calls,
+    // but if any view's visibility was toggled out of band the editor could end up
+    // sharing vertical space with another view (or get hidden behind it). With
+    // QStackedLayout::StackOne (default), setCurrentWidget() guarantees exclusivity.
     auto *viewContainer = new QWidget(editorContainer);
-    m_centralViewLayout = new QVBoxLayout(viewContainer);
+    m_centralViewLayout = new QStackedLayout(viewContainer);
     m_centralViewLayout->setContentsMargins(0, 0, 0, 0);
-    m_centralViewLayout->setSpacing(0);
 
     m_corkboardView = new CorkboardView(this);
     m_imagePreview = new ImagePreview(this);
@@ -409,10 +542,9 @@ void MainWindow::setupSidebar()
     m_centralViewLayout->addWidget(m_pdfViewer);
 
     // Only show the editor view initially; hide the rest
-    m_corkboardView->hide();
-    m_imagePreview->hide();
-    m_diffView->hide();
-    m_pdfViewer->hide();
+    showCentralView(m_editorSplitter);
+    m_editorView->show();
+
     vbox->addWidget(viewContainer);
 
     m_mainSplitter->addWidget(m_sidebar);
@@ -428,9 +560,10 @@ void MainWindow::setupSidebar()
 
     m_problemsPanel = new ProblemsPanel(this);
 
-    SynopsisService::instance().setModel(m_projectTree->model());
+    // SynopsisService consumes ProjectManager snapshots and writes back via
+    // the public setNodeSynopsis() wrapper; no setup wiring needed here.
 
-    connect(m_projectTree->model(), &ProjectTreeModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
+    connect(&ProjectManager::instance(), &ProjectManager::treeItemDataChanged, this, [this](const QList<int> &roles) {
         if (roles.contains(ProjectTreeModel::SynopsisRole) || roles.contains(ProjectTreeModel::StatusRole)) {
             // If the corkboard is showing a folder that contains one of these items, refresh it
             // Simple approach: if corkboard is visible, just refresh it.
@@ -526,7 +659,7 @@ void MainWindow::setupSidebar()
             // (image preview, PDF viewer, or editor) — do not override it here.
         }
     });
-    m_corkboardView->setModel(m_projectTree->model());
+    m_corkboardView->subscribe();  // Consumes snapshots + PM signals — no friended model access.
     connect(m_projectTree, &ProjectTreePanel::folderActivated, this, [this](const QString &folderPath) {
         if (folderPath.isEmpty()) return;
         const QString nameLower = folderPath.section(QDir::separator(), -1).toLower();
@@ -543,18 +676,13 @@ void MainWindow::setupSidebar()
             openFileFromUrl(QUrl::fromLocalFile(fullPath));
         }
     });
-    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [this](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
-        ProjectTreeItem *folder = m_projectTree->model()->findItem(folderPath);
-        ProjectTreeItem *dragged = m_projectTree->model()->findItem(draggedPath);
-        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : m_projectTree->model()->findItem(targetPath);
-        
-        if (folder && dragged) {
-            int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
-            if (m_projectTree->model()->moveItem(dragged, folder, toIdx)) {
-                ProjectManager::instance().setTree(m_projectTree->model()->projectData());
-                ProjectManager::instance().saveProject();
-            }
-        }
+    connect(m_corkboardView, &CorkboardView::itemsReordered, this, [](const QString &folderPath, const QString &draggedPath, const QString &targetPath) {
+        // Compute target row via ProjectManager::findItem — no model leak.
+        ProjectTreeItem *folder = ProjectManager::instance().findItem(folderPath);
+        if (!folder) return;
+        ProjectTreeItem *target = targetPath.isEmpty() ? nullptr : ProjectManager::instance().findItem(targetPath);
+        const int toIdx = target ? folder->children.indexOf(target) : folder->children.size();
+        ProjectManager::instance().moveItem(draggedPath, folderPath, toIdx);
     });
     connect(m_outlinePanel, &OutlinePanel::headingsUpdated,
             m_breadcrumbBar, &BreadcrumbBar::setHeadings);
@@ -583,20 +711,65 @@ void MainWindow::setupSidebar()
         navigateToLine(line);
     });
 
+    // Debounce saveExplorationData() to coalesce bursts of colorMapChanged
+    // signals (e.g. multiple branches inserted during a single layoutNodes()).
+    m_saveExplorationDataTimer = new QTimer(this);
+    m_saveExplorationDataTimer->setSingleShot(true);
+    m_saveExplorationDataTimer->setInterval(1000);
+    connect(m_saveExplorationDataTimer, &QTimer::timeout, this, [this] {
+        if (!m_explorationsPanel) return;
+        ProjectManager::instance().saveExplorationData(
+            GitService::instance().saveWordCountCache(),
+            m_explorationsPanel->graphView()->saveColorMap());
+    });
+
+    // When exploration color map changes, schedule a debounced persistence.
+    connect(m_explorationsPanel->graphView(), &ExplorationGraphView::colorMapChanged,
+            this, [this] {
+                m_saveExplorationDataTimer->start();
+            });
+
     connect(&ProjectManager::instance(), &ProjectManager::projectOpened, this, [this]() {
         if (m_corkboardView) m_corkboardView->setFolder(QString());
         QString projectDir = ProjectManager::instance().projectPath();
         KnowledgeBase::instance().initForProject(projectDir);
-        CharacterDossierService::instance().setProjectPath(projectDir);
-        
+        LoreKeeperService::instance().setProjectPath(projectDir);
+
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();
 
         m_projectStatsStatus->show();
         updateProjectStats();
         SynopsisService::instance().scanProject();
+        KnowledgeBase::instance().reindexProject();
+
+        // Explorations panel
+        m_explorationsPanel->setRootPath(projectDir);
+
+        // Load cached exploration data
+        QVariantMap wordCountCache, explorationColors;
+        ProjectManager::instance().loadExplorationData(wordCountCache, explorationColors);
+        GitService::instance().loadWordCountCache(wordCountCache);
+        m_explorationsPanel->graphView()->loadColorMap(explorationColors);
     });
+
+    connect(&ProjectManager::instance(), &ProjectManager::treeChanged, this, [this]() {
+        updateProjectStats();
+        KnowledgeBase::instance().reindexProject();
+    });
+
+    // Reconciliation: ProjectManager emits this when validateTree() finds tree
+    // entries whose backing files are missing on disk. Show the batch dialog
+    // so the user can Locate / Remove / Recreate each missing entry.
+    connect(&ProjectManager::instance(), &ProjectManager::reconciliationRequired,
+            this, &MainWindow::showReconciliationDialog);
+
     connect(&ProjectManager::instance(), &ProjectManager::projectClosed, this, [this]() {
+        // Save exploration data before closing
+        ProjectManager::instance().saveExplorationData(
+            GitService::instance().saveWordCountCache(),
+            m_explorationsPanel->graphView()->saveColorMap());
+
         // PAUSE ALL AGENTS
         AgentGatekeeper::instance().pauseAll();
 
@@ -628,9 +801,7 @@ void MainWindow::setupSidebar()
         }
         m_currentUrl = m_document->url();
     });
-    connect(m_projectTree->model(), &ProjectTreeModel::modelReset, this, &MainWindow::updateProjectStats);
-    connect(m_projectTree->model(), &ProjectTreeModel::rowsInserted, this, &MainWindow::updateProjectStats);
-    connect(m_projectTree->model(), &ProjectTreeModel::rowsRemoved, this, &MainWindow::updateProjectStats);
+    connect(&ProjectManager::instance(), &ProjectManager::treeStructureChanged, this, &MainWindow::updateProjectStats);
 
     connect(&ProjectManager::instance(), &ProjectManager::totalWordCountUpdated, this, [this](int count) {
         m_projectStatsStatus->setText(i18n("Project: %1 words", count));
@@ -817,6 +988,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 {
     if (!url.isEmpty() && url.isLocalFile()) {
         QString path = url.toLocalFile();
+        qDebug() << "MainWindow: openFileFromUrl request for:" << path;
         QString suffix = QFileInfo(path).suffix().toLower();
 
         static const QStringList imgSuffixes = {
@@ -852,40 +1024,64 @@ void MainWindow::openFileFromUrl(const QUrl &url)
             return;
         }
 
-        // Check if this is a research file
+        // Check project context via the model's path-aware inheritance.
+        // effectiveCategory walks up the tree and honours the authoritative
+        // path-based categories, so an entry under lorekeeper/ is correctly
+        // flagged even if its own category field is None or stale.
+        bool isLoreKeeper = false;
         bool isResearch = false;
         if (ProjectManager::instance().isProjectOpen()) {
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
-            ProjectTreeItem *item = m_projectTree->model()->findItem(relPath);
+            ProjectTreeItem *item = ProjectManager::instance().findItem(relPath);
             if (item) {
-                // Check ancestors for Research category
-                ProjectTreeItem *p = item;
-                while (p) {
-                    if (p->category == ProjectTreeItem::Research || 
-                        p->category == ProjectTreeItem::Characters ||
-                        p->category == ProjectTreeItem::Places ||
-                        p->category == ProjectTreeItem::Cultures) {
-                        isResearch = true;
-                        break;
-                    }
-                    p = p->parent;
+                const auto cat = static_cast<ProjectTreeItem::Category>(
+                    ProjectManager::instance().effectiveCategoryForPath(relPath));
+                qDebug() << "MainWindow: Found item in tree for" << relPath
+                         << "effectiveCategory:" << cat;
+                if (cat == ProjectTreeItem::LoreKeeper
+                    || cat == ProjectTreeItem::Characters
+                    || cat == ProjectTreeItem::Places
+                    || cat == ProjectTreeItem::Cultures) {
+                    isLoreKeeper = true;
+                } else if (cat == ProjectTreeItem::Research) {
+                    isResearch = true;
                 }
             }
         }
 
         if (isResearch) {
-            m_researchDocument->openUrl(url);
-            m_researchView->show();
-            // Ensure first view stays visible
+            qDebug() << "MainWindow: Opening as Research file.";
+            m_researchPane->show();
             m_editorView->show();
+            if (m_researchDocument->url() == url) {
+                qDebug() << "MainWindow: Research file already open, bringing to front.";
+                showCentralView(m_editorSplitter);
+                return;
+            }
+            m_researchDocument->openUrl(url);
+            m_researchDocument->setReadWrite(true);
         } else {
+            qDebug() << "MainWindow: Opening as Manuscript/General file.";
+            m_editorView->show();
+            // Deliberately DO NOT hide m_researchView here. The split is a
+            // user-controlled mode: it's enabled by opening a research file,
+            // and stays on for subsequent navigation. Hiding it on every
+            // manuscript click forced single-pane mode and surprised users.
+            // The research pane is closed via the toolbar button on the
+            // research view itself.
+            if (m_document->url() == url) {
+                qDebug() << "MainWindow: File already open, bringing to front.";
+                showCentralView(m_editorSplitter);
+                return;
+            }
             m_document->openUrl(url);
-            m_researchView->hide();
+            m_document->setReadWrite(!isLoreKeeper);
         }
 
+        qDebug() << "MainWindow: Showing editor splitter.";
         showCentralView(m_editorSplitter);
         if (m_previewPanel && m_togglePreviewAction->isChecked()) {
-            m_previewPanel->show();
+            togglePreview();
             m_previewPanel->setBaseUrl(url);
         }
         const QString fileName = url.fileName();
@@ -940,7 +1136,7 @@ void MainWindow::newProject()
             AgentGatekeeper::instance().pauseAll();
             if (ProjectManager::instance().createProject(dir, name)) {
                 if (m_librarianService) m_librarianService->setProjectPath(dir);
-                CharacterDossierService::instance().setProjectPath(dir);
+                LoreKeeperService::instance().setProjectPath(dir);
                 m_fileExplorer->setRootPath(dir);
                 ProjectManager::instance().setupDefaultProject(dir, name);
                 updateTitle();
@@ -965,7 +1161,7 @@ void MainWindow::openProject()
         if (ProjectManager::instance().openProject(filePath)) {
             QString projectDir = ProjectManager::instance().projectPath();
             if (m_librarianService) m_librarianService->setProjectPath(projectDir);
-            CharacterDossierService::instance().setProjectPath(projectDir);
+            LoreKeeperService::instance().setProjectPath(projectDir);
             m_fileExplorer->setRootPath(projectDir);
             updateTitle();
         }
@@ -1204,9 +1400,28 @@ void MainWindow::navigateToLine(int line)
 void MainWindow::togglePreview()
 {
     if (m_previewPanel) {
-        m_previewPanel->setVisible(m_togglePreviewAction->isChecked());
-        if (m_previewPanel->isVisible()) {
+        bool visible = m_togglePreviewAction->isChecked();
+        m_previewPanel->setVisible(visible);
+        
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (visible) {
+            // Give it some reasonable space if it was hidden (size 0)
+            if (sizes.size() >= 3 && sizes[2] < 50) {
+                int total = 0;
+                for (int s : sizes) total += s;
+                int previewSize = total * 0.3; // 30% for preview
+                sizes[2] = previewSize;
+                sizes[1] = total - sizes[0] - previewSize;
+                m_mainSplitter->setSizes(sizes);
+            }
             syncScroll();
+        } else {
+            // Hide it completely in the splitter
+            if (sizes.size() >= 3) {
+                sizes[1] += sizes[2];
+                sizes[2] = 0;
+                m_mainSplitter->setSizes(sizes);
+            }
         }
     }
 }
@@ -1242,11 +1457,27 @@ void MainWindow::updateTitle()
 }
 void MainWindow::showCentralView(QWidget *widget)
 {
-    m_editorSplitter->setVisible(widget == m_editorSplitter || widget == m_editorView || widget == m_researchView);
-    m_corkboardView->setVisible(widget == m_corkboardView);
-    m_imagePreview->setVisible(widget == m_imagePreview);
-    m_diffView->setVisible(widget == m_diffView);
-    m_pdfViewer->setVisible(widget == m_pdfViewer);
+    // The editor splitter is what's actually parented in the stacked layout — if
+    // a caller asks for the inner editor or research views, surface the splitter.
+    QWidget *target = widget;
+    if (widget == m_editorView || widget == m_researchView) {
+        target = m_editorSplitter;
+    }
+
+    if (m_centralViewLayout->indexOf(target) >= 0) {
+        m_centralViewLayout->setCurrentWidget(target);
+    }
+
+    if (target == m_editorSplitter) {
+        // Ensure the centre column of the main splitter has size to actually
+        // render the editor (defensive: a previous resize may have starved it).
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 2 && sizes[1] < 100) {
+            int total = sizes[0] + sizes[1] + (sizes.size() > 2 ? sizes[2] : 0);
+            sizes[1] = total - sizes[0] - (sizes.size() > 2 ? sizes[2] : 0);
+            m_mainSplitter->setSizes(sizes);
+        }
+    }
 
     // Add the Kompare part's toolbar only while the diff view is visible,
     // so its actions never pollute the primary toolbar.
@@ -1260,6 +1491,26 @@ void MainWindow::showCentralView(QWidget *widget)
             m_diffClientAdded = false;
         }
     }
+}
+
+QString MainWindow::currentViewId() const
+{
+    if (m_diffView && m_diffView->isVisible()) {
+        return QStringLiteral("diff");
+    }
+    if (m_corkboardView && m_corkboardView->isVisible()) {
+        return QStringLiteral("corkboard");
+    }
+    if (m_imagePreview && m_imagePreview->isVisible()) {
+        return QStringLiteral("imagepreview");
+    }
+    if (m_pdfViewer && m_pdfViewer->isVisible()) {
+        return QStringLiteral("pdf");
+    }
+    if (m_editorSplitter && m_editorSplitter->isVisible()) {
+        return QStringLiteral("editor");
+    }
+    return QString();
 }
 
 void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2)
@@ -1364,7 +1615,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         QWidget *popup = qobject_cast<QWidget*>(watched);
         if (popup && popup->parentWidget()) {
             // Defer repositioning to after the Show event is fully processed
-            QTimer::singleShot(0, this, [this, popup, view]() {
+            QTimer::singleShot(0, this, [popup, view]() {
                 if (!popup->isVisible() || !view) return;
 
                 KTextEditor::Cursor cursor = view->cursorPosition();
@@ -1714,6 +1965,14 @@ void MainWindow::aiSummarize()
     m_chatPanel->askAI(prompt + QStringLiteral("\n\n") + selection, i18n("AI Summarize"));
 }
 
+void MainWindow::onForceLoreScan()
+{
+    KTextEditor::Document *doc = activeDocument();
+    if (doc && !doc->url().isEmpty() && doc->url().isLocalFile()) {
+        LoreKeeperService::instance().indexDocument(doc->url().toLocalFile());
+    }
+}
+
 void MainWindow::onDiagnosticsUpdated(const QString &filePath, const QList<Diagnostic> &diagnostics)
 {
     KTextEditor::Document *doc = nullptr;
@@ -1768,7 +2027,7 @@ void MainWindow::showEditorContextMenu(KTextEditor::View *view, QMenu *menu)
     // Check if we've already added the AI menu to this specific QMenu object.
     // KTextEditor sometimes reuses the menu or different plugins add to it.
     for (auto *action : menu->actions()) {
-        if (action->text() == i18n("AI Assistant") || action->menu() && action->menu()->title() == i18n("AI Assistant")) {
+        if (action->text() == i18n("AI Assistant") || (action->menu() && action->menu()->title() == i18n("AI Assistant"))) {
             return;
         }
     }
@@ -1883,18 +2142,22 @@ void MainWindow::importScrivener()
     // Explicitly keep them paused
     AgentGatekeeper::instance().pauseAll();
 
-    QtConcurrent::run([importer, scrivPath, projectPath, this]() {
+    QThreadPool::globalInstance()->start([importer, scrivPath, projectPath, this]() {
         ProjectTreeModel backgroundModel;
         bool success = importer->import(scrivPath, projectPath, &backgroundModel);
         auto resultData = backgroundModel.projectData();
         
         QMetaObject::invokeMethod(this, [this, success, resultData]() {
             if (success) {
-                m_projectTree->model()->setProjectData(resultData);
-                ProjectManager::instance().setTree(resultData);
-                ProjectManager::instance().saveProject();
+                // Single validating wrapper: setTreeData internally runs
+                // validateTree (heals leaf-Folder-as-File, ensures the three
+                // authoritative top-level folders, etc.) and then saves the
+                // already-corrected JSON. Importers no longer touch the
+                // model directly.
+                ProjectManager::instance().setTreeData(resultData);
                 QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
-            } else {
+            }
+ else {
                 QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
             }
 
@@ -1919,56 +2182,44 @@ void MainWindow::importWord()
     QString projectDir = ProjectManager::instance().projectPath();
     QString mediaDir = projectDir + QStringLiteral("/media");
     
-    ProjectTreeModel *model = m_projectTree->model();
     SynopsisService::instance().pause();
 
-    // 1. Find Manuscript folder
+    // 1. Find the Manuscript folder via path lookup. The authoritative
+    // root is at "manuscript" — validateTree creates it on project open.
+    const bool hasManuscript = ProjectManager::instance().findItem(QStringLiteral("manuscript")) != nullptr;
 
-    QModelIndex manuscriptIdx;
-    ProjectTreeItem *rootItem = model->itemFromIndex(QModelIndex());
-    for (int i = 0; i < rootItem->children.count(); ++i) {
-        if (rootItem->children[i]->category == ProjectTreeItem::Manuscript) {
-            manuscriptIdx = model->index(i, 0, QModelIndex());
-            break;
-        }
-    }
-    
-    // Fallback to current selection or root if Manuscript not found
-    if (!manuscriptIdx.isValid()) {
-        manuscriptIdx = m_projectTree->currentIndex();
-    }
-    
     for (const QString &file : files) {
         QFileInfo info(file);
         QString baseName = info.baseName();
         QString safeName = DocumentConverter::sanitizePrefix(baseName);
-        
-        // Create a subfolder for this specific document
-        QString folderRelPath = QStringLiteral("manuscript/") + safeName;
-        if (!manuscriptIdx.isValid()) folderRelPath = safeName; // fallback
-        
-        QModelIndex targetFolderIdx = model->addFolder(baseName, folderRelPath, manuscriptIdx);
-        
+
+        // Create a per-document subfolder under Manuscript (or at root as
+        // a fallback if Manuscript is somehow missing).
+        QString folderRelPath = hasManuscript
+            ? (QStringLiteral("manuscript/") + safeName)
+            : safeName;
+        const QString parentPath = hasManuscript ? QStringLiteral("manuscript") : QString();
+        ProjectManager::instance().addFolder(baseName, folderRelPath, parentPath);
+
         auto result = converter.convertToMarkdown(file, safeName, mediaDir);
-        
+
         if (result.success) {
             QString relPath = folderRelPath + QDir::separator() + safeName + QStringLiteral(".md");
             QString absPath = QDir(projectDir).absoluteFilePath(relPath);
-            
+
             QDir().mkpath(QFileInfo(absPath).absolutePath());
-            
+
             QFile outFile(absPath);
             if (outFile.open(QIODevice::WriteOnly)) {
                 outFile.write(result.markdown.toUtf8());
                 outFile.close();
-                model->addFile(baseName, relPath, targetFolderIdx);
+                ProjectManager::instance().addFile(baseName, relPath, folderRelPath);
             }
         } else {
             QMessageBox::warning(this, i18n("Import Error"), i18n("Failed to convert %1: %2", baseName, result.error));
         }
     }
-    
-    ProjectManager::instance().setTree(model->projectData());
+
     ProjectManager::instance().saveProject();
     SynopsisService::instance().resume();
 
@@ -2018,7 +2269,7 @@ void MainWindow::updateProjectPreview()
     if (!m_previewPanel || !ProjectManager::instance().isProjectOpen()) return;
 
     QString markdown;
-    auto treeData = ProjectManager::instance().tree();
+    auto treeData = ProjectManager::instance().treeData();
     ProjectTreeModel model;
     model.setProjectData(treeData);
     
@@ -2241,5 +2492,346 @@ void MainWindow::updateLibrarianHighlights()
             
             m_librarianRanges.append(range);
         }
+    }
+}
+
+// --- Explorations slots ---
+
+void MainWindow::onSwitchExplorationRequested(const QString &branchName)
+{
+    const QString repoPath = ProjectManager::instance().projectPath();
+    if (repoPath.isEmpty()) return;
+
+    // Run the blocking libgit2 queries off the main thread; on large repos
+    // hasUncommittedChanges() and currentBranch() can stall the UI.
+    struct DirtyCheckResult {
+        bool dirty;
+        QString currentBranch;
+    };
+    auto fut = QtConcurrent::run([repoPath]() {
+        DirtyCheckResult r;
+        r.dirty = GitService::instance().hasUncommittedChanges(repoPath);
+        r.currentBranch = GitService::instance().currentBranch(repoPath);
+        return r;
+    });
+
+    fut.then(this, [this, repoPath, branchName](DirtyCheckResult r) {
+        if (!r.dirty) {
+            GitService::instance().switchExploration(repoPath, branchName)
+                .then(this, [this](bool ok) {
+                    if (ok) m_explorationsPanel->refresh();
+                });
+            return;
+        }
+
+        auto *dlg = new UnsavedChangesDialog(r.currentBranch, branchName, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+        connect(dlg, &UnsavedChangesDialog::saveRequested,
+                this, [this, repoPath, branchName](const QString &msg) {
+                    GitService::instance().commitAll(repoPath, msg)
+                        .then(this, [this, repoPath, branchName](bool ok) {
+                            if (!ok) {
+                                KMessageBox::error(this,
+                                    i18n("Could not save your changes. Switch cancelled."),
+                                    i18n("Save Failed"));
+                                return;
+                            }
+                            GitService::instance().switchExploration(repoPath, branchName)
+                                .then(this, [this](bool) {
+                                    m_explorationsPanel->refresh();
+                                });
+                        });
+                });
+
+        connect(dlg, &UnsavedChangesDialog::parkRequested,
+                this, [this, repoPath, branchName](const QString &stashMsg) {
+                    GitService::instance().stashChanges(repoPath, stashMsg)
+                        .then(this, [this, repoPath, branchName](bool ok) {
+                            if (!ok) {
+                                KMessageBox::error(this,
+                                    i18n("Could not park your changes. Switch cancelled."),
+                                    i18n("Park Failed"));
+                                return;
+                            }
+                            GitService::instance().switchExploration(repoPath, branchName)
+                                .then(this, [this](bool) {
+                                    m_explorationsPanel->refresh();
+                                });
+                        });
+                });
+
+        dlg->open();
+    });
+}
+
+void MainWindow::onIntegrateExplorationRequested(const QString &sourceBranch)
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    if (repoPath.isEmpty()) return;
+
+    GitService::instance().integrateExploration(repoPath, sourceBranch)
+        .then(this, [this](bool ok) {
+            if (ok) {
+                m_explorationsPanel->refresh();
+            } else {
+                onIntegrateFailed();
+            }
+        });
+}
+
+void MainWindow::onIntegrateFailed()
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    GitService::instance().getConflictingFiles(repoPath)
+        .then(this, [this](QList<ConflictFile> conflicts) {
+            if (conflicts.isEmpty()) return;
+            m_conflictFiles = conflicts;
+            m_conflictIndex = 0;
+            m_conflictBanner->setVisible(true);
+            showNextConflict();
+        });
+}
+
+void MainWindow::showNextConflict()
+{
+    if (m_conflictIndex >= m_conflictFiles.size()) {
+        m_conflictBanner->setVisible(false);
+        return;
+    }
+    const ConflictFile &cf = m_conflictFiles.at(m_conflictIndex);
+    m_conflictBannerLabel->setText(
+        i18n("Resolving conflict %1 of %2 — %3",
+             m_conflictIndex + 1,
+             m_conflictFiles.size(),
+             QFileInfo(cf.path).fileName()));
+    m_conflictNextBtn->setEnabled(m_conflictIndex + 1 < m_conflictFiles.size());
+    const QString repoPath = ProjectManager::instance().projectPath();
+    m_diffView->setConflict(repoPath, cf.path, cf.ancestorHash, cf.oursHash, cf.theirsHash);
+    showCentralView(m_diffView);
+}
+
+void MainWindow::onCreateLandmarkRequested(const QString &hash)
+{
+    bool ok = false;
+    QString name = QInputDialog::getText(
+        this, i18n("Create Landmark"),
+        i18n("Landmark name:"), QLineEdit::Normal, QString(), &ok);
+    if (!ok || name.trimmed().isEmpty()) return;
+
+    QString repoPath = ProjectManager::instance().projectPath();
+    GitService::instance().createTag(repoPath, name.trimmed(), hash);
+    m_explorationsPanel->refresh();
+}
+
+void MainWindow::onRecallVersionRequested(const QString &hashOrPath)
+{
+    QString filePath = hashOrPath;
+    QString repoPath = ProjectManager::instance().projectPath();
+    QVariantMap colors = m_explorationsPanel->graphView()->saveColorMap();
+
+    auto *dlg = new VersionRecallBrowser(filePath, repoPath, colors, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &VersionRecallBrowser::versionSelected,
+            this, &MainWindow::onVersionSelected);
+    dlg->open();
+}
+
+void MainWindow::onVersionSelected(const QString &filePath, const QString &commitHash)
+{
+    QString repoPath = ProjectManager::instance().projectPath();
+    if (repoPath.isEmpty()) return;
+
+    // Step 1: commit any uncommitted changes first so the current draft is preserved
+    // as a Milestone before overwriting with the historical version.
+    QFuture<bool> commitFuture;
+    if (GitService::instance().hasUncommittedChanges(repoPath)) {
+        commitFuture = GitService::instance().commitAll(repoPath,
+            i18n("Auto-saved before recalling version"));
+    } else {
+        commitFuture = QtFuture::makeReadyValueFuture(true);
+    }
+
+    commitFuture.then(this, [this, filePath, commitHash](bool commitOk) {
+        if (!commitOk) {
+            KMessageBox::error(this,
+                i18n("Could not save the current draft. Version recall aborted."),
+                i18n("Recall Failed"));
+            return;
+        }
+
+        // Step 2: extract the historical version into a unique temp file.
+        auto *temp = new QTemporaryFile(QDir::tempPath() + QStringLiteral("/rpgforge_recall_XXXXXX.md"));
+        temp->setAutoRemove(false);
+        if (!temp->open()) {
+            KMessageBox::error(this, i18n("Could not create temp file for recall."),
+                               i18n("Recall Failed"));
+            delete temp;
+            return;
+        }
+        const QString tempPath = temp->fileName();
+        temp->close();
+        delete temp;
+
+        GitService::instance().extractVersion(filePath, commitHash, tempPath)
+            .then(this, [this, filePath, tempPath](bool ok) {
+                if (!ok) {
+                    KMessageBox::error(this,
+                        i18n("Failed to extract the selected version."),
+                        i18n("Recall Failed"));
+                    QFile::remove(tempPath);
+                    return;
+                }
+
+                // Step 3: install atomically. On Linux rename(2) atomically replaces
+                // an existing destination; no prior remove needed (removing first would
+                // open a data-loss window if rename/copy subsequently fail).
+                if (!QFile::rename(tempPath, filePath)) {
+                    // Fall back to copy-over-existing if tmp is on a different filesystem.
+                    QFile::remove(filePath);
+                    if (!QFile::copy(tempPath, filePath)) {
+                        KMessageBox::error(this,
+                            i18n("Failed to install the recalled version."),
+                            i18n("Recall Failed"));
+                    }
+                    QFile::remove(tempPath);
+                }
+
+                if (m_document && m_document->url().toLocalFile() == filePath) {
+                    m_document->openUrl(QUrl::fromLocalFile(filePath));
+                }
+                m_explorationsPanel->refresh();
+            });
+    });
+}
+
+bool MainWindow::saveAllDocuments()
+{
+    bool ok = true;
+    auto saveOne = [&ok](KTextEditor::Document *doc) {
+        if (!doc) return;
+        if (doc->url().isEmpty()) return; // untitled — skip, caller needs saveAs
+        if (!doc->isModified()) return;
+        if (!doc->save()) ok = false;
+    };
+    saveOne(m_document);
+    saveOne(m_researchDocument);
+    if (ProjectManager::instance().isProjectOpen()) {
+        ProjectManager::instance().saveProject();
+    }
+    return ok;
+}
+
+QString MainWindow::activeConflictFile() const
+{
+    if (m_conflictFiles.isEmpty() || m_conflictIndex < 0
+        || m_conflictIndex >= m_conflictFiles.size()) {
+        return QString();
+    }
+    return m_conflictFiles.at(m_conflictIndex).path;
+}
+
+QList<int> MainWindow::conflictProgress() const
+{
+    return QList<int>{m_conflictIndex, static_cast<int>(m_conflictFiles.size())};
+}
+
+void MainWindow::invokeVersionRecall(const QString &filePath, const QString &commitHash)
+{
+    onVersionSelected(filePath, commitHash);
+}
+
+void MainWindow::showReconciliationDialog(const QList<ReconciliationEntry> &entries)
+{
+    if (entries.isEmpty()) return;
+
+    ReconciliationDialog dlg(entries, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    const QList<ReconciliationEntry> applied = dlg.entries();
+    ProjectManager &pm = ProjectManager::instance();
+    pm.beginBatch();
+    for (const ReconciliationEntry &entry : applied) {
+        applyReconciliationEntry(entry);
+    }
+    pm.endBatch();
+}
+
+void MainWindow::applyReconciliationEntry(const ReconciliationEntry &entry)
+{
+    ProjectManager &pm = ProjectManager::instance();
+    if (!pm.isProjectOpen()) return;
+
+    switch (entry.action) {
+    case ReconciliationEntry::None:
+        // User left this row unresolved — nothing to do.
+        break;
+
+    case ReconciliationEntry::Locate: {
+        if (entry.resolvedPath.isEmpty() || entry.resolvedPath == entry.path) {
+            qDebug() << "MainWindow::applyReconciliationEntry: Locate with no change for"
+                     << entry.path;
+            break;
+        }
+        // Compute whether the parent directory changed. If so we need a
+        // move + (possibly) a rename. Otherwise a pure rename suffices.
+        const QString oldParent = QFileInfo(entry.path).path();
+        const QString newParent = QFileInfo(entry.resolvedPath).path();
+        const QString newBasename = QFileInfo(entry.resolvedPath).fileName();
+
+        if (oldParent == newParent) {
+            // Same parent — rename-only.
+            if (!pm.renameItem(entry.path, newBasename)) {
+                qWarning() << "MainWindow::applyReconciliationEntry: rename failed for"
+                           << entry.path << "->" << newBasename;
+            }
+        } else {
+            // Different parent — move, then rename if the basename also changed.
+            const QString sourceBasename = QFileInfo(entry.path).fileName();
+            if (!pm.moveItem(entry.path, newParent)) {
+                qWarning() << "MainWindow::applyReconciliationEntry: move failed for"
+                           << entry.path << "->" << newParent;
+                break;
+            }
+            if (sourceBasename != newBasename) {
+                const QString movedPath = newParent.isEmpty()
+                    ? sourceBasename
+                    : (newParent + QLatin1Char('/') + sourceBasename);
+                if (!pm.renameItem(movedPath, newBasename)) {
+                    qWarning() << "MainWindow::applyReconciliationEntry: rename after move failed for"
+                               << movedPath << "->" << newBasename;
+                }
+            }
+        }
+        break;
+    }
+
+    case ReconciliationEntry::Remove:
+        if (!pm.removeItem(entry.path)) {
+            qWarning() << "MainWindow::applyReconciliationEntry: remove failed for"
+                       << entry.path;
+        }
+        break;
+
+    case ReconciliationEntry::RecreateEmpty: {
+        const QString absPath = QDir(pm.projectPath()).absoluteFilePath(entry.path);
+        QFileInfo fi(absPath);
+        if (!fi.exists()) {
+            if (!QDir().mkpath(fi.absolutePath())) {
+                qWarning() << "MainWindow::applyReconciliationEntry: mkpath failed for"
+                           << fi.absolutePath();
+                break;
+            }
+            QFile f(absPath);
+            if (!f.open(QIODevice::WriteOnly)) {
+                qWarning() << "MainWindow::applyReconciliationEntry: failed to create"
+                           << absPath;
+                break;
+            }
+            f.close();
+            qDebug() << "MainWindow::applyReconciliationEntry: recreated empty file at" << absPath;
+        }
+        break;
+    }
     }
 }

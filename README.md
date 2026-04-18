@@ -1,64 +1,42 @@
-# RPG Forge
+# RPG Forge — The Intelligent AI Agentic Workspace for Worldbuilders, Game Designers and Authors.
 
-**RPG Forge** is a writer-centric workspace designed for roleplaying game designers, worldbuilders, and novelists. It combines a powerful writing environment with intelligent organization and an automated assistant that helps you stay consistent across even the most complex projects.
+RPG Forge is a modern, professional workspace designed specifically for the complex needs of RPG game designers, novelists, and worldbuilders. It combines a distraction-free writing environment with a powerful, AI-assisted brain that helps you track your lore, analyze your mechanics, and maintain absolute consistency across your entire project.
 
-## 🚀 Key Capabilities
+## Key Features for Creators
 
-### 1. Writer-Centric Project Management
-Organize your project the way you think, not the way a computer stores files:
-*   **Manuscript:** The heart of your creation. Documents here are automatically assembled into your final work. RPG Forge handles the numbering of **Chapters** and the flow of **Scenes** for you, so you can focus on the words.
-*   **Research & Lore:** A dedicated space for your world's foundation. Keep track of **Characters**, **Places**, and **Cultures** with specialized views that keep your notes organized and accessible.
-*   **Corkboard View:** Visualize your folders as physical cards. Reorder scenes or chapters by simply dragging them across the board, and your project structure updates instantly.
+### 🏛️ Automated LoreKeeper
+Stop losing track of your world's details. As you write your manuscript, the LoreKeeper AI works in the background to identify things you want to keep track of. Characters, settings, cultures, etc. You specify to the LoreKeeper what you want it to track and write a prompt/description for each item to track. It then automatically builds a structured "World Bible" for you based on your directions, synthesizing information from your prose into organized dossiers so you always have a quick reference for a character's eye color or the hidden history of a forgotten city.
 
-### 2. A Powerful Writing Environment
-Authors can stop worrying about anything other than writing. Powered by a flexible and powerful text editor, RPG Forge gives you the tools to immerse yourself in your work:
-*   **Focus Mode:** Strip away every distraction with a single shortcut (`Ctrl+Shift+F`) to enter a clean, fullscreen writing space.
-*   **Research Split-View:** When you open a note from your Research folder, it automatically appears alongside your manuscript. Reference your lore on the right while you write on the left.
-*   **Flexible Formatting:** Use simple Markdown for basic styling, or leverage HTML and CSS if you want complete control over the final look of your document.
+### 🧠 Semantic AI Assistant
+The Forge doesn't just check your spelling; it understands your world. Our integrated Writing Assistant automatically builds a RAG (retrieval augmented generation) AI assistant that can answer questions about your own story or game world, and help you brainstorm plot points that fit your established lore, and even provide real-time feedback on your game rules. It uses "Semantic Search" to instantly find relevant context from thousands of your own notes to ensure every suggestion is grounded in your unique vision. 
 
-### 3. Professional Tracking & Syncing
-RPG Forge manages your documents with the same rigor a programmer uses for code, giving you total creative freedom:
-*   **Automatic Checkpoints:** Every time you save, RPG Forge creates a "checkpoint" of your work. You can easily retrieve, compare, or merge older versions of any document.
-*   **Exploration Branches:** Want to try a completely different direction for a chapter? Create an "Exploration" (branch). You can work in this alternate timeline without affecting your main manuscript, then merge the changes back or discard them later.
-*   **Worry-Free Switching:** When you switch between different explorations, RPG Forge automatically saves your current work so you never lose a word.
-*   **Data Protection:** Professional versioning protects you from losing your work should anything happen to your computer, allowing you to sync your entire project to remote file management systems like GitHub.
+### 🧠 AI Provider and Model Agnostc
+Our built in AI assistants: the Lorekeeper, the Semantic Assistant and the RAG chatbot, can each be configured to use a different AI provider and model. RPG Forge supports both cloud based or local AI models. Just configure them with your API key and select which provider and model you want to use for each built in AI Agent. RPG Forge supports configuring the following local and cloud-based providers: Ollama, LM Studio (via the server interface) Google Gemini, OpenAI, Anthropic and Grok.
 
-### 4. Maintain Consistency with Ease
-For game designers and worldbuilders, consistency is everything. 
-*   **Variable System:** Define stats, names, or values in one place and reference them throughout your text. If you change a character's base health or a city's name, it updates everywhere automatically, ensuring your rules and narrative never drift apart.
+### Variable and Rules Assistant
+The Librarian service runs continually in the background as you type, capturing your rules, mechanics and tables, indexing them and storing them in a local database. IT also translates them into local variables that you can use through autocomplete as you type or drag and drop so that you don't accidentally enter conflicting information. Data from these variables are automatically resolved in the life Preview view that updates as you type and in the pdf export function. Don't remember what your unique fanasy race's hit points are? define it in a variable and reuse that variable everywhere to ensure consistency. But even if you don't use the librarian service (which runs automatically) the semantic assistant will find and flag inconsistencies for you, even across different files!
 
-### 5. Your Intelligent Writing Aide
-RPG Forge includes an integrated assistant that takes mundane project management tasks off your plate:
-*   **Context-Aware Assistance:** The assistant has direct knowledge of everything you have written so far. It can offer suggestions, expand on ideas, or rewrite sections—all within the specific context of your unique creation.
-*   **Background Synopsis:** As you write, the assistant works in the background to summarize your files and folders, keeping your Corkboard informative without you having to write a single summary.
-*   **Narrative & Rule Analyzer:** The background analyzer scans your *entire* manuscript—even if it's broken into dozens of small files—looking for inconsistencies in your rules or narrative logic. It highlights these issues for you so you don't have to keep every detail in your head.
+### 🗺️ Authoritative Project Management
+Your project structure is the "Source of Truth." The RPG Forge organizes your manuscripts, research material, media, and lore into a logical hierarchy that defines your project. Whether you are reordering scenes to perfect a chapter's flow or importing a complex Scrivener project, the workspace ensures your structure is validated, logged, and safe.
 
-### 6. Privacy, Control, and Frugality
-We believe your copyrighted work belongs to you.
-*   **Local AI Support:** RPG Forge integrates with **Ollama**, allowing you to run AI models locally on your own hardware. This keeps your data private (it never leaves your machine to train vendor models) and keeps your costs down by avoiding per-token service fees.
+### 🔄 Branching "Explorations"
+Writer's block often comes from the fear of making the "wrong" choice. Our Exploration system (with github integration) allows you to explore different paths. Want to see what happens if the protagonist fails their quest? Open an Exploration. You can experiment freely, and if you like the results, you can merge them back into your main story. If not, simply discard the branch and your original work remains untouched.
 
----
+### 🔄 Version retrieval and comparison
+Want an old version of a manuscript, chapter or scene file? RIght click to restore and old version, then open a visual comparison tool that allows you to merge in that changes that matter to you.
 
-## 🛠 How It Works
+### 📊 Rule Simulation & Analysis
+For game designers, consistency in mechanics is just as important as consistency in plot. RPG Forge includes tools to analyze your game's variables and formulas. The AI can help you simulate combat encounters or social challenges based on your own ruleset, helping you find balance issues before they ever reach the table.
 
-### Setting Up a Project
-When you first open the application you will see a filesystem view on the bottom right while stacked on top is an empty project view. There should be a large button that says Create Project and it allows you to create a name for your work. Underneath this project view RPG Forge sets up a professional structure for you:
-*   `/manuscript`: Your game book, story and rules.
-*   `/research`: Your lore, characters, and worldbuilding notes.
-*   `/stylesheets`: Where your custom design lives.
+### 📝 Distraction-Free Professional Writing
+Built on high-performance editing technology, RPG Forge provides a clean, distraction-free Markdown writing experience. Enjoy professional typography, powerful search tools, and a flexible interface that lets you hide the technical panels when it's time to focus purely on the words.
 
-### Writing and Organizing
-*   **manuscript:** Underneath the Manuscript folder you can create a number of Chapter folders. Each can be named the name of a chapter and within each you can have one or more documents that represent the scenes or sections of that chapter. You can create as many additional chapter folders as you like. We suggest not naming them Chapter 1, Chapter 2, etc. as the app will do this for you when you export it to a particular format. Instead we suggest that you name them the name of the Chapter. The order in which they will appear in the preview view or in the final manuscript will depend on their arrangement in the Manuscript Corkboard.
-*   **Arranging:** Clicking on a folder under the Manuscript folder should bring up a Corkboard view where every chapter folder is arranged in the order in which you want them to appear in your work. THis order can be changed by dragging and dropping the cards around. The sysnopsis on each card is automatically generated for you when you save a file. There is also a corkboard view within each chapter folder that allows you to determine which order the documents in that folder should appear in the output. 
-*   **Categorizing:** Right-click any folder to set its category (like **Chapter** or **Character**). This changes how the folder behaves and how its contents are compiled.
-*   **Linking:** Drag a research note directly into your manuscript to create an instant link.
+## Why RPG Forge?
 
-### Syncing, Versioning and Saving.
-*   RPG Forge treats your manuscript like computer code. Those familiar with software development will recognize that RPG Forge uses git under the hood to version and save your work, both locally on your computer and upstream in the Cloud using a service called Github. THis requires some setup. YOu need a github account and need to create a github access token, which you then need to configure inside of RPG Forge. ONce you have done this, you are able to right click on any manuscript file and retrieve past versions. You can also compare previous versions with each other and merge changes. 
-*   **Exploration:** In addition we use something called branching to allow you to explore taking your work in a different direction that initially anticipated. THis way you can go off and explore new ideas without stomping on your existing ones. Should those ideas not work out, you can easily switch your "branch" back to the one you started with, or to a different exploration altogether. 
-
-### Compiling Your Work
-When you are ready to share your creation, use the **Compile** function. RPG Forge gathers your manuscript files, applies automatic chapter numbering, resolves all your variables and calculations, and generates a professionally styled PDF.
+*   **Privacy First:** Your notes and manuscript remain on your computer. You choose which AI providers to connect to. We are not an QI provider and RPG forge has no access to and can neven use your creative work to train and AI models. If you configure and use cloud based AI providers check with your AI providers regarding their privacy and copyright policies, that is something we have no control over. If you have the ability to run a local model, because you have an apple silicon Mac or a very beefy computer, then your content never leaves your home.
+*   **Built for Professional Performance:** A native Linux experience that respects your system theme and provides the responsiveness that serious creators demand.
+*   **One Workspace, Total Control:** No more switching between word processors, spreadsheets, and wiki software. No more worrying about saving multiple versions of your files, and then manually merging and chasing down all changes. Everything you need to build a universe, track its' development and apply polish, or simulate play testing is in one place.
+*   **Scrivener Import:** The only linux native tool that I know of that will import your scrivener project for you and allow you to continue to work on it on Linux.
 
 ---
 
@@ -66,9 +44,8 @@ When you are ready to share your creation, use the **Compile** function. RPG For
 
 ### Dependencies
 *   Qt 6 & KDE Frameworks 6
-*   `libgit2`, `cmark-gfm`
-*   **Ollama** (for local AI assistant capabilities)
-*   Recommended Local Model: `qwen3.5`
+*   `libgit2`, `libcmark-gfm`
+*   **AI Support:** Supports local (Ollama, LM Studio) and cloud-based (Google Gemini, OpenAI, Anthropic, Grok) providers.
 
 ### Build Instructions
 ```bash
@@ -80,3 +57,4 @@ When you are ready to share your creation, use the **Compile** function. RPG For
 
 ## ⚖ License
 RPG Forge is released under the **GNU General Public License v3.0**.
+*Developed with ❤️ for the worldbuilding community.*

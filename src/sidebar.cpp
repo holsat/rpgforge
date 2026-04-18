@@ -48,6 +48,7 @@ int Sidebar::addPanel(const QIcon &icon, const QString &text, QWidget *panel)
 
     m_tabBar->appendTab(icon, id, text);
     m_stack->addWidget(panel);
+    m_idToName.insert(id, text);
 
     // Connect tab click to toggle
     KMultiTabBarTab *tab = m_tabBar->tab(id);
@@ -100,4 +101,29 @@ QWidget *Sidebar::panel(int id) const
         return m_stack->widget(id);
     }
     return nullptr;
+}
+
+QStringList Sidebar::panelNames() const
+{
+    QStringList names;
+    names.reserve(m_idToName.size());
+    for (auto it = m_idToName.cbegin(); it != m_idToName.cend(); ++it) {
+        names.append(it.value());
+    }
+    return names;
+}
+
+QString Sidebar::panelName(int id) const
+{
+    return m_idToName.value(id);
+}
+
+int Sidebar::panelIdFromName(const QString &name) const
+{
+    for (auto it = m_idToName.cbegin(); it != m_idToName.cend(); ++it) {
+        if (it.value() == name) {
+            return it.key();
+        }
+    }
+    return -1;
 }

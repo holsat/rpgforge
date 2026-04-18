@@ -35,6 +35,28 @@ public:
 
     void setDiff(const QString &filePath, const QString &oldHash, const QString &newHash = QString());
     void setFiles(const QString &file1, const QString &file2);
+    /**
+     * \brief Loads a three-way merge conflict into the diff view.
+     *
+     * Extracts the ancestor, ours, and theirs blobs from the repository
+     * into temporary files via GitService::extractBlob() and passes them
+     * to Kompare for three-way rendering.  All blob extraction happens on
+     * QtConcurrent worker threads; the Kompare view is populated once all
+     * three futures have resolved on the main thread.
+     *
+     * \param repoPath     Absolute path to the root of the Git repository.
+     * \param filePath     Repository-relative path of the conflicted file,
+     *                     used to determine a meaningful temporary file name.
+     * \param ancestorHash Blob OID of the common ancestor (stage 1).
+     *                     May be empty for add/add conflicts.
+     * \param oursHash     Blob OID of the current-branch version (stage 2).
+     * \param theirsHash   Blob OID of the incoming-branch version (stage 3).
+     */
+    void setConflict(const QString &repoPath,
+                     const QString &filePath,
+                     const QString &ancestorHash,
+                     const QString &oursHash,
+                     const QString &theirsHash);
     
     KParts::ReadWritePart* part() const { return m_part; }
 
@@ -57,6 +79,9 @@ private:
     QString m_file2;
     QString m_tempOld;
     QString m_tempNew;
+    QString m_tempAncestor;
+    QString m_tempOurs;
+    QString m_tempTheirs;
     bool m_swapped = false;
 
     KParts::ReadWritePart *m_part = nullptr;

@@ -23,15 +23,16 @@
 #include <QString>
 #include <QPoint>
 
+#include "treenodesnapshot.h"
+
 class QLabel;
-struct ProjectTreeItem;
 
 class CorkboardCard : public QFrame
 {
     Q_OBJECT
 
 public:
-    explicit CorkboardCard(ProjectTreeItem *item, QWidget *parent = nullptr);
+    explicit CorkboardCard(const TreeNodeSnapshot &node, QWidget *parent = nullptr);
     ~CorkboardCard() override;
 
     QString itemPath() const { return m_itemPath; }

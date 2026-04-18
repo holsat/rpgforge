@@ -44,27 +44,22 @@ SynopsisService::SynopsisService(QObject *parent)
 
 SynopsisService::~SynopsisService() = default;
 
-void SynopsisService::setModel(ProjectTreeModel *model)
-{
-    m_model = model;
-}
-
 void SynopsisService::requestUpdate(const QString &relativePath, bool force)
 {
     if (relativePath.isEmpty()) return;
-    
+
     {
         QMutexLocker locker(&m_mutex);
         if (!force) {
-            ProjectTreeItem *item = nullptr;
-            if (m_model) {
-                item = m_model->findItem(relativePath);
-            }
-            if (item && !item->synopsis.isEmpty()) return;
+            // Only skip if a synopsis is already present. We look this up
+            // via the snapshot API so the service stays decoupled from the
+            // live model.
+            const auto snap = ProjectManager::instance().nodeSnapshot(relativePath);
+            if (snap && !snap->synopsis.isEmpty()) return;
         }
 
         if (!m_queue.contains(relativePath) && !m_activeRequests.contains(relativePath)) {
-            qDebug() << "SynopsisService: Queuing update for" << relativePath;
+            qDebug() << "Synopsis AI: Queuing update for" << relativePath;
             m_queue.enqueue(relativePath);
         }
 
@@ -84,88 +79,71 @@ void SynopsisService::cancelRequest(const QString &relativePath)
 
 void SynopsisService::scanProject()
 {
-    qDebug() << "SynopsisService: Scanning project for missing synopses...";
-    if (!m_model) {
-        qDebug() << "SynopsisService: Scan aborted - No model set.";
-        return;
-    }
+    qDebug() << "Synopsis AI: Scanning project for missing synopses...";
     if (!ProjectManager::instance().isProjectOpen()) {
-        qDebug() << "SynopsisService: Scan aborted - Project not open.";
+        qDebug() << "Synopsis AI: Scan aborted - Project not open.";
         return;
     }
-    
-    struct ItemInfo {
-        QString path;
-        ProjectTreeItem::Type type;
-        bool isManuscript;
-        bool hasSynopsis;
-    };
-    QList<ItemInfo> items;
 
-    m_model->executeUnderLock([&]() {
-        ProjectTreeItem *root = m_model->rootItem();
-        if (!root || root->children.isEmpty()) return;
+    const TreeNodeSnapshot root = ProjectManager::instance().treeSnapshot();
+    if (root.children.isEmpty()) return;
 
-        std::function<void(ProjectTreeItem*, bool)> scan = [&](ProjectTreeItem *item, bool inManuscript) {
-            if (!item) return;
-            
-            bool manuscript = inManuscript || (item->category == ProjectTreeItem::Manuscript);
-            
-            if (item != root) {
-                items.append({item->path, item->type, manuscript, !item->synopsis.isEmpty()});
-            }
-            for (auto *child : item->children) {
-                scan(child, manuscript);
-            }
-        };
-        scan(root, false);
-    });
+    scanSnapshot(root, /*inManuscript=*/false);
+}
 
-    if (items.isEmpty()) return;
+void SynopsisService::scanSnapshot(const TreeNodeSnapshot &node, bool inManuscript)
+{
+    const bool manuscript = inManuscript
+        || (node.category == static_cast<int>(ProjectTreeItem::Manuscript));
 
-    qDebug() << "SynopsisService: Found" << items.count() << "items to check.";
-
-    // Prioritize files to build leaf-level data first
-    for (const auto &info : items) {
-        if (info.type == ProjectTreeItem::File) {
-            if (info.isManuscript && !info.hasSynopsis && !info.path.isEmpty()) {
-                requestUpdate(info.path);
-            }
+    // Prioritize leaf files under Manuscript — folder synopses depend on
+    // child data being present first. Non-manuscript folders are also
+    // enqueued (below) but only after the manuscript pass has primed the
+    // queue.
+    if (!node.path.isEmpty() && !node.isTransient) {
+        if (node.type == static_cast<int>(ProjectTreeItem::File)
+            && manuscript
+            && node.synopsis.isEmpty()) {
+            requestUpdate(node.path);
         }
     }
-    
-    // Then request folders
-    for (const auto &info : items) {
-        if (info.type == ProjectTreeItem::Folder) {
-            if (!info.hasSynopsis && !info.path.isEmpty()) {
-                requestUpdate(info.path);
-            }
+
+    for (const auto &child : node.children) {
+        scanSnapshot(child, manuscript);
+    }
+
+    // Folder-level enqueue at the tail of recursion so children are
+    // queued first — the processor is FIFO so files end up before folders.
+    if (!node.path.isEmpty() && !node.isTransient) {
+        if (node.type == static_cast<int>(ProjectTreeItem::Folder)
+            && node.synopsis.isEmpty()) {
+            requestUpdate(node.path);
         }
     }
 }
 
 void SynopsisService::pause()
 {
-    qDebug() << "SynopsisService: Pausing...";
+    qDebug() << "Synopsis AI: Pausing...";
     QMutexLocker locker(&m_mutex);
     m_paused = true;
 }
 
 void SynopsisService::resume()
 {
-    qDebug() << "SynopsisService: Resuming...";
+    qDebug() << "Synopsis AI: Resuming...";
     bool startProcessing = false;
     {
         QMutexLocker locker(&m_mutex);
         if (!m_paused) return;
         m_paused = false;
-        
+
         if (!m_queue.isEmpty() && !m_isProcessing) {
             m_isProcessing = true;
             startProcessing = true;
         }
     }
-    
+
     if (startProcessing) {
         QTimer::singleShot(0, this, &SynopsisService::processNext);
     }
@@ -184,13 +162,9 @@ void SynopsisService::processNext()
         m_activeRequests.insert(relPath);
     }
 
-    ProjectTreeItem *item = nullptr;
-    if (m_model) {
-        item = m_model->findItem(relPath);
-    }
-    
-    if (!item) {
-        qDebug() << "SynopsisService: Item no longer in tree, skipping:" << relPath;
+    const auto snap = ProjectManager::instance().nodeSnapshot(relPath);
+    if (!snap) {
+        qDebug() << "Synopsis AI: Item no longer in tree, skipping:" << relPath;
         {
             QMutexLocker locker(&m_mutex);
             m_activeRequests.remove(relPath);
@@ -199,36 +173,56 @@ void SynopsisService::processNext()
         return;
     }
 
-    if (item->type == ProjectTreeItem::File) {
-        QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
+    if (snap->type == static_cast<int>(ProjectTreeItem::File)) {
+        const QString fullPath = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(relPath);
         if (!QFile::exists(fullPath)) {
-            m_activeRequests.remove(relPath);
+            {
+                QMutexLocker locker(&m_mutex);
+                m_activeRequests.remove(relPath);
+            }
             QTimer::singleShot(0, this, &SynopsisService::processNext);
             return;
         }
 
         QFile file(fullPath);
         if (file.open(QIODevice::ReadOnly)) {
-            QString content = QString::fromUtf8(file.readAll());
-            updateFileSynopsis(item, content);
+            const QString content = QString::fromUtf8(file.readAll());
+            updateFileSynopsis(relPath, content);
         } else {
-            m_activeRequests.remove(relPath);
+            {
+                QMutexLocker locker(&m_mutex);
+                m_activeRequests.remove(relPath);
+            }
             QTimer::singleShot(0, this, &SynopsisService::processNext);
         }
     } else {
-        updateFolderSynopsis(item);
+        QStringList childSynopses;
+        for (const auto &child : snap->children) {
+            if (!child.synopsis.isEmpty()) childSynopses << child.synopsis;
+        }
+
+        if (childSynopses.isEmpty()) {
+            {
+                QMutexLocker locker(&m_mutex);
+                m_activeRequests.remove(relPath);
+            }
+            QTimer::singleShot(0, this, &SynopsisService::processNext);
+            return;
+        }
+
+        updateFolderSynopsis(relPath, childSynopses);
     }
 }
 
-void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &content)
+void SynopsisService::updateFileSynopsis(const QString &relativePath, const QString &content)
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    
+
     // Use agent-specific settings first, then fall back to global
-    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_file_provider"), 
+    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_file_provider"),
                                      settings.value(QStringLiteral("llm/provider"), 0)).toInt();
     LLMProvider provider = static_cast<LLMProvider>(providerIdx);
-    
+
     QString model = settings.value(QStringLiteral("synopsis/synopsis_file_model")).toString();
     if (model.isEmpty()) {
         // Fallback to provider default model
@@ -236,93 +230,68 @@ void SynopsisService::updateFileSynopsis(ProjectTreeItem *item, const QString &c
         model = settings.value(sk + QStringLiteral("/model")).toString();
     }
 
+    QString systemPrompt = settings.value(QStringLiteral("synopsis/file_prompt"),
+        i18n("You are a senior RPG editor. Write a one-sentence hook/synopsis for this scene or document. Be atmospheric and concise.")).toString();
+
     LLMRequest req;
     req.provider = provider;
     req.model = model;
     req.serviceName = i18n("File Synopsis");
     req.settingsKey = QStringLiteral("synopsis/synopsis_file_model");
-    req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG documents concisely.")};
+    req.messages << LLMMessage{QStringLiteral("system"), systemPrompt};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this document in one short sentence: %1", content.left(2000))};
     req.stream = false;
 
-    QString relPath = item->path;
     QPointer<SynopsisService> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relPath](const QString &response) {
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relativePath](const QString &response) {
         if (!weakThis) return;
-        
-        ProjectTreeItem *resItem = nullptr;
-        if (weakThis->m_model) {
-            resItem = weakThis->m_model->findItem(relPath);
-        }
 
-        if (resItem) {
-            resItem->synopsis = response.trimmed();
-            QModelIndex idx = weakThis->m_model->indexForItem(resItem);
-            if (idx.isValid()) Q_EMIT weakThis->m_model->dataChanged(idx, idx, {ProjectTreeModel::SynopsisRole});
-        }
-        
+        ProjectManager::instance().setNodeSynopsis(relativePath, response.trimmed());
+
         {
             QMutexLocker locker(&weakThis->m_mutex);
-            weakThis->m_activeRequests.remove(relPath);
+            weakThis->m_activeRequests.remove(relativePath);
         }
         QTimer::singleShot(0, weakThis.data(), &SynopsisService::processNext);
     });
 }
 
-void SynopsisService::updateFolderSynopsis(ProjectTreeItem *item)
+void SynopsisService::updateFolderSynopsis(const QString &relativePath,
+                                            const QStringList &childSynopses)
 {
-    // Folder synopsis is a synthesis of its children's synopses
-    QString relPath = item->path;
-    QStringList childSynopses;
-    for (auto *child : item->children) {
-        if (!child->synopsis.isEmpty()) childSynopses << child->synopsis;
-    }
-
-    if (childSynopses.isEmpty()) {
-        m_activeRequests.remove(relPath);
-        QTimer::singleShot(0, this, &SynopsisService::processNext);
-        return;
-    }
-
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    
-    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_folder_provider"), 
+
+    int providerIdx = settings.value(QStringLiteral("synopsis/synopsis_folder_provider"),
                                      settings.value(QStringLiteral("llm/provider"), 0)).toInt();
     LLMProvider provider = static_cast<LLMProvider>(providerIdx);
-    
+
     QString model = settings.value(QStringLiteral("synopsis/synopsis_folder_model")).toString();
     if (model.isEmpty()) {
         QString sk = LLMService::providerSettingsKey(provider);
         model = settings.value(sk + QStringLiteral("/model")).toString();
     }
 
+    QString systemPrompt = settings.value(QStringLiteral("synopsis/folder_prompt"),
+        i18n("You are an RPG project manager. Write a one-sentence summary for this folder (e.g. 'A collection of character backgrounds' or 'The core mechanics of combat').")).toString();
+
     LLMRequest req;
     req.provider = provider;
     req.model = model;
     req.serviceName = i18n("Folder Synopsis");
     req.settingsKey = QStringLiteral("synopsis/synopsis_folder_model");
-    req.messages << LLMMessage{QStringLiteral("system"), i18n("You are an assistant that summarizes RPG project folders.")};
+    req.messages << LLMMessage{QStringLiteral("system"), systemPrompt};
     req.messages << LLMMessage{QStringLiteral("user"), i18n("Summarize this folder based on its contents: %1", childSynopses.join(QLatin1String("\n")))};
     req.stream = false;
 
     QPointer<SynopsisService> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relPath](const QString &response) {
+    LLMService::instance().sendNonStreamingRequest(req, [weakThis, relativePath](const QString &response) {
         if (!weakThis) return;
-        
-        ProjectTreeItem *resItem = nullptr;
-        if (weakThis->m_model) {
-            resItem = weakThis->m_model->findItem(relPath);
-        }
 
-        if (resItem) {
-            resItem->synopsis = response.trimmed();
-            QModelIndex idx = weakThis->m_model->indexForItem(resItem);
-            if (idx.isValid()) Q_EMIT weakThis->m_model->dataChanged(idx, idx, {ProjectTreeModel::SynopsisRole});
-        }
-        
+        ProjectManager::instance().setNodeSynopsis(relativePath, response.trimmed());
+
         {
             QMutexLocker locker(&weakThis->m_mutex);
-            weakThis->m_activeRequests.remove(relPath);
+            weakThis->m_activeRequests.remove(relativePath);
         }
         QTimer::singleShot(0, weakThis.data(), &SynopsisService::processNext);
     });

@@ -24,13 +24,17 @@
 #include <QQueue>
 #include <QSet>
 #include <QMutex>
-#include <QPointer>
 
-class ProjectTreeModel;
-struct ProjectTreeItem;
+#include "treenodesnapshot.h"
 
 /**
  * @brief Background AI Agent that automatically generates synopses for files and folders.
+ *
+ * Consumes the project tree via ProjectManager snapshots only — the service
+ * never holds a ProjectTreeModel pointer and is no longer friended on
+ * ProjectManager. Write-back to the tree is routed through
+ * ProjectManager::setNodeSynopsis() so dataChanged signals fire and the
+ * project is persisted automatically.
  */
 class SynopsisService : public QObject
 {
@@ -38,11 +42,6 @@ class SynopsisService : public QObject
 
 public:
     static SynopsisService& instance();
-
-    /**
-     * @brief Sets the project tree model to use for finding and updating items.
-     */
-    void setModel(ProjectTreeModel *model);
 
     /**
      * @brief Requests a synopsis update for a specific file path.
@@ -78,10 +77,11 @@ private:
     explicit SynopsisService(QObject *parent = nullptr);
     ~SynopsisService() override;
 
-    void updateFolderSynopsis(ProjectTreeItem *folder);
-    void updateFileSynopsis(ProjectTreeItem *file, const QString &content);
+    void scanSnapshot(const TreeNodeSnapshot &node, bool inManuscript);
+    void updateFileSynopsis(const QString &relativePath, const QString &content);
+    void updateFolderSynopsis(const QString &relativePath,
+                              const QStringList &childSynopses);
 
-    QPointer<ProjectTreeModel> m_model;
     QQueue<QString> m_queue;
     QSet<QString> m_activeRequests;
     bool m_isProcessing = false;

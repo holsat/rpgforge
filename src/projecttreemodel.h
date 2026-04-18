@@ -22,20 +22,58 @@
 #include <QAbstractItemModel>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QIcon>
+#include <QList>
 #include <QRecursiveMutex>
-#include <QStringList>
+
+#include "treenodesnapshot.h"
+
+class QDir;
+class QMimeData;
+
+/**
+ * \brief Try to resolve a tree-stored project-relative path to an actual file
+ *        on disk within \a projectDir.
+ *
+ * Returns the on-disk project-relative path if found, or an empty string if
+ * no resolution could be made. Shared by ProjectManager::validateTree() and
+ * ProjectTreePanel's click handlers so the healing heuristics remain DRY.
+ *
+ * Strategy (tried in order, with as-is and space->underscore path variants):
+ *   1) exact path with each of the known text-file extensions appended
+ *      ("" / .md / .markdown / .mkd / .txt / .rtf)
+ *   2) nested-leaf pattern (path "X" -> file "X/X.ext", common from Scrivener)
+ *   3) parent-directory scan with normalised (space/underscore, case-insensitive)
+ *      stem comparison
+ */
+QString tryResolveOnDisk(const QDir &projectDir, const QString &relativePath);
 
 struct ProjectTreeItem {
-    enum Type { Folder, File };
-    enum Category { None, Manuscript, Research, Library, Chapter, Scene, Characters, Places, Cultures, Stylesheet, Notes };
-    Type type;
-    Category category = None;
+    enum Type {
+        Folder,
+        File
+    };
+
+    enum Category {
+        None,
+        Manuscript,
+        Research,
+        LoreKeeper,
+        Media,
+        Chapter,
+        Scene,
+        Characters,
+        Places,
+        Cultures,
+        Stylesheet,
+        Notes
+    };
+
     QString name;
     QString path;
     QString synopsis;
     QString status;
-    bool transient = false;
+    Type type = File;
+    Category category = None;
     ProjectTreeItem *parent = nullptr;
     QList<ProjectTreeItem*> children;
 
@@ -44,16 +82,14 @@ struct ProjectTreeItem {
     }
 };
 
-/**
- * @brief The ProjectTreeModel class provides a hierarchical model for the project structure.
- */
 class ProjectTreeModel : public QAbstractItemModel
 {
     Q_OBJECT
 
 public:
     enum Roles {
-        TransientRole = Qt::UserRole + 1,
+        PathRole = Qt::UserRole + 1,
+        TypeRole,
         CategoryRole,
         SynopsisRole,
         StatusRole
@@ -62,52 +98,159 @@ public:
     explicit ProjectTreeModel(QObject *parent = nullptr);
     ~ProjectTreeModel() override;
 
-    void setProjectData(const QJsonObject &treeData);
-    QJsonObject projectData() const;
-
     // QAbstractItemModel interface
     QModelIndex index(int row, int column, const QModelIndex &parent = QModelIndex()) const override;
-    QModelIndex parent(const QModelIndex &child) const override;
+    QModelIndex parent(const QModelIndex &index) const override;
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
-    Qt::ItemFlags flags(const QModelIndex &index) const override;
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
-
-    // Helpers
-    QModelIndex addFolder(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
-    QModelIndex addFile(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
-    QModelIndex addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
-    
-    // Scans absolute path and adds to model, discovering related assets
-    void addFileWithSmartDiscovery(const QString &absolutePath, const QModelIndex &parent = QModelIndex());
-
-    bool removeItem(const QModelIndex &index);
-    bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
-
-    // Drag and Drop
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    bool removeRows(int row, int count, const QModelIndex &parent = QModelIndex()) override;
     Qt::DropActions supportedDropActions() const override;
     QStringList mimeTypes() const override;
-    QMimeData* mimeData(const QModelIndexList &indexes) const override;
+    QMimeData *mimeData(const QModelIndexList &indexes) const override;
+    bool canDropMimeData(const QMimeData *data, Qt::DropAction action, int row, int column, const QModelIndex &parent) const override;
     bool dropMimeData(const QMimeData *data, Qt::DropAction action, int row, int column, const QModelIndex &parent) override;
 
+    // Project Data interface
+    void setProjectData(const QJsonObject &data);
+    QJsonObject projectData() const;
+
+    /**
+     * \brief Rebuild the tree by walking the project directory on disk.
+     *
+     * Phase 6 of the tree-refactor: disk is the source of truth for
+     * structure. Per-node metadata (synopsis, status, categoryOverride,
+     * displayName) is looked up in \a nodeMetadata by project-relative
+     * path and stamped onto the created nodes. Sibling ordering is
+     * driven by \a orderHints (parentPath -> QJsonArray of child
+     * filenames); absent or empty entries fall back to alphanumeric.
+     *
+     * Skips hidden / dot-prefixed files and directories, RPG Forge's own
+     * on-disk side-files (rpgforge.project, .rpgforge-vectors.db) and
+     * common OS / build artefacts that are never part of a project (.git,
+     * .rpgforge, node_modules, .DS_Store, etc.).
+     *
+     * Runs under beginResetModel / endResetModel; attached views receive
+     * a single modelReset at the end. Safe to call with an empty project
+     * path (returns an empty tree).
+     */
+    void buildFromDisk(const QString &projectPath,
+                       const QJsonObject &nodeMetadata,
+                       const QJsonObject &orderHints);
+
+    ProjectTreeItem* rootItem() const { return m_rootItem; }
     ProjectTreeItem* itemFromIndex(const QModelIndex &index) const;
     ProjectTreeItem* findItem(const QString &relativePath, ProjectTreeItem *root = nullptr) const;
     QModelIndex indexForItem(ProjectTreeItem *item) const;
-    ProjectTreeItem* rootItem() const { return m_rootItem; }
+
+    /**
+     * @brief Derives the authoritative category from a project-relative path.
+     *
+     * The three authoritative top-level folders are:
+     *   - "manuscript" -> Manuscript
+     *   - "lorekeeper" -> LoreKeeper
+     *   - "research"   -> Research
+     *
+     * Items that live under one of these roots (e.g. "manuscript/ch1/scene1.md")
+     * inherit the root's category. Comparison is case-insensitive on the
+     * first path segment. Returns ProjectTreeItem::None if the path is empty
+     * or does not begin with one of the authoritative roots.
+     */
+    static ProjectTreeItem::Category categoryForPath(const QString &relativePath);
+
+    /**
+     * @brief Returns `item`'s own category, or the nearest ancestor's category
+     * if the item's own category is None. Stops at the root (returns None if
+     * no categorized ancestor is found).
+     *
+     * Used by routing consumers (compile, PDF export, file-open read-only
+     * check, LoreKeeper RAG triggers, etc.) that need to treat unset
+     * categories as inherited from the parent folder.
+     */
+    ProjectTreeItem::Category effectiveCategory(const ProjectTreeItem *item) const;
+
+    /**
+     * @brief Recompute and propagate the umbrella category of a subtree.
+     *
+     * Called after an item is moved to a new parent, so JSON category
+     * metadata follows the move. Walks the subtree rooted at `item`. For
+     * each node:
+     *   - the *umbrella* category (Manuscript / LoreKeeper / Research) is
+     *     overwritten to match the new parent's effective umbrella;
+     *   - explicit *sub-category* tags (Chapter, Scene, Characters, Places,
+     *     Cultures, Stylesheet, Notes) are preserved — those are user
+     *     intent independent of where the item lives;
+     *   - items previously categorised None get the new umbrella too.
+     *
+     * Emits dataChanged for each updated index.
+     */
+    void propagateCategoryFromParent(ProjectTreeItem *item);
+
+    /**
+     * @brief Returns true if the item is an authoritative top-level folder —
+     * i.e. a Folder directly under the root whose path resolves to one of
+     * the three authoritative categories (Manuscript / LoreKeeper / Research).
+     *
+     * Authoritative folders cannot be renamed, moved, or removed by the user.
+     */
+    bool isAuthoritativeRoot(const ProjectTreeItem *item) const;
+
+    QModelIndex addFolder(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
+    QModelIndex addFile(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
+    QModelIndex addFileWithSmartDiscovery(const QString &absolutePath, const QModelIndex &parent = QModelIndex());
+    QModelIndex addTransientVersionLink(const QString &name, const QString &path, const QModelIndex &parent = QModelIndex());
+    
+    bool removeItem(const QModelIndex &index);
+    bool moveItem(ProjectTreeItem *item, ProjectTreeItem *newParent, int newRow);
+
+    /**
+     * @brief Rewrite the `path` field of \a item and every descendant when a
+     * rename or move changes the path prefix.
+     *
+     * Replaces occurrences of \a oldPathPrefix at the head of each node's
+     * path with \a newPathPrefix. Emits dataChanged(PathRole) for each
+     * touched node so views pick up the new tooltip/path. Must be called
+     * under m_treeMutex (the method acquires it internally).
+     *
+     * Used by atomic rename and move flows in ProjectManager to keep tree
+     * paths in sync with the on-disk location after a successful disk op.
+     */
+    void updatePathsAfterMoveOrRename(ProjectTreeItem *item,
+                                       const QString &oldPathPrefix,
+                                       const QString &newPathPrefix);
+
+    QStringList allFiles() const;
+
+    /**
+     * @brief Build a deep-copy TreeNodeSnapshot of the subtree rooted at `item`.
+     *
+     * Safe to call under external lock; does NOT take m_treeMutex itself —
+     * caller is expected to wrap this in executeUnderLock() if concurrent
+     * mutations are possible. Returns an empty snapshot if \a item is null.
+     * The returned snapshot contains no references to model-owned memory
+     * and is safe to carry across threads.
+     */
+    TreeNodeSnapshot snapshotFrom(const ProjectTreeItem *item) const;
 
     void beginBulkImport();
     void endBulkImport();
 
-    /**
-     * @brief Executes a lambda while holding the tree's recursive mutex.
-     * Essential for safe background iteration of the tree.
-     */
-    void executeUnderLock(const std::function<void()> &func) const;
+    // Utility for thread-safe operations on the tree
+    template<typename F>
+    void executeUnderLock(F func) {
+        QMutexLocker locker(&m_treeMutex);
+        func();
+    }
 
 private:
-    ProjectTreeItem* loadItem(const QJsonObject &obj, ProjectTreeItem *parent);
+    ProjectTreeModel(const ProjectTreeModel&) = delete;
+    ProjectTreeModel& operator=(const ProjectTreeModel&) = delete;
+
+    ProjectTreeItem* loadItem(const QJsonObject &obj, ProjectTreeItem *parent = nullptr);
     QJsonObject saveItem(ProjectTreeItem *item) const;
+    ProjectTreeItem* findItemRecursive(const QString &relativePath, ProjectTreeItem *root) const;
 
     ProjectTreeItem *m_rootItem;
     bool m_bulkImporting = false;

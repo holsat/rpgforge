@@ -13,7 +13,26 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
+# DBus-exposed test automation interface. ON by default for Debug builds,
+# OFF for Release — the DBus adaptor and its registration in main.cpp are
+# compiled out entirely when this is OFF, so production binaries don't
+# expose an IPC surface.
+if(NOT DEFINED RPGFORGE_DBUS_TESTING)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        set(RPGFORGE_DBUS_TESTING_DEFAULT ON)
+    else()
+        set(RPGFORGE_DBUS_TESTING_DEFAULT OFF)
+    endif()
+endif()
+option(RPGFORGE_DBUS_TESTING
+    "Expose org.kde.rpgforge DBus adaptor for automated GUI testing"
+    ${RPGFORGE_DBUS_TESTING_DEFAULT})
+
+set(RPGFORGE_QT_COMPONENTS Widgets Core Gui WebEngineWidgets Qml Concurrent Sql Xml)
+if(RPGFORGE_DBUS_TESTING)
+    list(APPEND RPGFORGE_QT_COMPONENTS DBus)
+endif()
+find_package(Qt6 REQUIRED COMPONENTS ${RPGFORGE_QT_COMPONENTS})
 find_package(KF6 REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -31,77 +50,39 @@ pkg_check_modules(CMARK_GFM REQUIRED IMPORTED_TARGET libcmark-gfm)
 
 find_library(KOMPAREINTERFACE_LIB kompareinterface REQUIRED)
 
-add_executable(rpgforge
-    src/main.cpp
-    src/mainwindow.cpp
-    src/mainwindow.h
-    src/fileexplorer.cpp
-    src/fileexplorer.h
-    src/gitstatusmodel.cpp
-    src/gitstatusmodel.h
-    src/markdownparser.cpp
-    src/markdownparser.h
-    src/outlinepanel.cpp
-    src/outlinepanel.h
-    src/gitservice.cpp
-    src/gitservice.h
-    src/githubservice.cpp
-    src/githubservice.h
-    src/githubonboardingdialog.cpp
-    src/githubonboardingdialog.h
-    src/historydialog.cpp
-    src/historydialog.h
-    src/visualdiffview.cpp
-    src/visualdiffview.h
-    src/clonedialog.cpp
-    src/clonedialog.h
-    src/breadcrumbbar.cpp
-    src/breadcrumbbar.h
-    src/sidebar.cpp
-    src/sidebar.h
-    src/synopsisservice.cpp
-    src/synopsisservice.h
-    src/gitpanel.cpp
-    src/gitpanel.h
-    src/previewpanel.cpp
-    src/previewpanel.h
-    src/variablespanel.cpp
-    src/variablespanel.h
-    src/variablemanager.cpp
-    src/variablemanager.h
-    src/variablecompletionmodel.cpp
-    src/variablecompletionmodel.h
+# Core Library (Shared between app and tests)
+add_library(rpgforge_core STATIC
     src/projectmanager.cpp
     src/projectmanager.h
-    src/projectsettingsdialog.cpp
-    src/projectsettingsdialog.h
+    src/projectmetadata.cpp
+    src/projectmetadata.h
+    src/reconciliationtypes.h
+    src/treenodesnapshot.cpp
+    src/treenodesnapshot.h
     src/projecttreemodel.cpp
     src/projecttreemodel.h
-    src/projecttreepanel.cpp
-    src/projecttreepanel.h
-    src/metadatadialog.cpp
-    src/metadatadialog.h
-    src/documentconverter.cpp
-    src/documentconverter.h
-    src/scrivenerimporter.cpp
-    src/scrivenerimporter.h
-    src/llmservice.cpp
-    src/llmservice.h
-    src/librariandatabase.cpp
-    src/librariandatabase.h
+    src/variablemanager.cpp
+    src/variablemanager.h
+    src/synopsisservice.cpp
+    src/synopsisservice.h
     src/librarianservice.cpp
     src/librarianservice.h
-    src/characterdossierservice.cpp
-    src/characterdossierservice.h
+    src/librariandatabase.cpp
+    src/librariandatabase.h
+    src/llmservice.cpp
+    src/llmservice.h
+    src/lorekeeperservice.cpp
+    src/lorekeeperservice.h
     src/knowledgebase.cpp
     src/knowledgebase.h
     src/agentgatekeeper.cpp
     src/agentgatekeeper.h
     src/analyzerservice.cpp
     src/analyzerservice.h
-    src/textutils.h
-    src/problemspanel.cpp
-    src/problemspanel.h
+    src/mcpservice.cpp
+    src/mcpservice.h
+    src/diceengine.cpp
+    src/diceengine.h
     src/simulationstate.cpp
     src/simulationstate.h
     src/simulationactor.cpp
@@ -110,18 +91,96 @@ add_executable(rpgforge
     src/simarbiter.h
     src/simgriot.cpp
     src/simgriot.h
-    src/simulationpanel.cpp
-    src/simulationpanel.h
-    src/charactergenerator.cpp
-    src/charactergenerator.h
-    src/simulationcomparedialog.cpp
-    src/simulationcomparedialog.h
     src/simulationmanager.cpp
     src/simulationmanager.h
-    src/mcpservice.cpp
-    src/mcpservice.h
-    src/diceengine.cpp
-    src/diceengine.h
+    src/charactergenerator.cpp
+    src/charactergenerator.h
+    src/documentconverter.cpp
+    src/documentconverter.h
+    src/scrivenerimporter.cpp
+    src/scrivenerimporter.h
+    src/pdfexporter.cpp
+    src/pdfexporter.h
+    src/markdownparser.cpp
+    src/markdownparser.h
+    src/gitstatusmodel.cpp
+    src/gitstatusmodel.h
+    src/gitservice.cpp
+    src/gitservice.h
+    src/githubservice.cpp
+    src/githubservice.h
+    src/variablecompletionmodel.cpp
+    src/variablecompletionmodel.h
+)
+
+target_link_libraries(rpgforge_core
+    Qt6::Widgets
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent
+    Qt6::Sql
+    Qt6::Xml
+    Qt6::Network
+    Qt6::WebEngineWidgets
+    KF6::CoreAddons
+    KF6::I18n
+    KF6::TextEditor
+    KF6::KIOWidgets
+    KF6::WidgetsAddons
+    KF6::Wallet
+    PkgConfig::LIBGIT2
+    PkgConfig::CMARK_GFM
+)
+
+# Main Executable
+add_executable(rpgforge
+    src/main.cpp
+    src/mainwindow.cpp
+    src/mainwindow.h
+    src/fileexplorer.cpp
+    src/fileexplorer.h
+    src/outlinepanel.cpp
+    src/outlinepanel.h
+    src/githubonboardingdialog.cpp
+    src/githubonboardingdialog.h
+    src/historydialog.cpp
+    src/historydialog.h
+    src/versionrecallbrowser.cpp
+    src/versionrecallbrowser.h
+    src/unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.h
+    src/explorationsgraphview.cpp
+    src/explorationsgraphview.h
+    src/explorationspanel.cpp
+    src/explorationspanel.h
+    src/visualdiffview.cpp
+    src/visualdiffview.h
+    src/clonedialog.cpp
+    src/clonedialog.h
+    src/breadcrumbbar.cpp
+    src/breadcrumbbar.h
+    src/sidebar.cpp
+    src/sidebar.h
+    src/gitpanel.cpp
+    src/gitpanel.h
+    src/previewpanel.cpp
+    src/previewpanel.h
+    src/variablespanel.cpp
+    src/variablespanel.h
+    src/projectsettingsdialog.cpp
+    src/projectsettingsdialog.h
+    src/projecttreepanel.cpp
+    src/projecttreepanel.h
+    src/reconciliationdialog.cpp
+    src/reconciliationdialog.h
+    src/metadatadialog.cpp
+    src/metadatadialog.h
+    src/problemspanel.cpp
+    src/problemspanel.h
+    src/simulationpanel.cpp
+    src/simulationpanel.h
+    src/simulationcomparedialog.cpp
+    src/simulationcomparedialog.h
     src/settingsdialog.cpp
     src/settingsdialog.h
     src/prompteditordialog.cpp
@@ -144,30 +203,21 @@ add_executable(rpgforge
     src/corkboardview.h
     src/corkboardcard.cpp
     src/corkboardcard.h
-    src/pdfexporter.cpp
-    src/pdfexporter.h
     src/resources.qrc
 )
 
+if(RPGFORGE_DBUS_TESTING)
+    target_sources(rpgforge PRIVATE
+        src/rpgforgedbus.cpp
+        src/rpgforgedbus.h
+    )
+    target_compile_definitions(rpgforge PRIVATE RPGFORGE_DBUS_TESTING=1)
+    target_link_libraries(rpgforge Qt6::DBus)
+endif()
+
 target_link_libraries(rpgforge
-    Qt6::Widgets
-    Qt6::Core
-    Qt6::Gui
+    rpgforge_core
     Qt6::WebEngineWidgets
-    Qt6::Qml
-    Qt6::Concurrent
-    Qt6::Sql
-    Qt6::Xml
-    KF6::CoreAddons
-    KF6::I18n
-    KF6::XmlGui
-    KF6::TextEditor
-    KF6::KIOWidgets
-    KF6::WidgetsAddons
-    KF6::Parts
-    KF6::Wallet
-    PkgConfig::LIBGIT2
-    PkgConfig::CMARK_GFM
     ${KOMPAREINTERFACE_LIB}
 )
 
@@ -175,127 +225,78 @@ install(TARGETS rpgforge ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(FILES src/rpgforgeui.rc DESTINATION ${KDE_INSTALL_KXMLGUIDIR}/rpgforge)
 install(FILES org.kde.rpgforge.desktop DESTINATION ${KDE_INSTALL_APPDIR})
 install(FILES icons/rpgforge.svg DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps)
-install(FILES icons/rpgforge_16x16.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/16x16/apps RENAME rpgforge.png)
-install(FILES icons/rpgforge_22x22.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/22x22/apps RENAME rpgforge.png)
-install(FILES icons/rpgforge_32x32.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/32x32/apps RENAME rpgforge.png)
-install(FILES icons/rpgforge_48x48.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/48x48/apps RENAME rpgforge.png)
-install(FILES icons/rpgforge_64x64.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/64x64/apps RENAME rpgforge.png)
-install(FILES icons/rpgforge_128x128.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/128x128/apps RENAME rpgforge.png)
-install(FILES icons/rpgforge_256x256.png DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/256x256/apps RENAME rpgforge.png)
 
 # Testing
 enable_testing()
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
-add_executable(test_librariandatabase tests/test_librariandatabase.cpp src/librariandatabase.cpp)
-target_link_libraries(test_librariandatabase Qt6::Test Qt6::Sql Qt6::Core)
+add_executable(test_librariandatabase tests/test_librariandatabase.cpp)
+target_link_libraries(test_librariandatabase rpgforge_core Qt6::Test)
 add_test(NAME librarian_database_test COMMAND test_librariandatabase)
 
-add_executable(test_librarian
-    tests/test_librarian.cpp
-    src/librarianservice.cpp
-    src/librariandatabase.cpp
-    src/llmservice.cpp
-    src/projectmanager.cpp
-    src/projecttreemodel.cpp
-    src/variablemanager.cpp
-    src/synopsisservice.cpp
-    src/mcpservice.cpp
-    src/analyzerservice.cpp
-    src/knowledgebase.cpp
-    src/agentgatekeeper.cpp
-    src/diceengine.cpp
-    src/simulationmanager.cpp
-    src/simulationstate.cpp
-    src/simarbiter.cpp
-    src/simgriot.cpp
-    src/simulationactor.cpp
-    src/charactergenerator.cpp
-    src/characterdossierservice.cpp
-)
-target_link_libraries(test_librarian
-    Qt6::Test
-    Qt6::Sql
-    Qt6::Core
-    Qt6::Concurrent
-    Qt6::Network
-    Qt6::Gui
-    Qt6::Xml
-    KF6::I18n
-    KF6::Wallet
-    KF6::CoreAddons
-    KF6::TextEditor
-)
+add_executable(test_librarian tests/test_librarian.cpp)
+target_link_libraries(test_librarian rpgforge_core Qt6::Test)
 add_test(NAME librarian_test COMMAND test_librarian)
 
-add_executable(test_librarianservice 
-    tests/test_librarianservice.cpp 
-    src/librarianservice.cpp 
-    src/librariandatabase.cpp
-    src/llmservice.cpp
-)
-target_link_libraries(test_librarianservice 
-    Qt6::Test 
-    Qt6::Sql 
-    Qt6::Core 
-    Qt6::Concurrent
-    Qt6::Network
-    KF6::I18n
-    KF6::Wallet
-)
+add_executable(test_librarianservice tests/test_librarianservice.cpp)
+target_link_libraries(test_librarianservice rpgforge_core Qt6::Test)
 add_test(NAME librarian_service_test COMMAND test_librarianservice)
-add_executable(test_projectmanager 
-    tests/test_projectmanager.cpp 
-    src/projectmanager.cpp
-    src/projecttreemodel.cpp
-    src/variablemanager.cpp
-    src/synopsisservice.cpp
-    src/librarianservice.cpp
-    src/librariandatabase.cpp
-    src/knowledgebase.cpp
-    src/llmservice.cpp
-    src/mcpservice.cpp
-    src/agentgatekeeper.cpp
-    src/analyzerservice.cpp
-    src/characterdossierservice.cpp
-    src/diceengine.cpp
-    src/simulationmanager.cpp
-    src/simulationstate.cpp
-    src/simarbiter.cpp
-    src/simgriot.cpp
-    src/simulationactor.cpp
-)
-target_link_libraries(test_projectmanager 
-    Qt6::Test 
-    Qt6::Sql 
-    Qt6::Core 
-    Qt6::Concurrent
-    Qt6::Xml
-    Qt6::Network
-    Qt6::Gui
-    KF6::CoreAddons
-    KF6::I18n
-    KF6::TextEditor
-    KF6::Wallet
-)
+
+add_executable(test_projectmanager tests/test_projectmanager.cpp)
+target_link_libraries(test_projectmanager rpgforge_core Qt6::Test)
 add_test(NAME project_manager_test COMMAND test_projectmanager)
 
-add_executable(test_projecttreemodel
-    tests/test_projecttreemodel.cpp
-    src/projecttreemodel.cpp
-    src/synopsisservice.cpp
-    src/projectmanager.cpp
-    src/variablemanager.cpp
-    src/llmservice.cpp
-)
-target_link_libraries(test_projecttreemodel
-    Qt6::Test
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Network
-    Qt6::Concurrent
-    KF6::I18n
-    KF6::Wallet
-)
+add_executable(test_projectmanager_mutations tests/test_projectmanager_mutations.cpp)
+target_link_libraries(test_projectmanager_mutations rpgforge_core Qt6::Test)
+add_test(NAME project_manager_mutations_test COMMAND test_projectmanager_mutations)
+
+add_executable(test_projectmanager_disk_authority tests/test_projectmanager_disk_authority.cpp)
+target_link_libraries(test_projectmanager_disk_authority rpgforge_core Qt6::Test)
+add_test(NAME project_manager_disk_authority_test COMMAND test_projectmanager_disk_authority)
+
+add_executable(test_reconciliation tests/test_reconciliation.cpp)
+target_link_libraries(test_reconciliation rpgforge_core Qt6::Test)
+add_test(NAME reconciliation_test COMMAND test_reconciliation)
+
+add_executable(test_projectmetadata tests/test_projectmetadata.cpp)
+target_link_libraries(test_projectmetadata rpgforge_core Qt6::Test)
+add_test(NAME project_metadata_test COMMAND test_projectmetadata)
+
+add_executable(test_treesnapshot tests/test_treesnapshot.cpp)
+target_link_libraries(test_treesnapshot rpgforge_core Qt6::Test)
+add_test(NAME tree_snapshot_test COMMAND test_treesnapshot)
+
+add_executable(test_lorekeeper_smoke tests/test_lorekeeper_smoke.cpp)
+target_link_libraries(test_lorekeeper_smoke rpgforge_core Qt6::Test)
+add_test(NAME lorekeeper_smoke_test COMMAND test_lorekeeper_smoke)
+
+add_executable(test_projecttreemodel tests/test_projecttreemodel.cpp)
+target_link_libraries(test_projecttreemodel rpgforge_core Qt6::Test)
 add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
 
+add_executable(test_fswatcher tests/test_fswatcher.cpp)
+target_link_libraries(test_fswatcher rpgforge_core Qt6::Test)
+add_test(NAME fs_watcher_test COMMAND test_fswatcher)
+
+# Explorations feature tests
+add_executable(test_gitservice tests/test_gitservice.cpp)
+target_link_libraries(test_gitservice rpgforge_core Qt6::Test)
+add_test(NAME git_service_test COMMAND test_gitservice)
+
+add_executable(test_explorationgraphview
+    tests/test_explorationgraphview.cpp
+    src/explorationsgraphview.cpp
+    src/explorationsgraphview.h
+)
+target_link_libraries(test_explorationgraphview rpgforge_core Qt6::Test Qt6::Widgets)
+add_test(NAME exploration_graph_view_test COMMAND test_explorationgraphview)
+set_tests_properties(exploration_graph_view_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_unsavedchangesdialog
+    tests/test_unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.cpp
+    src/unsavedchangesdialog.h
+)
+target_link_libraries(test_unsavedchangesdialog rpgforge_core Qt6::Test Qt6::Widgets KF6::I18n)
+add_test(NAME unsaved_changes_dialog_test COMMAND test_unsavedchangesdialog)
+set_tests_properties(unsaved_changes_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

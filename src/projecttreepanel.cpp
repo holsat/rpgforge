@@ -19,6 +19,7 @@
 #include "projecttreepanel.h"
 #include "projecttreemodel.h"
 #include "projectmanager.h"
+#include "agentgatekeeper.h"
 #include "metadatadialog.h"
 #include "variablemanager.h"
 #include "gitservice.h"
@@ -51,10 +52,10 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     m_refreshTimer->setSingleShot(true);
     m_refreshTimer->setInterval(100);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        // Use persistent index — automatically invalid after model reset or item removal
+        // Only update active folder state, don't force a view switch in the background
         if (m_activeFolderIndex.isValid()) {
             ProjectTreeItem *item = m_model->itemFromIndex(m_activeFolderIndex);
-            if (item) Q_EMIT folderActivated(item->path);
+            // We don't Q_EMIT folderActivated here because it forces MainWindow to show the corkboard
         }
     });
 
@@ -128,7 +129,7 @@ void ProjectTreePanel::setupUi()
     toolbar->addStretch();
     layout->addLayout(toolbar);
 
-    m_model = new ProjectTreeModel(this);
+    m_model = ProjectManager::instance().model();
     connect(m_model, &ProjectTreeModel::dataChanged, this, &ProjectTreePanel::saveTree);
     connect(m_model, &ProjectTreeModel::rowsInserted, this, &ProjectTreePanel::saveTree);
     connect(m_model, &ProjectTreeModel::rowsRemoved, this, &ProjectTreePanel::saveTree);
@@ -150,13 +151,37 @@ void ProjectTreePanel::setupUi()
     m_treeView->setDragEnabled(true);
     m_treeView->setAcceptDrops(true);
     m_treeView->setDropIndicatorShown(true);
-    m_treeView->setDragDropMode(QAbstractItemView::DragDrop);
+    // InternalMove (NOT DragDrop) is critical: in DragDrop mode, after a
+    // successful Move drop Qt's QAbstractItemViewPrivate::clearOrRemove()
+    // calls model->removeRows() on the source persistent indexes. Our
+    // moveItem() already moved the rows atomically via beginMoveRows(), so
+    // the persistent indexes now point at the NEW location — and the
+    // auto-remove then destroys the item at its new home. InternalMove
+    // tells Qt the model handles the move itself; no auto-remove fires.
+    m_treeView->setDragDropMode(QAbstractItemView::InternalMove);
     m_treeView->setDefaultDropAction(Qt::MoveAction);
     m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    // Rename only on F2 (standard KDE convention). Without this, the default
+    // edit triggers include DoubleClicked / SelectedClicked, which swallow
+    // the click that should be activating the file and open in-place rename
+    // instead — also triggering a setData/dataChanged cycle that races with
+    // the background scanners.
+    m_treeView->setEditTriggers(QAbstractItemView::EditKeyPressed);
+
     m_treeView->hide(); // hidden until project open
 
-    connect(m_treeView, &QTreeView::activated, this, &ProjectTreePanel::onItemActivated);
+    // Single-click opens FILES in the editor; folders are selected only.
+    // Switching to the corkboard requires an explicit double-click on the
+    // folder. Previously single-click on any folder switched the central
+    // view to the corkboard, which made navigating the tree destroy the
+    // open editor as a side-effect (folderActivated fired on every click).
+    connect(m_treeView, &QTreeView::clicked, this, &ProjectTreePanel::onItemClicked);
+    connect(m_treeView, &QTreeView::doubleClicked, this, &ProjectTreePanel::onItemActivated);
+    // Note: NOT connecting QTreeView::activated. On KDE single-click style
+    // it overlaps with `clicked`, causing folder corkboard activation on
+    // every single click — exactly the bug we are fixing.
     connect(m_treeView, &QTreeView::customContextMenuRequested, this, &ProjectTreePanel::onCustomContextMenu);
 
     connect(m_treeView->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
@@ -166,7 +191,7 @@ void ProjectTreePanel::setupUi()
         ProjectTreeItem *item = m_model->itemFromIndex(index);
         if (item && item->type == ProjectTreeItem::Folder) {
             m_activeFolderIndex = QPersistentModelIndex(index);
-            Q_EMIT folderActivated(item->path);
+            // We no longer emit folderActivated here to prevent background refreshes from hiding the editor.
         }
     });
 
@@ -175,17 +200,19 @@ void ProjectTreePanel::setupUi()
 
 void ProjectTreePanel::onProjectOpened()
 {
-    // Stop any pending refresh and invalidate the stored index before
-    // setProjectData() deletes all existing ProjectTreeItem objects.
+    qDebug() << "ProjectTreePanel: Handling project update/opened. Model root children:" << m_model->rowCount(QModelIndex());
+    if (m_isSaving) {
+        qDebug() << "ProjectTreePanel: Skipping view reset during self-save.";
+        return;
+    }
+    
+    qDebug() << "ProjectTreePanel: Refreshing tree view and expanding all.";
+
     m_refreshTimer->stop();
     m_activeFolderIndex = QPersistentModelIndex();
     m_emptyWidget->hide();
     m_treeView->show();
     
-    SynopsisService::instance().pause();
-    m_model->setProjectData(ProjectManager::instance().tree());
-    SynopsisService::instance().resume();
-
     m_treeView->expandAll();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
@@ -197,16 +224,11 @@ void ProjectTreePanel::onProjectOpened()
 
 void ProjectTreePanel::onProjectClosed()
 {
-    // Same guard: stop timer and clear index before items are destroyed.
     m_refreshTimer->stop();
     m_activeFolderIndex = QPersistentModelIndex();
     m_treeView->hide();
     m_emptyWidget->show();
     
-    SynopsisService::instance().pause();
-    m_model->setProjectData(QJsonObject());
-    SynopsisService::instance().resume();
-
     m_addFolderBtn->setEnabled(false);
     m_addFileBtn->setEnabled(false);
     m_syncBtn->setEnabled(false);
@@ -218,12 +240,14 @@ void ProjectTreePanel::onProjectClosed()
 void ProjectTreePanel::syncProject()
 {
     if (!ProjectManager::instance().isProjectOpen()) return;
+    AgentGatekeeper::instance().pauseAll();
 
     QString projectPath = ProjectManager::instance().projectPath();
     
     // 1. Initialize Git if not already done
     if (!GitService::instance().isRepo(projectPath)) {
         if (!GitService::instance().initRepo(projectPath)) {
+            AgentGatekeeper::instance().resumeAll();
             Q_EMIT syncFinished(false, i18n("Failed to initialize Git repository."));
             return;
         }
@@ -359,6 +383,7 @@ void ProjectTreePanel::syncProject()
         Q_EMIT syncProgress(90, i18n("Pushing to GitHub..."));
         auto pushResult = GitService::instance().push(projectPath);
         pushResult.then(this, [this, projectPath](bool success) {
+            AgentGatekeeper::instance().resumeAll();
             if (success) {
                 Q_EMIT syncFinished(true, i18n("Project synchronized and pushed to GitHub."));
             } else {
@@ -386,6 +411,7 @@ void ProjectTreePanel::syncProject()
         Q_EMIT syncProgress(95, i18n("Pushing to GitHub..."));
         auto pushResult = GitService::instance().push(projectPath);
         pushResult.then(this, [this, projectPath](bool success) {
+            AgentGatekeeper::instance().resumeAll();
             if (success) {
                 Q_EMIT syncFinished(true, i18n("Project synchronized and pushed to GitHub."));
             } else {
@@ -407,6 +433,7 @@ void ProjectTreePanel::syncProject()
 void ProjectTreePanel::onRepoCreated(const QString &cloneUrl)
 {
     if (!ProjectManager::instance().isProjectOpen()) return;
+    AgentGatekeeper::instance().pauseAll();
     QString projectPath = ProjectManager::instance().projectPath();
 
     if (GitService::instance().setRemote(projectPath, cloneUrl)) {
@@ -437,10 +464,11 @@ void ProjectTreePanel::createExploration()
             // Re-open project to refresh from disk? 
             // In hidden Git, we should ensure project state is saved.
             ProjectManager::instance().saveProject();
-            // Trigger a refresh of the tree
+            // Trigger a refresh of the tree view
             SynopsisService::instance().pause();
-            m_model->setProjectData(ProjectManager::instance().tree());
+            m_model->setProjectData(ProjectManager::instance().model()->projectData());
             SynopsisService::instance().resume();
+            m_treeView->expandAll();
         } else {
             QMessageBox::critical(this, i18n("Error"), i18n("Failed to create exploration branch."));
         }
@@ -472,14 +500,18 @@ void ProjectTreePanel::switchExploration(const QString &name)
         GitService::instance().commitAll(projectPath, i18n("Automatic save before switching to %1", name));
     }
 
+    AgentGatekeeper::instance().pauseAll();
     if (GitService::instance().checkoutBranch(projectPath, name)) {
-        // Refresh project data from disk
+        // Refresh project data from disk (this also syncs the authoritative model)
         ProjectManager::instance().openProject(ProjectManager::instance().projectFilePath());
+        
         SynopsisService::instance().pause();
-        m_model->setProjectData(ProjectManager::instance().tree());
+        m_model->setProjectData(ProjectManager::instance().model()->projectData());
         SynopsisService::instance().resume();
         m_treeView->expandAll();
+        AgentGatekeeper::instance().resumeAll();
     } else {
+        AgentGatekeeper::instance().resumeAll();
         QMessageBox::critical(this, i18n("Error"), i18n("Failed to switch to exploration branch."));
         updateExplorationList();
     }
@@ -501,12 +533,94 @@ void ProjectTreePanel::updateExplorationList()
     m_explorationCombo->blockSignals(false);
 }
 
-void ProjectTreePanel::onItemActivated(const QModelIndex &index)
+// Thin wrapper around tryResolveOnDisk() shared with ProjectManager::validateTree.
+// Returns the on-disk relative path a leaf Folder-typed item should really be
+// pointing at, or an empty string if none can be found. Compensates for
+// legacy / Scrivener-imported tree entries where documents were recorded as
+// extensionless Folder nodes.
+static QString resolveFolderItemAsFile(const ProjectTreeItem *item)
 {
+    if (!item) return QString();
+    if (item->path.isEmpty()) return QString();
+    if (!item->children.isEmpty()) return QString();
+    if (!ProjectManager::instance().isProjectOpen()) return QString();
+
+    const QDir projectDir(ProjectManager::instance().projectPath());
+    return tryResolveOnDisk(projectDir, item->path);
+}
+
+void ProjectTreePanel::onItemClicked(const QModelIndex &index)
+{
+    // Single-click handler: opens FILES. Real folders are just selected so
+    // navigating the tree does not destroy the editor's open document.
+    qDebug() << "ProjectTreePanel::onItemClicked indexValid=" << index.isValid()
+             << "row=" << (index.isValid() ? index.row() : -1);
     if (!index.isValid()) return;
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (item && item->type == ProjectTreeItem::File) {
+    if (!item) {
+        qDebug() << "ProjectTreePanel::onItemClicked itemFromIndex returned null — model rejected the index (dangling pointer guard)";
+        return;
+    }
+    qDebug() << "ProjectTreePanel::onItemClicked name=" << item->name
+             << "type=" << static_cast<int>(item->type)
+             << "(0=Folder 1=File)"
+             << "path=" << item->path
+             << "category=" << static_cast<int>(item->category);
+
+    if (item->type == ProjectTreeItem::File) {
+        qDebug() << "ProjectTreePanel::onItemClicked emitting fileActivated for" << item->path;
         Q_EMIT fileActivated(item->path);
+        return;
+    }
+
+    if (item->type == ProjectTreeItem::Folder) {
+        // Compatibility fallback: legacy / Scrivener-imported items can be
+        // typed as Folder while really being documents on disk. Detect that
+        // case and open the file. validateTree() heals these on next load
+        // but we want clicks to work in the current session too.
+        const QString resolved = resolveFolderItemAsFile(item);
+        if (!resolved.isEmpty()) {
+            qDebug() << "ProjectTreePanel::onItemClicked Folder-typed item resolves to file"
+                     << resolved << "— treating as file open";
+            Q_EMIT fileActivated(resolved);
+            return;
+        }
+
+        // Real folder — just select it (do not switch the central view).
+        qDebug() << "ProjectTreePanel::onItemClicked folder selected (no view switch)";
+        m_activeFolderIndex = QPersistentModelIndex(index);
+        return;
+    }
+
+    qDebug() << "ProjectTreePanel::onItemClicked item type is neither File nor Folder — ignored";
+}
+
+void ProjectTreePanel::onItemActivated(const QModelIndex &index)
+{
+    // Activation handler (double-click or Enter): files open in the editor,
+    // folders open the corkboard. Single-click no longer routes here — see
+    // the connection block in setupUi().
+    if (!index.isValid()) return;
+    ProjectTreeItem *item = m_model->itemFromIndex(index);
+    if (!item) return;
+
+    if (item->type == ProjectTreeItem::File) {
+        Q_EMIT fileActivated(item->path);
+        return;
+    }
+
+    if (item->type == ProjectTreeItem::Folder) {
+        // Same compatibility fallback as in onItemClicked: a "Folder" leaf
+        // that maps to a file on disk should open as a file, not toggle the
+        // corkboard. Otherwise double-clicking a legacy document entry would
+        // surprise the user with an empty corkboard.
+        const QString resolved = resolveFolderItemAsFile(item);
+        if (!resolved.isEmpty()) {
+            Q_EMIT fileActivated(resolved);
+            return;
+        }
+        m_activeFolderIndex = QPersistentModelIndex(index);
+        Q_EMIT folderActivated(item->path);
     }
 }
 
@@ -538,41 +652,48 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         menu.addSeparator();
         ProjectTreeItem *item = m_model->itemFromIndex(index);
         if (!item) return;
-        
+
         QString itemPath = item->path;
         bool isFile = (item->type == ProjectTreeItem::File);
 
-        // Category Submenu
-        auto *categoryMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), i18n("Set Category"));
-        
-        auto addCategoryAction = [&](const QString &text, const QString &icon, ProjectTreeItem::Category cat) {
-            auto *action = categoryMenu->addAction(QIcon::fromTheme(icon), text);
-            action->setCheckable(true);
-            // We resolve the item in the lambda to be safe
-            connect(action, &QAction::triggered, this, [this, itemPath, cat]() {
-                ProjectTreeItem *resolved = m_model->findItem(itemPath);
-                if (resolved) {
-                    resolved->category = cat;
-                    QModelIndex idx = m_model->indexForItem(resolved);
-                    if (idx.isValid()) m_model->dataChanged(idx, idx, {Qt::DecorationRole});
-                    saveTree();
-                }
-            });
-            // Initial check state
-            ProjectTreeItem *resolved = m_model->findItem(itemPath);
-            if (resolved) action->setChecked(resolved->category == cat);
-        };
+        // Category submenu is only offered for items that the user is allowed
+        // to recategorize. The three authoritative top-level folders
+        // (manuscript/, lorekeeper/, research/) have their category derived
+        // from path and cannot be overridden.
+        if (!m_model->isAuthoritativeRoot(item)) {
+            auto *categoryMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), i18n("Set Category"));
 
-        addCategoryAction(i18n("None"), QStringLiteral("folder"), ProjectTreeItem::None);
-        addCategoryAction(i18n("Manuscript"), QStringLiteral("document-edit"), ProjectTreeItem::Manuscript);
-        addCategoryAction(i18n("Research"), QStringLiteral("search"), ProjectTreeItem::Research);
-        addCategoryAction(i18n("Chapter"), QStringLiteral("book-contents"), ProjectTreeItem::Chapter);
-        addCategoryAction(i18n("Scene"), QStringLiteral("document-edit-symbolic"), ProjectTreeItem::Scene);
-        addCategoryAction(i18n("Characters"), QStringLiteral("user-identity"), ProjectTreeItem::Characters);
-        addCategoryAction(i18n("Places"), QStringLiteral("applications-graphics"), ProjectTreeItem::Places);
-        addCategoryAction(i18n("Cultures"), QStringLiteral("view-list-details"), ProjectTreeItem::Cultures);
-        addCategoryAction(i18n("Stylesheet"), QStringLiteral("applications-graphics-symbolic"), ProjectTreeItem::Stylesheet);
-        addCategoryAction(i18n("Notes"), QStringLiteral("note-sticky"), ProjectTreeItem::Notes);
+            auto addCategoryAction = [&](const QString &text, const QString &icon, ProjectTreeItem::Category cat) {
+                auto *action = categoryMenu->addAction(QIcon::fromTheme(icon), text);
+                action->setCheckable(true);
+                // We resolve the item in the lambda to be safe
+                connect(action, &QAction::triggered, this, [this, itemPath, cat]() {
+                    ProjectTreeItem *resolved = m_model->findItem(itemPath);
+                    if (resolved) {
+                        resolved->category = cat;
+                        QModelIndex idx = m_model->indexForItem(resolved);
+                        if (idx.isValid()) m_model->dataChanged(idx, idx, {Qt::DecorationRole});
+
+                        // Authoritative save
+                        ProjectManager::instance().saveProject();
+                    }
+                });
+                // Initial check state
+                ProjectTreeItem *resolved = m_model->findItem(itemPath);
+                if (resolved) action->setChecked(resolved->category == cat);
+            };
+
+            addCategoryAction(i18n("None"), QStringLiteral("folder"), ProjectTreeItem::None);
+            addCategoryAction(i18n("Manuscript"), QStringLiteral("document-edit"), ProjectTreeItem::Manuscript);
+            addCategoryAction(i18n("Research"), QStringLiteral("search"), ProjectTreeItem::Research);
+            addCategoryAction(i18n("Chapter"), QStringLiteral("book-contents"), ProjectTreeItem::Chapter);
+            addCategoryAction(i18n("Scene"), QStringLiteral("document-edit-symbolic"), ProjectTreeItem::Scene);
+            addCategoryAction(i18n("Characters"), QStringLiteral("user-identity"), ProjectTreeItem::Characters);
+            addCategoryAction(i18n("Places"), QStringLiteral("applications-graphics"), ProjectTreeItem::Places);
+            addCategoryAction(i18n("Cultures"), QStringLiteral("view-list-details"), ProjectTreeItem::Cultures);
+            addCategoryAction(i18n("Stylesheet"), QStringLiteral("applications-graphics-symbolic"), ProjectTreeItem::Stylesheet);
+            addCategoryAction(i18n("Notes"), QStringLiteral("note-sticky"), ProjectTreeItem::Notes);
+        }
 
         menu.addSeparator();
         if (isFile) {
@@ -600,8 +721,7 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                                 m_model->addTransientVersionLink(label, tempPath, resIdx);
                                 m_treeView->expand(resIdx);
                                 
-                                // Persist the change
-                                ProjectManager::instance().setTree(m_model->projectData());
+                                // Persist the change via authoritative model save
                                 ProjectManager::instance().saveProject();
 
                                 Q_EMIT fileActivated(tempPath);
@@ -623,14 +743,30 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
                 dialog->show();
             });
+
+            QString fullPathForRecall = QDir(ProjectManager::instance().projectPath()).absoluteFilePath(itemPath);
+            QAction *recallAct = menu.addAction(
+                QIcon::fromTheme(QStringLiteral("document-revert")),
+                i18n("Recall Version..."));
+            connect(recallAct, &QAction::triggered, this, [fullPathForRecall, this] {
+                Q_EMIT recallVersionRequested(fullPathForRecall);
+            });
         }
         menu.addSeparator();
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
-        if (isFile) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
+        // Authoritative top-level folders cannot be renamed or removed: the
+        // model rejects those operations, and offering them in the menu
+        // would just present the user with actions that silently no-op.
+        const bool isAuthoritative = m_model->isAuthoritativeRoot(item);
+        if (!isAuthoritative) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
+            if (isFile) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
+            }
         }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
+        if (!isAuthoritative) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
+        }
     }
 
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));
@@ -639,16 +775,22 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
 void ProjectTreePanel::addFolder()
 {
     QModelIndex parent = m_treeView->currentIndex();
+    ProjectTreeItem *parentItem = m_model->itemFromIndex(parent);
+    QString parentPath = parentItem ? parentItem->path : QString();
+
     bool ok;
     QString name = QInputDialog::getText(this, i18n("Add Folder"), i18n("Folder Name:"), QLineEdit::Normal, i18n("New Folder"), &ok);
     if (ok && !name.isEmpty()) {
-        m_model->addFolder(name, QString(), parent);
+        ProjectManager::instance().addFolder(name, QString(), parentPath);
     }
 }
 
 void ProjectTreePanel::addFile()
 {
     QModelIndex parent = m_treeView->currentIndex();
+    ProjectTreeItem *parentItem = m_model->itemFromIndex(parent);
+    QString parentPath = parentItem ? parentItem->path : QString();
+
     QString projectDir = ProjectManager::instance().projectPath();
     
     QString filePath = QFileDialog::getOpenFileName(this, i18n("Select File to Link"), projectDir, 
@@ -658,17 +800,15 @@ void ProjectTreePanel::addFile()
     QFileInfo fi(filePath);
     QString relativePath = QDir(projectDir).relativeFilePath(filePath);
     
-    m_model->addFile(fi.completeBaseName(), relativePath, parent);
+    ProjectManager::instance().addFile(fi.completeBaseName(), relativePath, parentPath);
 }
 
 void ProjectTreePanel::removeItem()
 {
     QModelIndex index = m_treeView->currentIndex();
-    if (index.isValid()) {
-        m_model->removeItem(index);
-        // m_activeFolderIndex (QPersistentModelIndex) is automatically
-        // invalidated by Qt if the indexed item was removed or is an ancestor
-        // of the removed item.
+    ProjectTreeItem *item = m_model->itemFromIndex(index);
+    if (item) {
+        ProjectManager::instance().removeItem(item->path);
     }
 }
 
@@ -796,9 +936,14 @@ ProjectTreeItem* ProjectTreePanel::currentFolder() const
 
 void ProjectTreePanel::saveTree()
 {
+    if (m_isSaving) return;
     if (ProjectManager::instance().isProjectOpen()) {
-        ProjectManager::instance().setTree(m_model->projectData());
+        AgentGatekeeper::instance().pauseAll();
+        m_isSaving = true;
+        // The ProjectManager already owns the model, so we just need to tell it to save its current state.
         ProjectManager::instance().saveProject();
+        m_isSaving = false;
+        AgentGatekeeper::instance().resumeAll();
         
         requestRefresh();
     }

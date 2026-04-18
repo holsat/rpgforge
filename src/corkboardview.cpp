@@ -50,21 +50,60 @@ CorkboardView::CorkboardView(QWidget *parent)
 
 CorkboardView::~CorkboardView() = default;
 
+void CorkboardView::subscribe()
+{
+    // The view consumes public signals + folder snapshots only. No friended
+    // access to the live model.
+    connect(&ProjectManager::instance(), &ProjectManager::treeStructureChanged,
+            this, [this] { refresh(); });
+
+    connect(&ProjectManager::instance(), &ProjectManager::treeItemDataChanged,
+            this, [this](const QList<int> &roles) {
+        using R = ProjectTreeModel::Roles;
+        if (roles.contains(R::SynopsisRole) || roles.contains(R::StatusRole)
+            || roles.contains(Qt::DisplayRole) || roles.contains(Qt::EditRole)) {
+            refresh();
+        }
+    });
+
+    connect(&ProjectManager::instance(), &ProjectManager::projectClosed,
+            this, [this] {
+        m_currentFolderPath.clear();
+        refresh();
+    });
+}
+
 void CorkboardView::setFolder(const QString &folderPath)
 {
     m_currentFolderPath = folderPath;
-    clear();
-    
-    if (!m_model) return;
-    ProjectTreeItem *folderItem = m_model->findItem(folderPath);
-    if (!folderItem) return;
+    refresh();
+}
 
-    for (auto *child : folderItem->children) {
+void CorkboardView::refresh()
+{
+    rebuildFromSnapshot();
+}
+
+void CorkboardView::rebuildFromSnapshot()
+{
+    clearCards();
+    if (m_currentFolderPath.isEmpty()) return;
+
+    auto folder = ProjectManager::instance().folderSnapshot(m_currentFolderPath);
+    if (!folder) return;
+
+    // Skip media / stylesheet folders: they have their own panes.
+    const QString nameLower = folder->name.toLower();
+    if (nameLower == QStringLiteral("media") || nameLower == QStringLiteral("stylesheets")) {
+        return;
+    }
+
+    for (const auto &child : folder->children) {
         addCard(child);
     }
 }
 
-void CorkboardView::clear()
+void CorkboardView::clearCards()
 {
     QLayoutItem *item;
     while ((item = m_layout->takeAt(0)) != nullptr) {
@@ -75,23 +114,23 @@ void CorkboardView::clear()
     }
 }
 
-void CorkboardView::addCard(ProjectTreeItem *item)
+void CorkboardView::addCard(const TreeNodeSnapshot &node)
 {
-    if (item->type == ProjectTreeItem::Folder) {
-        QString nameLower = item->name.toLower();
+    if (node.type == static_cast<int>(ProjectTreeItem::Folder)) {
+        const QString nameLower = node.name.toLower();
         if (nameLower == QStringLiteral("media") || nameLower == QStringLiteral("stylesheets")) {
             return;
         }
     }
 
-    auto *card = new CorkboardCard(item, this);
+    auto *card = new CorkboardCard(node, this);
     int count = m_layout->count();
     int row = count / 4;
     int col = count % 4;
     m_layout->addWidget(card, row, col);
 
-    if (item->type == ProjectTreeItem::File) {
-        QString path = item->path;
+    if (node.type == static_cast<int>(ProjectTreeItem::File)) {
+        const QString path = node.path;
         connect(card, &CorkboardCard::doubleClicked, this, [this, path]() {
             Q_EMIT fileActivated(path);
         });
@@ -150,17 +189,17 @@ void CorkboardView::updateDropIndicator(const QPoint &pos)
 void CorkboardView::dropEvent(QDropEvent *event)
 {
     m_dropIndicator->hide();
-    if (m_currentFolderPath.isEmpty() || !m_model) return;
+    if (m_currentFolderPath.isEmpty()) return;
 
     QByteArray data = event->mimeData()->data(QStringLiteral("application/x-rpgforge-corkboard-card-path"));
     if (data.isEmpty()) return;
 
     QString draggedPath = QString::fromUtf8(data);
-    
+
     // Find the drop target card
     QPoint pos = event->position().toPoint();
     QString targetPath;
-    
+
     for (int i = 0; i < m_layout->count(); ++i) {
         auto *widget = m_layout->itemAt(i)->widget();
         if (widget && widget != m_dropIndicator && widget->geometry().contains(pos)) {
