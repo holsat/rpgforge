@@ -18,6 +18,7 @@
 
 #include "gitservice.h"
 #include "githubservice.h"
+#include "projectmanager.h"
 #include <git2.h>
 #include <QtConcurrent>
 #include <QThreadPool>
@@ -1268,6 +1269,14 @@ QFuture<bool> GitService::applyStash(const QString &repoPath, int stashIndex)
             return false;
         }
 
+        // A stash apply rewrites the working tree; bracket the libgit2 ops
+        // in an external-change window so the watcher reload happens once
+        // via endExternalChange().
+        ProjectManager::instance().beginExternalChange();
+        struct EndGuard {
+            ~EndGuard() { ProjectManager::instance().endExternalChange(); }
+        } _endGuard;
+
         git_repository *repo = nullptr;
         if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return false;
 
@@ -1288,6 +1297,14 @@ QFuture<bool> GitService::applyStash(const QString &repoPath, int stashIndex)
 QFuture<bool> GitService::dropStash(const QString &repoPath, int stashIndex)
 {
     return QtConcurrent::run([repoPath, stashIndex]() -> bool {
+        // dropStash doesn't rewrite the working tree, but the stash refs
+        // inside .git/ change, and we want the behaviour consistent with
+        // applyStash so consumers see the same post-op reload contract.
+        ProjectManager::instance().beginExternalChange();
+        struct EndGuard {
+            ~EndGuard() { ProjectManager::instance().endExternalChange(); }
+        } _endGuard;
+
         git_repository *repo = nullptr;
         if (git_repository_open(&repo, repoPath.toUtf8().constData()) != 0) return false;
 
@@ -1308,7 +1325,15 @@ QFuture<bool> GitService::switchExploration(const QString &repoPath, const QStri
             Q_EMIT explorationSwitchFailed(tr("Auto-save failed before switching explorations."));
             return false;
         }
-        return checkoutBranch(repoPath, branchName);
+
+        // Pause the filesystem watcher while libgit2 rewrites the working
+        // tree; the matching endExternalChange() performs a single
+        // reloadFromDisk() so the tree + metadata reflect the branch's
+        // on-disk state.
+        ProjectManager::instance().beginExternalChange();
+        const bool ok = checkoutBranch(repoPath, branchName);
+        ProjectManager::instance().endExternalChange();
+        return ok;
     });
 }
 
@@ -1321,6 +1346,17 @@ bool GitService::createExploration(const QString &repoPath, const QString &name)
 QFuture<bool> GitService::integrateExploration(const QString &repoPath, const QString &sourceBranch)
 {
     return QtConcurrent::run([this, repoPath, sourceBranch]() -> bool {
+        // Pause the filesystem watcher while libgit2 rewrites the working
+        // tree. A merge can touch many files; without this, each write
+        // would fire a watcher event and race the final reloadFromDisk()
+        // scheduled by endExternalChange().
+        ProjectManager::instance().beginExternalChange();
+        // Ensure the window is closed on every exit path. Lambda capture
+        // by value of repoPath is fine; we use a trivial struct guard.
+        struct EndGuard {
+            ~EndGuard() { ProjectManager::instance().endExternalChange(); }
+        } _endGuard;
+
         if (!mergeBranch(repoPath, sourceBranch)) return false;
 
         git_repository *repo = nullptr;

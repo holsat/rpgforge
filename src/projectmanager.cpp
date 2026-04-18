@@ -22,12 +22,47 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QMetaObject>
 #include <QMetaType>
 #include <QDebug>
+#include <QThread>
 #include <KLocalizedString>
+#include <QDateTime>
 #include <QtConcurrent/QtConcurrent>
+
+// ---------------------------------------------------------------------------
+// SelfMutationScope: RAII guard bracketed around PM's own disk+tree mutations.
+// Covers two cases:
+//   (a) during the scope, the depth-gated watcher handler drops any events
+//       that fire synchronously while we're still inside the mutation;
+//   (b) after the scope ends, the m_selfQuietUntilMs cutoff tells the
+//       debounce handler to ignore events whose ms-since-epoch arrival
+//       falls within a short post-mutation window. fsnotify delivers
+//       kernel events asynchronously, so (b) catches the late arrivals
+//       that (a) would otherwise miss.
+// The quiet window is generous relative to the 250 ms debounce so that
+// events dispatched after the mutation still get swallowed.
+// ---------------------------------------------------------------------------
+SelfMutationScope::SelfMutationScope(ProjectManager *pm) : m_pm(pm)
+{
+    ++m_pm->m_selfMutationDepth;
+}
+
+SelfMutationScope::~SelfMutationScope()
+{
+    --m_pm->m_selfMutationDepth;
+    // 1 s window — covers the 250 ms debounce plus plenty of margin for
+    // fsnotify delivery jitter. Use QDateTime::currentMSecsSinceEpoch()
+    // so the cutoff is monotonic wrt the processFsChanges check below.
+    const qint64 kQuietWindowMs = 1000;
+    const qint64 target = QDateTime::currentMSecsSinceEpoch() + kQuietWindowMs;
+    if (target > m_pm->m_selfQuietUntilMs) {
+        m_pm->m_selfQuietUntilMs = target;
+    }
+}
 
 ProjectManager& ProjectManager::instance()
 {
@@ -61,6 +96,24 @@ ProjectManager::ProjectManager(QObject *parent)
             this, [this](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
         Q_EMIT treeItemDataChanged(roles);
     });
+
+    // Filesystem watcher + debounce. The debounce coalesces bursts of
+    // fsWatcher events (e.g. a git checkout writes dozens of files) into
+    // a single reloadFromDisk(). The watcher is depth-gated: events are
+    // dropped while an external-change window or a self-mutation is in
+    // flight.
+    m_fsWatcher = new QFileSystemWatcher(this);
+    m_fsDebounce = new QTimer(this);
+    m_fsDebounce->setSingleShot(true);
+    m_fsDebounce->setInterval(250);
+    connect(m_fsDebounce, &QTimer::timeout, this, &ProjectManager::processFsChanges);
+
+    auto watcherTriggered = [this]() {
+        if (m_externalChangeDepth > 0 || m_selfMutationDepth > 0) return;
+        m_fsDebounce->start();
+    };
+    connect(m_fsWatcher, &QFileSystemWatcher::directoryChanged, this, watcherTriggered);
+    connect(m_fsWatcher, &QFileSystemWatcher::fileChanged, this, watcherTriggered);
 
     loadDefaults();
 }
@@ -112,59 +165,42 @@ QString ProjectManager::projectPath() const
     return QFileInfo(m_projectFilePath).absolutePath();
 }
 
-bool ProjectManager::openProject(const QString &filePath)
+ProjectManager::LoadedProjectJson ProjectManager::readProjectJson(const QString &filePath)
 {
-    qDebug() << "ProjectManager: Authoritative request to open project:" << filePath;
+    LoadedProjectJson out;
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "ProjectManager: Failed to open file for reading:" << filePath;
-        return false;
+        return out;
     }
 
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    file.close();
     if (!doc.isObject()) {
         qWarning() << "ProjectManager: Invalid project file format (not a JSON object):" << filePath;
-        return false;
+        return out;
     }
 
-    m_projectFilePath = filePath;
-
-    QJsonObject rawData = doc.object();
-
+    out.doc = doc.object();
     // Migrate legacy tree-node fields (string type/category values, etc.)
     // before parsing the metadata. The migrate() helper operates on the
     // full project object in place.
-    const bool migrated = migrate(rawData);
+    out.migrated = migrate(out.doc);
+    out.valid = true;
+    return out;
+}
 
-    // Parse typed metadata fields. ProjectMetadata::fromJson also handles
-    // the v1-flat-margin -> v3-nested-margins migration.
-    m_meta = ProjectMetadata::fromJson(rawData);
+bool ProjectManager::openProject(const QString &filePath)
+{
+    qDebug() << "ProjectManager: Authoritative request to open project:" << filePath;
+    m_projectFilePath = filePath;
 
-    // Preserve any top-level keys that ProjectMetadata does not recognise
-    // so saveProject() can write them back verbatim — future-compat with
-    // fields introduced by newer builds.
-    m_extraJson = QJsonObject();
-    const QStringList known = ProjectMetadata::knownKeys();
-    for (auto it = rawData.constBegin(); it != rawData.constEnd(); ++it) {
-        if (!known.contains(it.key())) {
-            m_extraJson.insert(it.key(), it.value());
-        }
-    }
-
-    qDebug() << "ProjectManager: Project data loaded. Syncing model.";
-    // Sync authoritative tree model from the JSON tree blob. Phases 5/6
-    // will move tree sourcing to disk; until then the JSON tree is still
-    // the structure source.
-    m_treeModel->setProjectData(rawData.value(QLatin1String(ProjectKeys::Tree)).toObject());
-    validateTree();
-
-    // Persist migration changes to disk
-    if (migrated) {
-        saveProject();
+    if (!reloadFromDisk()) {
+        m_projectFilePath.clear();
+        return false;
     }
 
     qDebug() << "ProjectManager: Model synced. Root children:" << m_treeModel->rowCount(QModelIndex());
-
     Q_EMIT projectOpened();
     return true;
 }
@@ -214,8 +250,151 @@ bool ProjectManager::saveProject()
 void ProjectManager::closeProject()
 {
     m_projectFilePath.clear();
+    if (m_fsWatcher) {
+        const QStringList dirs = m_fsWatcher->directories();
+        const QStringList files = m_fsWatcher->files();
+        if (!dirs.isEmpty()) m_fsWatcher->removePaths(dirs);
+        if (!files.isEmpty()) m_fsWatcher->removePaths(files);
+    }
+    if (m_fsDebounce) m_fsDebounce->stop();
     loadDefaults();
     Q_EMIT projectClosed();
+}
+
+bool ProjectManager::reloadFromDisk()
+{
+    if (m_projectFilePath.isEmpty()) return false;
+
+    LoadedProjectJson loaded = readProjectJson(m_projectFilePath);
+    if (!loaded.valid) return false;
+
+    // Suppress self-generated watcher events: reload may touch files if
+    // validateTree() needs to heal a missing authoritative folder.
+    {
+        SelfMutationScope scope(this);
+
+        // Parse typed metadata fields. ProjectMetadata::fromJson also handles
+        // the v1-flat-margin -> v3-nested-margins migration.
+        m_meta = ProjectMetadata::fromJson(loaded.doc);
+
+        // Preserve any top-level keys that ProjectMetadata does not recognise
+        // so saveProject() can write them back verbatim — future-compat with
+        // fields introduced by newer builds.
+        m_extraJson = QJsonObject();
+        const QStringList known = ProjectMetadata::knownKeys();
+        for (auto it = loaded.doc.constBegin(); it != loaded.doc.constEnd(); ++it) {
+            if (!known.contains(it.key())) {
+                m_extraJson.insert(it.key(), it.value());
+            }
+        }
+
+        qDebug() << "ProjectManager: Reloading tree from disk.";
+        m_treeModel->setProjectData(loaded.doc.value(QLatin1String(ProjectKeys::Tree)).toObject());
+        validateTree();
+
+        if (loaded.migrated) {
+            saveProject();
+        }
+    }
+
+    updateWatcherPaths();
+
+    Q_EMIT treeStructureChanged();
+    Q_EMIT treeChanged();
+    return true;
+}
+
+void ProjectManager::updateWatcherPaths()
+{
+    if (!m_fsWatcher) return;
+
+    // Clear existing entries before repopulating. This is cheap on UI-scale
+    // trees and avoids the churn of computing a diff.
+    const QStringList oldDirs = m_fsWatcher->directories();
+    const QStringList oldFiles = m_fsWatcher->files();
+    if (!oldDirs.isEmpty()) m_fsWatcher->removePaths(oldDirs);
+    if (!oldFiles.isEmpty()) m_fsWatcher->removePaths(oldFiles);
+
+    if (m_projectFilePath.isEmpty() || !m_treeModel) return;
+
+    QStringList folderPaths;
+    const QString projectRoot = projectPath();
+    // Always watch the project root so new top-level entries surface.
+    if (!projectRoot.isEmpty() && QFileInfo(projectRoot).isDir()) {
+        folderPaths.append(projectRoot);
+    }
+
+    m_treeModel->executeUnderLock([&] {
+        std::function<void(ProjectTreeItem*)> walk = [&](ProjectTreeItem *item) {
+            if (!item) return;
+            if (item->type == ProjectTreeItem::Folder && !item->path.isEmpty()) {
+                const QString absPath = QDir(projectRoot).absoluteFilePath(item->path);
+                if (QFileInfo(absPath).isDir()) {
+                    folderPaths.append(absPath);
+                }
+            }
+            for (auto *child : item->children) walk(child);
+        };
+        walk(m_treeModel->rootItem());
+    });
+
+    if (!folderPaths.isEmpty()) {
+        m_fsWatcher->addPaths(folderPaths);
+    }
+}
+
+void ProjectManager::beginExternalChange()
+{
+    // Pre-increment to keep the counter monotonic when called cross-thread.
+    const int newDepth = ++m_externalChangeDepth;
+    if (newDepth == 1) {
+        // Stop any pending debounce so we don't reload mid-window.
+        if (QThread::currentThread() == this->thread()) {
+            if (m_fsDebounce) m_fsDebounce->stop();
+        } else {
+            QMetaObject::invokeMethod(this, [this] {
+                if (m_fsDebounce) m_fsDebounce->stop();
+            }, Qt::QueuedConnection);
+        }
+    }
+}
+
+void ProjectManager::endExternalChange()
+{
+    if (m_externalChangeDepth == 0) {
+        qWarning() << "ProjectManager::endExternalChange: called with no open window — ignoring";
+        return;
+    }
+    const int newDepth = --m_externalChangeDepth;
+    if (newDepth != 0) return;
+
+    // Marshal the reload onto the main thread. Callers from QtConcurrent
+    // workers (e.g. GitService::switchExploration) must not touch QObject
+    // timers or QFileSystemWatcher from a worker thread.
+    if (QThread::currentThread() == this->thread()) {
+        reloadFromDisk();
+    } else {
+        QMetaObject::invokeMethod(this, [this] {
+            reloadFromDisk();
+        }, Qt::QueuedConnection);
+    }
+}
+
+void ProjectManager::processFsChanges()
+{
+    if (!isProjectOpen()) return;
+    if (m_externalChangeDepth > 0 || m_selfMutationDepth > 0) return;
+
+    // Post-mutation quiet window: swallow events that are the kernel's
+    // delayed notification of our own writes.
+    if (QDateTime::currentMSecsSinceEpoch() < m_selfQuietUntilMs) {
+        return;
+    }
+
+    // Minimal first cut: full reload. Phase 6 can refine this into a
+    // targeted subtree diff once the tree sources directly from disk.
+    qDebug() << "ProjectManager: External filesystem change detected, reloading.";
+    reloadFromDisk();
 }
 
 QString ProjectManager::projectName() const { return m_meta.name; }
@@ -314,6 +493,8 @@ bool ProjectManager::addFile(const QString &name, const QString &relativePath, c
         return false;
     }
 
+    SelfMutationScope scope(this);
+
     const QString absPath = QDir(projectPath()).absoluteFilePath(relativePath);
     QFileInfo fi(absPath);
 
@@ -360,6 +541,8 @@ bool ProjectManager::addFolder(const QString &name, const QString &relativePath,
 {
     if (!isProjectOpen()) return false;
 
+    SelfMutationScope scope(this);
+
     // The UI currently passes an empty relativePath when creating a plain
     // logical folder via the "Add Folder" button. Derive a sensible disk
     // path from parent + name so the folder actually materialises on disk.
@@ -399,6 +582,11 @@ bool ProjectManager::addFolder(const QString &name, const QString &relativePath,
         return false;
     }
 
+    // New folder: add it to the watcher so external changes inside it surface.
+    if (m_fsWatcher && !absPath.isEmpty() && QFileInfo(absPath).isDir()) {
+        m_fsWatcher->addPath(absPath);
+    }
+
     return maybeSaveAfterMutation();
 }
 
@@ -417,6 +605,8 @@ bool ProjectManager::removeItem(const QString &path)
 {
     if (!isProjectOpen()) return false;
     if (path.isEmpty()) return false;
+
+    SelfMutationScope scope(this);
 
     ProjectTreeItem *item = m_treeModel->findItem(path);
     if (!item) return false;
@@ -473,6 +663,8 @@ bool ProjectManager::renameItem(const QString &path, const QString &newName)
 {
     if (!isProjectOpen()) return false;
     if (path.isEmpty() || newName.isEmpty()) return false;
+
+    SelfMutationScope scope(this);
 
     ProjectTreeItem *item = m_treeModel->findItem(path);
     if (!item) return false;
@@ -544,6 +736,7 @@ ProjectTreeItem* ProjectManager::findItem(const QString &path) const
 bool ProjectManager::setNodeSynopsis(const QString &relativePath, const QString &synopsis)
 {
     if (!m_treeModel) return false;
+    SelfMutationScope scope(this);
     ProjectTreeItem *item = m_treeModel->findItem(relativePath);
     if (!item) return false;
     const QModelIndex idx = m_treeModel->indexForItem(item);
@@ -954,9 +1147,11 @@ bool ProjectManager::setTreeData(const QJsonObject &treeJson)
     if (!m_treeModel) return false;
     if (treeJson.isEmpty()) return false;
 
+    SelfMutationScope scope(this);
     m_treeModel->setProjectData(treeJson);
     validateTree();          // self-heal authoritative folders + leaf-as-file
     saveProject();           // persist the corrected tree
+    updateWatcherPaths();    // tree shape may have changed; re-arm watcher
     Q_EMIT treeChanged();
     return true;
 }
@@ -967,6 +1162,8 @@ bool ProjectManager::moveItem(const QString &draggedPath,
 {
     if (!m_treeModel) return false;
     if (draggedPath.isEmpty()) return false;
+
+    SelfMutationScope scope(this);
 
     ProjectTreeItem *dragged = m_treeModel->findItem(draggedPath);
     if (!dragged) {

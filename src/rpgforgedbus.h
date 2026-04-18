@@ -277,6 +277,26 @@ public Q_SLOTS:
                             const QString &objectName,
                             const QString &value);
 
+    // ---------------- External-change + filesystem watcher (Phase 5) ----------------
+    /** \brief Re-read rpgforge.project from disk and rebuild the live tree.
+     *  Returns the ProjectManager result. */
+    bool reloadFromDisk();
+
+    /** \brief Open an external-change window on ProjectManager. Returns true
+     *  (always — there's no failure mode). */
+    bool beginExternalChange();
+
+    /** \brief Close an external-change window on ProjectManager. Returns
+     *  true if a matching begin was open, false if the call was
+     *  unbalanced. */
+    bool endExternalChange();
+
+    /** \brief Block until the filesystem-watcher debounce timer is quiet,
+     *  or \a timeoutMs has elapsed. Returns true if quiescence was reached,
+     *  false if the timeout fired first. Used by tests to let external
+     *  changes settle deterministically. */
+    bool waitForFsQuiescence(int timeoutMs);
+
 private:
     MainWindow *m_window;
     QList<ReconciliationEntry> m_pendingReconciliation;

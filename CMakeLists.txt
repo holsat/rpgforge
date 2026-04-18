@@ -270,6 +270,10 @@ add_executable(test_projecttreemodel tests/test_projecttreemodel.cpp)
 target_link_libraries(test_projecttreemodel rpgforge_core Qt6::Test)
 add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)
 
+add_executable(test_fswatcher tests/test_fswatcher.cpp)
+target_link_libraries(test_fswatcher rpgforge_core Qt6::Test)
+add_test(NAME fs_watcher_test COMMAND test_fswatcher)
+
 # Explorations feature tests
 add_executable(test_gitservice tests/test_gitservice.cpp)
 target_link_libraries(test_gitservice rpgforge_core Qt6::Test)

@@ -30,12 +30,15 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLineEdit>
 #include <QRect>
 #include <QSet>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 #include <QWidget>
@@ -777,4 +780,54 @@ bool RpgForgeDBus::fillDialogLineEdit(const QString &windowTitle,
     if (!edit) return false;
     edit->setText(value);
     return true;
+}
+
+// -------- External-change + filesystem watcher (Phase 5) --------
+
+bool RpgForgeDBus::reloadFromDisk()
+{
+    return ProjectManager::instance().reloadFromDisk();
+}
+
+bool RpgForgeDBus::beginExternalChange()
+{
+    ProjectManager::instance().beginExternalChange();
+    return true;
+}
+
+bool RpgForgeDBus::endExternalChange()
+{
+    ProjectManager::instance().endExternalChange();
+    return true;
+}
+
+bool RpgForgeDBus::waitForFsQuiescence(int timeoutMs)
+{
+    // Spin a local event loop until the debounce timer becomes inactive.
+    // Use ProjectManager's public accessors where possible; we need to peek
+    // into the private debounce timer, so we find it by objectName-less
+    // QTimer introspection via children(). Simpler: poll via invokeMethod
+    // on a short tick until the hard timeout elapses.
+    QElapsedTimer elapsed;
+    elapsed.start();
+
+    while (elapsed.elapsed() < timeoutMs) {
+        // Find a QTimer child of ProjectManager whose single-shot + 250ms
+        // interval identifies it as the debounce timer. There's only one
+        // such timer (m_fsDebounce) in the current design.
+        bool debounceActive = false;
+        const auto timers = ProjectManager::instance().findChildren<QTimer*>();
+        for (QTimer *t : timers) {
+            if (t->isSingleShot() && t->interval() == 250 && t->isActive()) {
+                debounceActive = true;
+                break;
+            }
+        }
+        if (!debounceActive) return true;
+
+        // Process events so queued slot invocations (e.g. the debounce
+        // firing) can run; then yield briefly.
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+    return false;
 }

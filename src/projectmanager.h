@@ -34,6 +34,7 @@
 
 class ProjectTreeModel;
 struct ProjectTreeItem;
+class QFileSystemWatcher;
 
 /**
  * @brief Manages the RPG Forge project structure and settings.
@@ -355,8 +356,63 @@ public Q_SLOTS:
      */
     void endBatch();
 
+    // --- External-change coordination (Phase 5) ---
+
+    /**
+     * \brief Open an external-change window.
+     *
+     * Pauses filesystem-watcher-driven reloads for the duration of a large
+     * external operation (e.g. Git checkout, merge, stash apply). Nestable
+     * via a depth counter; only the outermost begin/end pair triggers the
+     * final reload.
+     *
+     * Safe to call from any thread: the state mutation is a plain atomic
+     * integer, and the matching endExternalChange() marshals the reload
+     * back to the main thread.
+     */
+    void beginExternalChange();
+
+    /**
+     * \brief Close an external-change window.
+     *
+     * Decrements the external-change depth counter. When the counter
+     * returns to zero, re-reads rpgforge.project from disk and rebuilds
+     * the tree via reloadFromDisk(). Safe to call from any thread; the
+     * reload is marshalled to the main thread via a queued invocation.
+     *
+     * Unbalanced calls (with no matching begin) log a warning and are
+     * otherwise no-ops.
+     */
+    void endExternalChange();
+
+    /**
+     * \brief Re-read rpgforge.project and rebuild the live tree from disk.
+     *
+     * Reads the project file, refreshes m_meta + m_extraJson, applies the
+     * tree JSON to the model, runs validateTree(), re-arms the
+     * filesystem watcher with the new folder set, and emits
+     * treeStructureChanged + treeChanged.
+     *
+     * Idempotent — safe to call multiple times. Returns false if no
+     * project is open or the file cannot be read. Must be called on the
+     * main thread; thread-crossing callers should go through
+     * endExternalChange() which marshals for them.
+     */
+    bool reloadFromDisk();
+
 private Q_SLOTS:
     void processTreeUpdateQueue();
+
+    /**
+     * \brief Debounced handler for QFileSystemWatcher events.
+     *
+     * Runs after the m_fsDebounce timer fires. Skips work when no
+     * project is open, when an external-change window is active, or
+     * when a self-mutation is in flight. Otherwise performs a full
+     * reloadFromDisk(); Phase 6 can refine this to a targeted subtree
+     * diff once the tree sources from disk directly.
+     */
+    void processFsChanges();
 
 private:
     explicit ProjectManager(QObject *parent = nullptr);
@@ -364,6 +420,23 @@ private:
     void loadDefaults();
     bool migrate(QJsonObject &data);
     int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;
+
+    // Parse a raw project-JSON object into m_meta + m_extraJson, run any
+    // needed migrations, and return the (possibly-mutated) JSON object plus
+    // a flag indicating whether migration rewrote anything on the way in.
+    // Shared by openProject() and reloadFromDisk() so both load paths go
+    // through the same code.
+    struct LoadedProjectJson {
+        QJsonObject doc;
+        bool migrated = false;
+        bool valid = false;
+    };
+    LoadedProjectJson readProjectJson(const QString &filePath);
+
+    // Re-arm the QFileSystemWatcher to cover every folder currently in the
+    // tree. Removes all previously-watched paths first; cheap enough on
+    // UI-scale trees that we do a full rewrite rather than a diff.
+    void updateWatcherPaths();
 
     struct TreeUpdateRequest {
         QString category;
@@ -379,6 +452,32 @@ private:
     QQueue<TreeUpdateRequest> m_treeUpdateQueue;
     QMutex m_queueMutex;
 
+    // Filesystem-watcher state (Phase 5). m_fsWatcher fires on any external
+    // mutation of a watched folder/file; m_fsDebounce coalesces the burst of
+    // events (e.g. a checkout touching dozens of files) into a single
+    // reloadFromDisk() call. m_externalChangeDepth is a nestable counter
+    // that pauses the watcher while an app-initiated Git op (or similar)
+    // is in flight. m_selfMutationDepth is bumped by PM's own mutations so
+    // the watcher does not reload on our own writes.
+    //
+    // m_selfQuietUntilMs marks a short post-mutation quiet window: fsnotify
+    // events fired by the kernel in response to our own writes arrive
+    // asynchronously, after the mutation returns and m_selfMutationDepth
+    // has dropped back to zero. Without a quiet window the debounce would
+    // fire ~250ms later with no scope active and trigger a spurious reload.
+    // A monotonic ms-since-epoch cutoff is cheap to read in the debounce
+    // handler.
+    QFileSystemWatcher *m_fsWatcher = nullptr;
+    QTimer *m_fsDebounce = nullptr;
+    int m_externalChangeDepth = 0;
+    int m_selfMutationDepth = 0;
+    qint64 m_selfQuietUntilMs = 0;
+
+    // Helper class to scope-bump m_selfMutationDepth around a PM mutation's
+    // disk + tree work. Declared as a friend of ProjectManager so it can
+    // touch the private counter without widening the public API.
+    friend class SelfMutationScope;
+
     // Batch state: beginBatch()/endBatch() defer saveProject() across many
     // mutations. A non-zero m_batchDepth counts nested opens; mutation paths
     // call maybeSaveAfterMutation() which becomes a no-op while a batch is
@@ -389,6 +488,28 @@ private:
     // Internal helper: save now if no batch is open, otherwise remember to
     // save when the outermost endBatch() runs.
     bool maybeSaveAfterMutation();
+};
+
+/**
+ * \brief RAII scope guard bumping ProjectManager::m_selfMutationDepth.
+ *
+ * Every PM mutation (addFile/addFolder/moveItem/removeItem/renameItem/
+ * setNodeSynopsis/reloadFromDisk) wraps its disk + tree work in a
+ * SelfMutationScope so QFileSystemWatcher events triggered by our own
+ * writes are swallowed and do not trigger a redundant reload.
+ *
+ * On destruction the scope also extends m_selfQuietUntilMs by a short
+ * window to cover kernel-level fsnotify events that arrive asynchronously
+ * after the synchronous mutation returns.
+ */
+class SelfMutationScope {
+public:
+    explicit SelfMutationScope(ProjectManager *pm);
+    ~SelfMutationScope();
+    SelfMutationScope(const SelfMutationScope&) = delete;
+    SelfMutationScope& operator=(const SelfMutationScope&) = delete;
+private:
+    ProjectManager *m_pm;
 };
 
 #endif // PROJECTMANAGER_H
