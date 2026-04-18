@@ -14,6 +14,7 @@ icons/option*.svg
 icons/rpgforge_*.png
 research/
 dbg.txt
+dbd.txt
 
 # RPG Forge Data
 .rpgforge-vectors.db*
@@ -22,10 +23,11 @@ dbg.txt
 *.db-shm
 *.db-wal
 
-llm_debug.log
-
-# Debug / runtime logs and their rotation backups
+# Logs and Backups
 *.log
-*.log.bak
-*.log.*.bak
-rpgforge_debug.log*
+*.bak
+
+# Tool Specific
+.claude/
+.gemini/
+nanobanana-output/
