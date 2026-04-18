@@ -273,12 +273,20 @@ void KnowledgeBase::resume()
 
 void KnowledgeBase::search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback)
 {
-    if (m_projectPath.isEmpty() || !callback) return;
+    if (!callback) return;
+    if (m_projectPath.isEmpty()) {
+        // Honour the callback contract even when the KB isn't initialised
+        // for a project — callers (notably LoreKeeperService::updateEntityLore)
+        // chain further async work on the callback and will stall forever
+        // if it never fires.
+        callback({});
+        return;
+    }
 
     // Get the list of active files from the project manager to ensure we only return relevant lore.
     QStringList activeFiles = ProjectManager::instance().getActiveFiles();
     if (activeFiles.isEmpty()) {
-        if (callback) callback({});
+        callback({});
         return;
     }
 

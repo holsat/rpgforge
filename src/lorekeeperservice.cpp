@@ -1,6 +1,7 @@
 #include "lorekeeperservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
+#include "knowledgebase.h"
 #include "projectmanager.h"
 #include "projecttreemodel.h"
 #include "projectkeys.h"
@@ -276,6 +277,30 @@ void LoreKeeperService::updateEntityLore(const QString &categoryName, const QStr
         if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
     }
 
+    // Pull entity-specific passages from the project's KnowledgeBase
+    // (semantic search over the full project). This is the RAG layer the
+    // Writing Assistant uses — feeding LoreKeeper the same retrieval
+    // depth brings dossier quality in line with interactive chat output.
+    // See chatpanel.cpp:421 for the equivalent call on the chat side.
+    const QString ragQuery = QStringLiteral("%1 %2").arg(entityName, categoryName);
+    QPointer<LoreKeeperService> weakThis(this);
+    KnowledgeBase::instance().search(ragQuery, 10, QString(),
+        [weakThis, categoryName, entityName, contextText](const QList<SearchResult> &ragResults) {
+            if (!weakThis) return;
+            weakThis->dispatchLoreGeneration(categoryName, entityName, contextText, ragResults);
+        });
+}
+
+void LoreKeeperService::dispatchLoreGeneration(const QString &categoryName,
+                                                const QString &entityName,
+                                                const QString &rawContext,
+                                                const QList<SearchResult> &ragResults)
+{
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
+    }
+
     // Determine category prompt
     QString categoryPrompt;
     QJsonArray categories = m_config.value(QStringLiteral("categories")).toArray();
@@ -288,7 +313,7 @@ void LoreKeeperService::updateEntityLore(const QString &categoryName, const QStr
 
     QString relPath = QStringLiteral("lorekeeper/") + categoryName + QDir::separator() + entityName + QStringLiteral(".md");
     QString absPath = QDir(m_projectPath).absoluteFilePath(relPath);
-    
+
     QString existingContent;
     QFile file(absPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -299,11 +324,16 @@ void LoreKeeperService::updateEntityLore(const QString &categoryName, const QStr
     LLMRequest req;
     req.serviceName = i18n("LoreKeeper Generator (%1)", categoryName);
     req.settingsKey = QStringLiteral("lorekeeper/lorekeeper_model");
+    // Rich dossiers span multiple sections (Identity / Description /
+    // Personality / Habits / Background / Goals / Conflicts / Key Moments
+    // per the default prompt) and routinely exceed the 1024-token default.
+    // 4096 matches the Anthropic-branch fallback in llmservice.cpp.
+    req.maxTokens = 4096;
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("lorekeeper/lorekeeper_provider"), 
+    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("lorekeeper/lorekeeper_provider"),
                                                             settings.value(QStringLiteral("llm/provider"), 0)).toInt());
-    
+
     req.model = settings.value(QStringLiteral("lorekeeper/lorekeeper_model")).toString();
     if (req.model.isEmpty()) {
         switch(req.provider) {
@@ -319,8 +349,32 @@ void LoreKeeperService::updateEntityLore(const QString &categoryName, const QStr
     QString genPromptBase = settings.value(QStringLiteral("lorekeeper/gen_prompt"),
         QStringLiteral("You are an expert world-builder. %1\\n\\nReturn ONLY the updated Markdown content.")).toString();
 
+    // Assemble RAG-retrieved passages, clearly labelled per source so the
+    // model can attribute details to specific files / headings.
+    QString ragContext;
+    if (!ragResults.isEmpty()) {
+        for (const SearchResult &res : ragResults) {
+            ragContext += QStringLiteral("--- Source: %1 (Heading: %2) ---\n%3\n\n")
+                              .arg(res.filePath, res.heading, res.content);
+        }
+    }
+
+    // The raw discovery context is supplementary — mostly the raw text the
+    // entity was discovered in. Cap it at 16 KiB to leave headroom for the
+    // RAG passages and the generation output itself.
+    const QString trimmedRaw = rawContext.left(16000);
+
     req.messages << LLMMessage{QStringLiteral("system"), genPromptBase.arg(categoryPrompt)};
-    req.messages << LLMMessage{QStringLiteral("user"), i18n("ENTITY: %1\\nEXISTING LORE:\\n%2\\n\\nCONTEXT:\\n%3\\n\\nUpdate the lore now.", entityName, existingContent.isEmpty() ? i18n("[New Entity]") : existingContent, contextText.left(4000))};
+    req.messages << LLMMessage{QStringLiteral("user"),
+        i18n("ENTITY: %1\\n"
+             "EXISTING LORE:\\n%2\\n\\n"
+             "RELEVANT PROJECT PASSAGES (retrieved by semantic search):\\n%3\\n"
+             "ORIGINATING CONTEXT:\\n%4\\n\\n"
+             "Update the lore now.",
+             entityName,
+             existingContent.isEmpty() ? i18n("[New Entity]") : existingContent,
+             ragContext.isEmpty() ? i18n("[No retrieved passages]") : ragContext,
+             trimmedRaw)};
     req.stream = false;
 
     QPointer<LoreKeeperService> weakThis(this);
@@ -335,10 +389,10 @@ void LoreKeeperService::updateEntityLore(const QString &categoryName, const QStr
             QTextStream out(&outFile);
             out << response;
             outFile.close();
-            
+
             // Authoritative request to update the tree structure
             ProjectManager::instance().requestTreeUpdate(categoryName, entityName, relPath);
-            
+
             Q_EMIT weakThis->loreUpdated(categoryName, entityName);
         }
     });
