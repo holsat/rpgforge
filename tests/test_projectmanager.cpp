@@ -213,6 +213,12 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: disk is authoritative; create the backing file.
+        QDir(projPath).mkpath(QStringLiteral("research"));
+        QFile notesFile(QDir(projPath).absoluteFilePath(QStringLiteral("research/notes.md")));
+        QVERIFY(notesFile.open(QIODevice::WriteOnly));
+        notesFile.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
@@ -298,6 +304,12 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: materialise the backing file on disk.
+        QDir(projPath).mkpath(QStringLiteral("manuscript"));
+        QFile chFile(QDir(projPath).absoluteFilePath(QStringLiteral("manuscript/chapter1.md")));
+        QVERIFY(chFile.open(QIODevice::WriteOnly));
+        chFile.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
@@ -346,7 +358,14 @@ private Q_SLOTS:
         pm.closeProject();
         writeProjectFile(projPath, projectObj);
 
-        // Re-open: validateTree should fix Folder->File
+        // Phase 6: materialise the real file on disk — buildFromDisk sees
+        // it as a File (it's a regular file), which is the correct shape
+        // regardless of what the legacy JSON said.
+        QFile f(QDir(projPath).absoluteFilePath(QStringLiteral("research/misclassified.txt")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+
+        // Re-open: buildFromDisk sees a real file and creates a File node.
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
         ProjectTreeItem *item = pm.findItem(QStringLiteral("research/misclassified.txt"));
@@ -394,6 +413,13 @@ private Q_SLOTS:
         project[QLatin1String(ProjectKeys::Tree)] = tree;
 
         writeProjectFile(projPath, project);
+
+        // Phase 6: materialise the folder + child on disk. buildFromDisk
+        // creates a Folder for the directory and a File for the child.
+        QDir(projPath).mkpath(QStringLiteral("bad"));
+        QFile nested(QDir(projPath).absoluteFilePath(QStringLiteral("bad/nested.md")));
+        QVERIFY(nested.open(QIODevice::WriteOnly));
+        nested.close();
 
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
@@ -559,6 +585,17 @@ private Q_SLOTS:
 
         writeProjectFile(projPath, project);
 
+        // Phase 6: tree is sourced from disk, so the fixture directories
+        // and files that the legacy JSON declared must actually exist for
+        // the tree to carry them through. Create the disk structure that
+        // matches the JSON above; the legacy-metadata migration then
+        // decorates the tree nodes with the Chapter / Scene categories
+        // via nodeMetadata.categoryOverride.
+        QDir(projPath).mkpath(QStringLiteral("manuscript/ch1"));
+        QFile sceneFile(QDir(projPath).absoluteFilePath(QStringLiteral("manuscript/ch1/scene.md")));
+        QVERIFY(sceneFile.open(QIODevice::WriteOnly));
+        sceneFile.close();
+
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));
 
@@ -605,6 +642,7 @@ private Q_SLOTS:
         project[QLatin1String(ProjectKeys::Tree)] = tree;
 
         writeProjectFile(projPath, project);
+        QDir(projPath).mkpath(QStringLiteral("mystery"));
 
         ProjectManager &pm = ProjectManager::instance();
         QVERIFY(pm.openProject(projectFilePath(projPath)));

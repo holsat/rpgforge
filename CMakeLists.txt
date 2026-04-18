@@ -250,6 +250,10 @@ add_executable(test_projectmanager_mutations tests/test_projectmanager_mutations
 target_link_libraries(test_projectmanager_mutations rpgforge_core Qt6::Test)
 add_test(NAME project_manager_mutations_test COMMAND test_projectmanager_mutations)
 
+add_executable(test_projectmanager_disk_authority tests/test_projectmanager_disk_authority.cpp)
+target_link_libraries(test_projectmanager_disk_authority rpgforge_core Qt6::Test)
+add_test(NAME project_manager_disk_authority_test COMMAND test_projectmanager_disk_authority)
+
 add_executable(test_reconciliation tests/test_reconciliation.cpp)
 target_link_libraries(test_reconciliation rpgforge_core Qt6::Test)
 add_test(NAME reconciliation_test COMMAND test_reconciliation)

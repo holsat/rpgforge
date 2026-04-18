@@ -421,6 +421,41 @@ private:
     bool migrate(QJsonObject &data);
     int countWordsInTree(const QJsonObject &tree, const QString &projectPath) const;
 
+    /**
+     * \brief One-shot migration from the legacy `tree` JSON into m_meta.nodeMetadata.
+     *
+     * Walks the legacy tree representation (recursive `children` arrays)
+     * and extracts per-path synopsis / status / categoryOverride /
+     * displayName into m_meta.nodeMetadata. Entries whose fields are all
+     * default are skipped so the migration produces the same JSON shape
+     * a native v3+ save would.
+     *
+     * Invoked exactly once per project open — the trigger is a non-empty
+     * `tree` key combined with an empty nodeMetadata object. After
+     * migration the rpgforge.project file is saved back with the new
+     * shape, and legacy fields stay in the JSON for older builds.
+     */
+    void migrateLegacyTreeToNodeMetadata(const QJsonObject &legacyTree);
+
+    /**
+     * \brief Walk the live tree and produce a fresh nodeMetadata object.
+     *
+     * Only nodes with a non-default field contribute an entry. Transient
+     * nodes (git history links) are skipped. Keyed by project-relative
+     * path; the root is skipped because its path is empty.
+     */
+    QJsonObject extractNodeMetadata() const;
+
+    /**
+     * \brief Walk folder nodes and produce a fresh orderHints object.
+     *
+     * Compares the current child order under each Folder against the
+     * alphanumeric case-insensitive sort used by buildFromDisk(). Emits a
+     * hint array only when the orderings differ — the common case stays
+     * implicit.
+     */
+    QJsonObject extractOrderHints() const;
+
     // Parse a raw project-JSON object into m_meta + m_extraJson, run any
     // needed migrations, and return the (possibly-mutated) JSON object plus
     // a flag indicating whether migration rewrote anything on the way in.

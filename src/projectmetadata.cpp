@@ -26,8 +26,10 @@ namespace {
 // Legacy key identifiers for reserved exploration state. These were never
 // promoted to ProjectKeys but the existing implementation wrote/read them
 // as raw string literals, so mirror that verbatim.
-constexpr auto WordCountCacheKey   = "wordCountCache";
+constexpr auto WordCountCacheKey    = "wordCountCache";
 constexpr auto ExplorationColorsKey = "explorationColors";
+constexpr auto NodeMetadataKey      = "nodeMetadata";
+constexpr auto OrderHintsKey        = "orderHints";
 
 double marginValue(const QJsonObject &obj,
                    const char *key,
@@ -91,6 +93,14 @@ ProjectMetadata ProjectMetadata::fromJson(const QJsonObject &doc)
     meta.explorationColors =
         doc.value(QLatin1String(ExplorationColorsKey)).toObject().toVariantMap();
 
+    // Phase 6: per-node metadata + sibling order hints. Absent on legacy
+    // projects — ProjectManager migrates them from the tree JSON on first
+    // open.
+    meta.nodeMetadata =
+        doc.value(QLatin1String(NodeMetadataKey)).toObject();
+    meta.orderHints =
+        doc.value(QLatin1String(OrderHintsKey)).toObject();
+
     return meta;
 }
 
@@ -131,6 +141,16 @@ QJsonObject ProjectMetadata::toJson() const
             QJsonObject::fromVariantMap(explorationColors);
     }
 
+    // Phase 6: only emit these keys when there is actually something to
+    // save. Keeps the JSON clean for projects without per-node metadata
+    // or custom sibling ordering.
+    if (!nodeMetadata.isEmpty()) {
+        obj[QLatin1String(NodeMetadataKey)] = nodeMetadata;
+    }
+    if (!orderHints.isEmpty()) {
+        obj[QLatin1String(OrderHintsKey)] = orderHints;
+    }
+
     return obj;
 }
 
@@ -153,5 +173,7 @@ QStringList ProjectMetadata::knownKeys()
         QLatin1String(ProjectKeys::Tree),          // owned by ProjectTreeModel
         QLatin1String(WordCountCacheKey),
         QLatin1String(ExplorationColorsKey),
+        QLatin1String(NodeMetadataKey),
+        QLatin1String(OrderHintsKey),
     };
 }

@@ -801,6 +801,53 @@ bool RpgForgeDBus::endExternalChange()
     return true;
 }
 
+// -------- Disk authority (Phase 6) --------
+
+QStringList RpgForgeDBus::diskSnapshot()
+{
+    // Walk the project directory using the same policy as
+    // ProjectTreeModel::buildFromDisk so the returned list matches what
+    // a tree rebuild would produce. Keeping the logic in-place (instead
+    // of invoking the model) means tests can assert the invariant without
+    // touching the live tree.
+    if (!projectOpen()) return {};
+
+    const QString root = projectRoot();
+    if (root.isEmpty() || !QDir(root).exists()) return {};
+
+    auto shouldSkip = [](const QString &name) {
+        if (name.isEmpty()) return true;
+        if (name == QLatin1String(".") || name == QLatin1String("..")) return true;
+        if (name.startsWith(QLatin1Char('.'))) return true;
+        static const QStringList kExplicitSkips = {
+            QStringLiteral("rpgforge.project"),
+            QStringLiteral("node_modules"),
+            QStringLiteral("build"),
+            QStringLiteral("__pycache__"),
+            QStringLiteral("Thumbs.db"),
+        };
+        return kExplicitSkips.contains(name);
+    };
+
+    QStringList out;
+    std::function<void(const QDir &, const QString &)> walk;
+    walk = [&](const QDir &dir, const QString &parentRel) {
+        const QFileInfoList entries = dir.entryInfoList(
+            QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
+            QDir::Name | QDir::IgnoreCase);
+        for (const QFileInfo &fi : entries) {
+            const QString name = fi.fileName();
+            if (shouldSkip(name)) continue;
+            const QString rel = parentRel.isEmpty()
+                ? name : parentRel + QLatin1Char('/') + name;
+            out.append(rel);
+            if (fi.isDir()) walk(QDir(fi.absoluteFilePath()), rel);
+        }
+    };
+    walk(QDir(root), QString());
+    return out;
+}
+
 bool RpgForgeDBus::waitForFsQuiescence(int timeoutMs)
 {
     // Spin a local event loop until the debounce timer becomes inactive.

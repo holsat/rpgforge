@@ -58,6 +58,36 @@ struct ProjectMetadata {
     QJsonObject loreKeeperConfig;
 
     /**
+     * \brief Per-node metadata keyed by project-relative path.
+     *
+     * Phase 6 of the tree-refactor: tree structure comes from disk, but
+     * per-node metadata (synopsis / status / display name / category
+     * override) lives here, keyed by path. Each value is a QJsonObject
+     * that may contain any combination of:
+     *   - "synopsis"          (QString)
+     *   - "status"            (QString)
+     *   - "displayName"       (QString, reserved; currently unused)
+     *   - "categoryOverride"  (int, ProjectTreeItem::Category)
+     *
+     * Entries are skipped when every field is at its default so the JSON
+     * stays compact on disk. Legacy projects whose metadata lived inline
+     * in the `tree` JSON are migrated on open; see
+     * ProjectManager::migrateLegacyTreeToNodeMetadata().
+     */
+    QJsonObject nodeMetadata;
+
+    /**
+     * \brief Sibling ordering hints keyed by parent path.
+     *
+     * The key is the parent's project-relative path (empty string for the
+     * project root). The value is a QJsonArray of child filenames in the
+     * user's preferred display order. Only written when the ordering
+     * deviates from the plain alphanumeric sort — the common case stays
+     * implicit and the JSON stays quiet.
+     */
+    QJsonObject orderHints;
+
+    /**
      * \brief Parse a full rpgforge.project JSON object into a typed struct.
      *
      * Respects the legacy v1 flat-margin keys (marginLeft/marginRight/

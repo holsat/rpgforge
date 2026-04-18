@@ -25,7 +25,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QJsonArray>
 #include <QRegularExpression>
+#include <QSet>
 #include <QDebug>
 #include <KLocalizedString>
 
@@ -326,6 +329,187 @@ void ProjectTreeModel::setProjectData(const QJsonObject &data)
 QJsonObject ProjectTreeModel::projectData() const
 {
     return saveItem(m_rootItem);
+}
+
+namespace {
+
+// Names that must NEVER appear in the tree regardless of nesting level.
+// These are either RPG Forge's own side-files (rpgforge.project,
+// .rpgforge-vectors.db) or third-party scaffolding that is never part of
+// project content (.git, node_modules, .DS_Store). The list is applied
+// after the "dot-prefix is hidden" rule so it's mostly a defensive backup
+// for non-hidden offenders (e.g. rpgforge.project) — plus it documents the
+// full skip policy in one place.
+bool shouldSkipEntry(const QString &name)
+{
+    if (name.isEmpty()) return true;
+    if (name == QLatin1String(".") || name == QLatin1String("..")) return true;
+
+    // Hide every dotfile / dotdir. Covers .git, .rpgforge, .rpgforge-vectors.db,
+    // .rpgforge-lorekeeper.lock, .DS_Store, .vscode, .idea, etc. in one go.
+    if (name.startsWith(QLatin1Char('.'))) return true;
+
+    // Non-hidden but still never part of the tree.
+    static const QStringList kExplicitSkips = {
+        QStringLiteral("rpgforge.project"),
+        QStringLiteral("node_modules"),
+        QStringLiteral("build"),
+        QStringLiteral("__pycache__"),
+        QStringLiteral("Thumbs.db"),
+    };
+    return kExplicitSkips.contains(name);
+}
+
+// Apply an orderHints list to a freshly-read directory listing. Items whose
+// name appears in `order` come first, in that sequence; unknown names
+// preserve their incoming alphanumeric order after the hinted tail. Any
+// `order` entries that don't match an actual disk entry are silently
+// dropped (the hint was stale — disk is authoritative for what exists).
+QFileInfoList reorderByHints(const QFileInfoList &entries,
+                             const QJsonArray &order)
+{
+    if (order.isEmpty() || entries.size() < 2) return entries;
+
+    QHash<QString, QFileInfo> byName;
+    byName.reserve(entries.size());
+    for (const QFileInfo &fi : entries) byName.insert(fi.fileName(), fi);
+
+    QFileInfoList out;
+    out.reserve(entries.size());
+    QSet<QString> used;
+    for (const QJsonValue &v : order) {
+        const QString name = v.toString();
+        auto it = byName.constFind(name);
+        if (it != byName.constEnd() && !used.contains(name)) {
+            out.append(*it);
+            used.insert(name);
+        }
+    }
+    for (const QFileInfo &fi : entries) {
+        if (!used.contains(fi.fileName())) out.append(fi);
+    }
+    return out;
+}
+
+} // anonymous namespace
+
+void ProjectTreeModel::buildFromDisk(const QString &projectPath,
+                                      const QJsonObject &nodeMetadata,
+                                      const QJsonObject &orderHints)
+{
+    beginResetModel();
+    {
+        QMutexLocker locker(&m_treeMutex);
+        delete m_rootItem;
+        m_rootItem = new ProjectTreeItem();
+        m_rootItem->name = i18n("Root");
+        m_rootItem->type = ProjectTreeItem::Folder;
+    }
+
+    if (projectPath.isEmpty() || !QDir(projectPath).exists()) {
+        endResetModel();
+        return;
+    }
+
+    // Stamp a node with any persisted per-path metadata. nodeMetadata keys
+    // are project-relative paths; absent or empty entries leave defaults.
+    auto applyMetadata = [&nodeMetadata](ProjectTreeItem *item) {
+        if (!item || item->path.isEmpty()) return;
+        const QJsonValue v = nodeMetadata.value(item->path);
+        if (!v.isObject()) return;
+        const QJsonObject meta = v.toObject();
+        if (meta.contains(QStringLiteral("synopsis"))) {
+            item->synopsis = meta.value(QStringLiteral("synopsis")).toString();
+        }
+        if (meta.contains(QStringLiteral("status"))) {
+            item->status = meta.value(QStringLiteral("status")).toString();
+        }
+        if (meta.contains(QStringLiteral("displayName"))) {
+            const QString dn = meta.value(QStringLiteral("displayName")).toString();
+            if (!dn.isEmpty()) item->name = dn;
+        }
+        if (meta.contains(QStringLiteral("categoryOverride"))) {
+            const int c = meta.value(QStringLiteral("categoryOverride")).toInt(-1);
+            if (c >= 0 && c <= static_cast<int>(ProjectTreeItem::Notes)) {
+                item->category = static_cast<ProjectTreeItem::Category>(c);
+            }
+        }
+    };
+
+    const QDir projectDir(projectPath);
+
+    std::function<void(ProjectTreeItem*, const QDir&, const QString&)> populate;
+    populate = [&](ProjectTreeItem *parent, const QDir &dir, const QString &parentRel) {
+        if (!parent) return;
+
+        const QFileInfoList rawEntries = dir.entryInfoList(
+            QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
+            QDir::Name | QDir::IgnoreCase);
+
+        // Filter skip list first so ordering hints don't waste slots.
+        QFileInfoList filtered;
+        filtered.reserve(rawEntries.size());
+        for (const QFileInfo &fi : rawEntries) {
+            if (shouldSkipEntry(fi.fileName())) continue;
+            filtered.append(fi);
+        }
+
+        const QJsonArray order = orderHints.value(parentRel).toArray();
+        const QFileInfoList ordered = reorderByHints(filtered, order);
+
+        for (const QFileInfo &fi : ordered) {
+            const QString name = fi.fileName();
+            const QString rel  = parentRel.isEmpty()
+                ? name
+                : parentRel + QLatin1Char('/') + name;
+
+            auto *child = new ProjectTreeItem();
+            child->parent = parent;
+            child->path = rel;
+
+            if (fi.isDir()) {
+                child->type = ProjectTreeItem::Folder;
+                child->name = name;
+                // Category defaults to the path-derived umbrella. A
+                // nodeMetadata categoryOverride (applied below) wins.
+                child->category = categoryForPath(rel);
+                applyMetadata(child);
+
+                // If no override AND no path-derived umbrella, inherit
+                // from parent so nested research subfolders still carry
+                // the Research category for routing.
+                if (child->category == ProjectTreeItem::None && parent->category != ProjectTreeItem::None) {
+                    child->category = parent->category;
+                }
+
+                parent->children.append(child);
+                populate(child, QDir(fi.absoluteFilePath()), rel);
+            } else {
+                child->type = ProjectTreeItem::File;
+                // Use complete base name for display (matches addFile
+                // convention in setupDefaultProject), but keep the full
+                // filename on disk via the path field.
+                child->name = fi.completeBaseName().isEmpty()
+                    ? name
+                    : fi.completeBaseName();
+
+                // File-level umbrella: inherit from parent's category so a
+                // file under manuscript/ routes as Manuscript content, etc.
+                if (parent->category != ProjectTreeItem::None) {
+                    child->category = parent->category;
+                }
+                applyMetadata(child);
+                parent->children.append(child);
+            }
+        }
+    };
+
+    {
+        QMutexLocker locker(&m_treeMutex);
+        populate(m_rootItem, projectDir, QString());
+    }
+
+    endResetModel();
 }
 
 ProjectTreeItem* ProjectTreeModel::loadItem(const QJsonObject &obj, ProjectTreeItem *parent)

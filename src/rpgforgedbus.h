@@ -297,6 +297,13 @@ public Q_SLOTS:
      *  changes settle deterministically. */
     bool waitForFsQuiescence(int timeoutMs);
 
+    // ---------------- Disk authority (Phase 6) ----------------
+    /** \brief Walks the project directory on disk and returns the list of
+     *  project-relative paths the tree would be populated from. Applies
+     *  the same skip list as ProjectTreeModel::buildFromDisk. Empty when
+     *  no project is open. Used by tests to assert tree == disk. */
+    QStringList diskSnapshot();
+
 private:
     MainWindow *m_window;
     QList<ReconciliationEntry> m_pendingReconciliation;

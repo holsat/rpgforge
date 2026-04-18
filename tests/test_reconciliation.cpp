@@ -71,101 +71,38 @@ private Q_SLOTS:
     }
 
     // -----------------------------------------------------------------
-    // validateTree() emits reconciliationRequired when a registered file
-    // is missing on disk.
+    // Phase 6 rewrote validateTree(): tree now comes from disk, so
+    // "missing on disk" can't happen through normal code paths — a
+    // file deleted externally disappears from the tree on the next
+    // reloadFromDisk(), not through a reconciliation dialog.
+    //
+    // The tests below predated Phase 6 and drove validateTree() directly
+    // to assert the missing-on-disk + fuzzy-resolve reconciliation flow.
+    // They're retained as documentation but skipped: the behaviour they
+    // describe intentionally no longer exists. The apply* tests below
+    // remain relevant because the mutation API they exercise (renameItem
+    // / moveItem / removeItem / beginBatch-endBatch) is unchanged.
     // -----------------------------------------------------------------
     void testEmitsSignalWhenFilesMissing()
     {
-        createFreshProject();
-        ProjectManager &pm = ProjectManager::instance();
-
-        // Register a file, then delete it from disk to create a mismatch.
-        const QString rel = QStringLiteral("manuscript/missing.md");
-        QVERIFY(pm.addFile(QStringLiteral("Missing"), rel, QStringLiteral("manuscript")));
-        QVERIFY(QFile::remove(absPath(rel)));
-        QVERIFY(!QFileInfo(absPath(rel)).exists());
-        // Tree still has the entry even though disk is gone.
-        QVERIFY(pm.pathExists(rel));
-
-        QSignalSpy spy(&pm, &ProjectManager::reconciliationRequired);
-        pm.validateTree();
-        QCOMPARE(spy.count(), 1);
-
-        const QList<ReconciliationEntry> entries =
-            spy.takeFirst().at(0).value<QList<ReconciliationEntry>>();
-        QVERIFY(!entries.isEmpty());
-
-        bool sawMissing = false;
-        for (const auto &e : entries) {
-            if (e.path == rel) { sawMissing = true; break; }
-        }
-        QVERIFY(sawMissing);
+        QSKIP("Phase 6: validateTree no longer surfaces missing-on-disk "
+              "entries (tree == disk). Reconciliation now flows only "
+              "from legacy loads.");
     }
 
-    // -----------------------------------------------------------------
-    // No signal when every registered path is present on disk.
-    // -----------------------------------------------------------------
     void testSignalNotEmittedWhenAllResolve()
     {
-        createFreshProject();
-        ProjectManager &pm = ProjectManager::instance();
-
-        const QString rel = QStringLiteral("manuscript/present.md");
-        QVERIFY(pm.addFile(QStringLiteral("Present"), rel, QStringLiteral("manuscript")));
-        QVERIFY(QFileInfo(absPath(rel)).exists());
-
-        QSignalSpy spy(&pm, &ProjectManager::reconciliationRequired);
-        pm.validateTree();
-        QCOMPARE(spy.count(), 0);
+        QSKIP("Phase 6: validateTree no longer emits reconciliationRequired "
+              "for tree/disk divergence; the invariant is restored by "
+              "reloadFromDisk().");
     }
 
-    // -----------------------------------------------------------------
-    // Fuzzy resolver: when an underscored file is on disk but the tree
-    // entry uses a space-separated path, the entry should carry a
-    // non-empty suggestedPath.
-    // -----------------------------------------------------------------
     void testFuzzyResolverPopulatesSuggestion()
     {
-        createFreshProject();
-        ProjectManager &pm = ProjectManager::instance();
-
-        // Register a file path that uses spaces in its leaf.
-        const QString trackedRel = QStringLiteral("research/foo 1.md");
-        QVERIFY(pm.addFile(QStringLiteral("Foo 1"), trackedRel, QStringLiteral("research")));
-        // Sanity: disk now has research/foo 1.md (space preserved).
-        QVERIFY(QFileInfo(absPath(trackedRel)).exists());
-
-        // Remove the spaced file from disk and synthesise an underscored
-        // variant in the same directory. tryResolveOnDisk should find it
-        // via Strategy 3 (parent scan, space/underscore tolerant).
-        QVERIFY(QFile::remove(absPath(trackedRel)));
-        QVERIFY(!QFileInfo(absPath(trackedRel)).exists());
-        {
-            QFile f(absPath(QStringLiteral("research/foo_1.md")));
-            QVERIFY(f.open(QIODevice::WriteOnly));
-            f.write("placeholder");
-            f.close();
-        }
-
-        QSignalSpy spy(&pm, &ProjectManager::reconciliationRequired);
-        pm.validateTree();
-        QCOMPARE(spy.count(), 1);
-
-        const QList<ReconciliationEntry> entries =
-            spy.takeFirst().at(0).value<QList<ReconciliationEntry>>();
-
-        ReconciliationEntry found;
-        bool sawEntry = false;
-        for (const auto &e : entries) {
-            if (e.path == trackedRel) {
-                found = e;
-                sawEntry = true;
-                break;
-            }
-        }
-        QVERIFY(sawEntry);
-        QVERIFY(!found.suggestedPath.isEmpty());
-        QCOMPARE(found.suggestedPath, QStringLiteral("research/foo_1.md"));
+        QSKIP("Phase 6: validateTree no longer runs the fuzzy resolver. "
+              "The resolver helper still exists in projecttreemodel for "
+              "legacy-import code paths; validateTree itself is now "
+              "structural-only.");
     }
 
     // -----------------------------------------------------------------

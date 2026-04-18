@@ -228,10 +228,20 @@ bool ProjectManager::saveProject()
         return false;
     }
 
+    // Phase 6: before serialising metadata, refresh nodeMetadata and
+    // orderHints from the live tree so user edits (synopsis, status,
+    // custom child order) get persisted. These are the authoritative
+    // stores going forward; the legacy `tree` JSON is still emitted
+    // below for back-compat with older builds.
+    if (m_treeModel) {
+        m_meta.nodeMetadata = extractNodeMetadata();
+        m_meta.orderHints   = extractOrderHints();
+    }
+
     // Compose the on-disk JSON:
     //  1. typed metadata fields via ProjectMetadata::toJson
     //  2. unknown top-level keys carried over from the previous load
-    //  3. the live tree JSON from the model
+    //  3. the live tree JSON from the model (back-compat only)
     QJsonObject doc = m_meta.toJson();
 
     for (auto it = m_extraJson.constBegin(); it != m_extraJson.constEnd(); ++it) {
@@ -240,6 +250,9 @@ bool ProjectManager::saveProject()
         }
     }
 
+    // Back-compat: keep writing the legacy tree field so older builds can
+    // still open the project. Deprecated; removable once we're comfortable
+    // dropping support for pre-Phase-6 builds.
     doc[QLatin1String(ProjectKeys::Tree)] = m_treeModel->projectData();
 
     QJsonDocument docWrapper(doc);
@@ -269,7 +282,9 @@ bool ProjectManager::reloadFromDisk()
     if (!loaded.valid) return false;
 
     // Suppress self-generated watcher events: reload may touch files if
-    // validateTree() needs to heal a missing authoritative folder.
+    // validateTree() needs to heal a missing authoritative folder, and
+    // may rewrite rpgforge.project if a legacy migration runs.
+    bool needsSave = loaded.migrated;
     {
         SelfMutationScope scope(this);
 
@@ -288,11 +303,29 @@ bool ProjectManager::reloadFromDisk()
             }
         }
 
-        qDebug() << "ProjectManager: Reloading tree from disk.";
-        m_treeModel->setProjectData(loaded.doc.value(QLatin1String(ProjectKeys::Tree)).toObject());
+        // Phase 6 legacy migration: if the project has a tree JSON but no
+        // nodeMetadata yet, extract synopsis/status/categoryOverride per
+        // path from the legacy tree so they survive the switch to the
+        // disk-authoritative model. Triggers only once — subsequent opens
+        // see a populated nodeMetadata and skip the migration entirely.
+        if (m_meta.nodeMetadata.isEmpty()
+            && loaded.doc.contains(QLatin1String(ProjectKeys::Tree))) {
+            const QJsonObject legacyTree =
+                loaded.doc.value(QLatin1String(ProjectKeys::Tree)).toObject();
+            if (!legacyTree.isEmpty()) {
+                qDebug() << "ProjectManager: migrating legacy tree metadata -> nodeMetadata";
+                migrateLegacyTreeToNodeMetadata(legacyTree);
+                if (!m_meta.nodeMetadata.isEmpty()) needsSave = true;
+            }
+        }
+
+        qDebug() << "ProjectManager: Rebuilding tree from disk (path-authoritative).";
+        m_treeModel->buildFromDisk(projectPath(),
+                                   m_meta.nodeMetadata,
+                                   m_meta.orderHints);
         validateTree();
 
-        if (loaded.migrated) {
+        if (needsSave) {
             saveProject();
         }
     }
@@ -835,6 +868,190 @@ bool ProjectManager::pathExists(const QString &relativePath) const
     return exists;
 }
 
+void ProjectManager::migrateLegacyTreeToNodeMetadata(const QJsonObject &legacyTree)
+{
+    // Walk the legacy tree recursively. For every node that has a
+    // non-default synopsis / status / categoryOverride / displayName,
+    // write one entry into m_meta.nodeMetadata keyed by the node's path.
+    //
+    // Definitions:
+    //  - synopsis / status: any non-empty string (matches live-tree semantics)
+    //  - categoryOverride: a category that can't be re-derived from the
+    //    node's path (categoryForPath returns None, or differs from the
+    //    stored value). Path-derivable categories never need to persist —
+    //    buildFromDisk will re-derive them.
+    //  - displayName: the legacy tree stored `name` alongside `path`. Most
+    //    files have a name that matches completeBaseName(path), in which
+    //    case buildFromDisk will reconstruct the same name from disk.
+    //    Legacy entries where `name` diverges from completeBaseName are
+    //    rare (usually Scrivener imports where the display label was
+    //    hand-edited); preserve those explicitly.
+    std::function<void(const QJsonObject&)> walk = [&](const QJsonObject &node) {
+        const QString path = node.value(QLatin1String(ProjectKeys::Path)).toString();
+        const QString synopsis = node.value(QStringLiteral("synopsis")).toString();
+        const QString status   = node.value(QStringLiteral("status")).toString();
+        const QString name     = node.value(QStringLiteral("name")).toString();
+
+        int category = -1;
+        const QJsonValue catVal = node.value(QLatin1String(ProjectKeys::Category));
+        if (catVal.isDouble()) category = catVal.toInt();
+
+        QJsonObject entry;
+        if (!synopsis.isEmpty()) entry[QStringLiteral("synopsis")] = synopsis;
+        if (!status.isEmpty())   entry[QStringLiteral("status")]   = status;
+
+        // Only persist category when it can't be inferred from the path.
+        // Comparison is against path-derived umbrella — a Chapter tag under
+        // manuscript/ is user-meaningful and can't be derived, so it
+        // qualifies as an override.
+        if (category > 0) {
+            const int pathDerived = static_cast<int>(
+                ProjectTreeModel::categoryForPath(path));
+            if (pathDerived != category) {
+                entry[QStringLiteral("categoryOverride")] = category;
+            }
+        }
+
+        if (!path.isEmpty() && !name.isEmpty()) {
+            const QString baseName = QFileInfo(path).completeBaseName();
+            // For folders the name commonly matches the directory name;
+            // for files it matches completeBaseName. Anything else is a
+            // user-overridden label — preserve it.
+            const QString expectedFromPath =
+                baseName.isEmpty() ? QFileInfo(path).fileName() : baseName;
+            if (name != expectedFromPath) {
+                entry[QStringLiteral("displayName")] = name;
+            }
+        }
+
+        if (!path.isEmpty() && !entry.isEmpty()) {
+            m_meta.nodeMetadata.insert(path, entry);
+        }
+
+        const QJsonArray children =
+            node.value(QLatin1String(ProjectKeys::Children)).toArray();
+        for (const QJsonValue &c : children) {
+            walk(c.toObject());
+        }
+    };
+
+    walk(legacyTree);
+}
+
+QJsonObject ProjectManager::extractNodeMetadata() const
+{
+    QJsonObject out;
+    if (!m_treeModel) return out;
+
+    m_treeModel->executeUnderLock([&] {
+        std::function<void(const ProjectTreeItem*)> walk = [&](const ProjectTreeItem *item) {
+            if (!item) return;
+
+            // Root has no path; skip. Transient nodes (git history links)
+            // must never land in the persistence layer.
+            const bool isRoot = (item == m_treeModel->rootItem());
+            if (!isRoot && !item->path.isEmpty()) {
+                QJsonObject entry;
+                if (!item->synopsis.isEmpty()) {
+                    entry[QStringLiteral("synopsis")] = item->synopsis;
+                }
+                if (!item->status.isEmpty()) {
+                    entry[QStringLiteral("status")] = item->status;
+                }
+
+                // categoryOverride is emitted only when the category can't
+                // be reconstructed from the path on the next load. For the
+                // three authoritative umbrellas (Manuscript / LoreKeeper /
+                // Research), buildFromDisk derives them from the first
+                // path segment, so we never persist those. Sub-categories
+                // (Chapter, Scene, etc.) and explicit overrides for items
+                // outside the authoritative roots must be persisted.
+                if (item->category != ProjectTreeItem::None) {
+                    const int pathDerived = static_cast<int>(
+                        ProjectTreeModel::categoryForPath(item->path));
+                    if (pathDerived != static_cast<int>(item->category)) {
+                        entry[QStringLiteral("categoryOverride")] =
+                            static_cast<int>(item->category);
+                    }
+                }
+
+                // displayName survives only when it diverges from what
+                // buildFromDisk would assign from the filename.
+                const QString expected = (item->type == ProjectTreeItem::File)
+                    ? QFileInfo(item->path).completeBaseName()
+                    : QFileInfo(item->path).fileName();
+                if (!item->name.isEmpty()
+                    && !expected.isEmpty()
+                    && item->name != expected) {
+                    entry[QStringLiteral("displayName")] = item->name;
+                }
+
+                if (!entry.isEmpty()) {
+                    out.insert(item->path, entry);
+                }
+            }
+
+            for (const ProjectTreeItem *child : item->children) {
+                walk(child);
+            }
+        };
+        walk(m_treeModel->rootItem());
+    });
+
+    return out;
+}
+
+QJsonObject ProjectManager::extractOrderHints() const
+{
+    QJsonObject out;
+    if (!m_treeModel) return out;
+
+    m_treeModel->executeUnderLock([&] {
+        std::function<void(const ProjectTreeItem*)> walk = [&](const ProjectTreeItem *item) {
+            if (!item) return;
+
+            if (item->type == ProjectTreeItem::Folder
+                && item->children.size() > 1) {
+
+                // Build the current order of this folder's child filenames
+                // (derived from path so it matches what buildFromDisk sees
+                // on the next load).
+                QStringList currentOrder;
+                currentOrder.reserve(item->children.size());
+                for (const ProjectTreeItem *child : item->children) {
+                    currentOrder.append(QFileInfo(child->path).fileName());
+                }
+
+                // Sort a copy using the same collation buildFromDisk uses
+                // (QDir::Name + QDir::IgnoreCase). If the current order
+                // matches, the hint is implicit — don't persist.
+                QStringList sorted = currentOrder;
+                std::sort(sorted.begin(), sorted.end(),
+                          [](const QString &a, const QString &b) {
+                              return a.compare(b, Qt::CaseInsensitive) < 0;
+                          });
+
+                if (sorted != currentOrder) {
+                    QJsonArray arr;
+                    for (const QString &n : currentOrder) arr.append(n);
+                    // Key is the parent's project-relative path; root's is
+                    // empty, which the JSON representation carries as "".
+                    const QString parentKey = (item == m_treeModel->rootItem())
+                        ? QString() : item->path;
+                    out.insert(parentKey, arr);
+                }
+            }
+
+            for (const ProjectTreeItem *child : item->children) {
+                walk(child);
+            }
+        };
+        walk(m_treeModel->rootItem());
+    });
+
+    return out;
+}
+
 bool ProjectManager::migrate(QJsonObject &data)
 {
     int version = data.value(QLatin1String(ProjectKeys::Version)).toInt(1);
@@ -1243,151 +1460,43 @@ void ProjectManager::validateTree()
 {
     if (!m_treeModel || !m_treeModel->rootItem()) return;
 
+    // Phase 6: the tree now comes from disk, so most of the legacy heals
+    // (leaf-folder-as-file, extension auto-repair, fuzzy resolution) can
+    // never fire — buildFromDisk does not produce those shapes. The only
+    // invariants still worth enforcing here are:
+    //
+    //   1. The three authoritative top-level folders (manuscript/,
+    //      lorekeeper/, research/) must exist on disk AND in the tree,
+    //      stamped with the correct category.
+    //   2. Belt-and-suspenders: any Folder node that somehow has children
+    //      but is typed as File gets corrected to Folder.
+    //
+    // Reconciliation entries are no longer produced here: a disk walk
+    // can't surface missing-on-disk file nodes because the tree only
+    // contains what disk has. If anyone ever calls validateTree after a
+    // non-disk-derived shape (e.g. a scripted setProjectData for import),
+    // missing entries simply won't be caught — and that's fine, importers
+    // are expected to produce a valid tree.
+
     bool changed = false;
-    QList<ReconciliationEntry> reconciliation;
 
-    static const QStringList fileSuffixes = {
-        QStringLiteral("md"), QStringLiteral("markdown"), QStringLiteral("mkd"),
-        QStringLiteral("txt"), QStringLiteral("css"), QStringLiteral("yaml"),
-        QStringLiteral("yml"), QStringLiteral("json"), QStringLiteral("html"),
-        QStringLiteral("htm"), QStringLiteral("xml"), QStringLiteral("rpgvars"),
-        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-        QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
-        QStringLiteral("bmp"), QStringLiteral("pdf")
-    };
-
-    const QDir projectDir(projectPath());
-    const bool haveProjectDir = !m_projectFilePath.isEmpty() && projectDir.exists();
-
-    // Helper: build a ReconciliationEntry for a missing File/leaf-Folder node.
-    auto makeEntry = [](const ProjectTreeItem *item, const QString &suggestion) {
-        ReconciliationEntry e;
-        e.path = item->path;
-        e.displayName = item->name;
-        e.category = static_cast<int>(item->category);
-        e.type = static_cast<int>(item->type);
-        e.suggestedPath = suggestion;
-        return e;
-    };
-
+    // Pass 1: normalise Folder-vs-File shape for any legacy / imported nodes.
     std::function<void(ProjectTreeItem*)> validate = [&](ProjectTreeItem *item) {
         if (!item) return;
-
-        // Fix type: file extension but typed as Folder
-        if (item->type == ProjectTreeItem::Folder && !item->path.isEmpty()) {
-            QString suffix = QFileInfo(item->path).suffix().toLower();
-            if (!suffix.isEmpty() && fileSuffixes.contains(suffix)) {
-                qDebug() << "ProjectManager: validateTree: Correcting type Folder->File for" << item->path;
-                item->type = ProjectTreeItem::File;
-                changed = true;
-            }
-        }
-
-        // Fix type: leaf Folder (no children) whose path resolves to a file on
-        // disk should be a File. Scrivener-imported projects often record
-        // documents as extensionless Folder entries — the on-disk file lives
-        // alongside with a .md/.markdown/.rtf suffix, or in a nested-leaf
-        // pattern (e.g. path "A/B" with the file at "A/B/B.md").
-        //
-        // Auto-heal is limited to the low-risk extension-only case (same
-        // basename, different extension). Any resolution that changes the
-        // basename or the parent directory is instead surfaced to the user
-        // via reconciliationRequired so they can confirm or override.
-        if (item->type == ProjectTreeItem::Folder
-            && !item->path.isEmpty()
-            && item->children.isEmpty()
-            && haveProjectDir)
-        {
-            const QString resolved = tryResolveOnDisk(projectDir, item->path);
-
-            if (!resolved.isEmpty()) {
-                const QString originalLeaf = QFileInfo(item->path).completeBaseName();
-                const QString resolvedLeaf = QFileInfo(resolved).completeBaseName();
-                const QString originalParent = QFileInfo(item->path).path();
-                const QString resolvedParent = QFileInfo(resolved).path();
-                const bool extensionOnly = (originalLeaf == resolvedLeaf
-                                            && originalParent == resolvedParent);
-                if (extensionOnly) {
-                    qDebug() << "ProjectManager: validateTree: Correcting leaf Folder -> File for"
-                             << item->name << "(path was" << item->path
-                             << ", resolves to" << resolved << ")";
-                    item->type = ProjectTreeItem::File;
-                    if (item->path != resolved) item->path = resolved;
-                    changed = true;
-                } else {
-                    // Resolution found, but basename/location differs — user
-                    // should confirm. Collect as a reconciliation entry with
-                    // the suggestion pre-populated.
-                    qDebug() << "ProjectManager: validateTree: Suggesting leaf Folder"
-                             << item->path << "-> File" << resolved
-                             << "(user confirmation required)";
-                    reconciliation.append(makeEntry(item, resolved));
-                }
-            } else if (!QFileInfo(projectDir.absoluteFilePath(item->path)).exists()) {
-                // Leaf Folder that cannot be resolved on disk at all.
-                reconciliation.append(makeEntry(item, QString()));
-            }
-        }
-
-        // File-typed node whose path does not exist on disk: surface for user
-        // reconciliation. The fuzzy resolver's suggestion (if any) is stored
-        // on the entry so the dialog can offer "accept suggestion".
-        if (item->type == ProjectTreeItem::File
-            && !item->path.isEmpty()
-            && haveProjectDir)
-        {
-            const QString absPath = projectDir.absoluteFilePath(item->path);
-            if (!QFileInfo(absPath).exists()) {
-                const QString suggestion = tryResolveOnDisk(projectDir, item->path);
-                reconciliation.append(makeEntry(item, suggestion));
-            }
-        }
-
-        // Fix type: has children but typed as File
         if (item->type == ProjectTreeItem::File && !item->children.isEmpty()) {
-            qDebug() << "ProjectManager: validateTree: Correcting type File->Folder for" << item->name << "(has children)";
+            qDebug() << "ProjectManager: validateTree: Correcting type File->Folder for"
+                     << item->name << "(has children)";
             item->type = ProjectTreeItem::Folder;
             changed = true;
         }
-
-        // Fix Research folder with empty path
-        if (item->category == ProjectTreeItem::Research && item->type == ProjectTreeItem::Folder && item->path.isEmpty()) {
-            qDebug() << "ProjectManager: validateTree: Setting empty Research folder path to 'research'";
-            item->path = QStringLiteral("research");
-            changed = true;
-        }
-
-        // Fix LoreKeeper folder with empty path
-        if (item->category == ProjectTreeItem::LoreKeeper && item->type == ProjectTreeItem::Folder && item->path.isEmpty()) {
-            qDebug() << "ProjectManager: validateTree: Setting empty LoreKeeper folder path to 'lorekeeper'";
-            item->path = QStringLiteral("lorekeeper");
-            changed = true;
-        }
-
-        // Fix Manuscript folder with empty path
-        if (item->category == ProjectTreeItem::Manuscript && item->type == ProjectTreeItem::Folder && item->path.isEmpty()) {
-            qDebug() << "ProjectManager: validateTree: Setting empty Manuscript folder path to 'manuscript'";
-            item->path = QStringLiteral("manuscript");
-            changed = true;
-        }
-
-        for (auto *child : item->children) {
-            validate(child);
-        }
+        for (auto *child : item->children) validate(child);
     };
-
     validate(m_treeModel->rootItem());
 
-    // Ensure the three authoritative top-level folders (manuscript/,
-    // lorekeeper/, research/) exist in both the logical tree and on disk.
-    // Permissive existence check: a top-level folder counts as "already the
-    // authoritative root" if ANY of these match: path equals canonical path
-    // case-insensitively, display name equals the canonical name
-    // case-insensitively, or category field already equals the target
-    // category (e.g. legacy items with empty paths). When a match is
-    // found we heal the path / category / name in place rather than
-    // creating a duplicate. Only when no top-level child matches by any
-    // criterion is a new folder created.
+    // Pass 2: ensure the three authoritative top-level folders exist in
+    // both tree and disk. Permissive match (path / name / category) so a
+    // legacy tree with an empty-path Manuscript folder is healed in place
+    // rather than duplicated.
     struct AuthoritativeFolder {
         const char *path;
         const char *defaultName;
@@ -1423,8 +1532,6 @@ void ProjectManager::validateTree()
         }
 
         if (existing) {
-            // Heal name / path / category to canonical values so future
-            // identification is unambiguous.
             if (existing->path.compare(canonicalPath, Qt::CaseInsensitive) != 0) {
                 qDebug() << "ProjectManager: validateTree: normalizing authoritative folder path"
                          << existing->path << "->" << canonicalPath;
@@ -1432,7 +1539,6 @@ void ProjectManager::validateTree()
                 changed = true;
             }
             if (existing->category != spec.category) {
-                qDebug() << "ProjectManager: validateTree: setting category for" << existing->name;
                 existing->category = spec.category;
                 changed = true;
             }
@@ -1441,16 +1547,18 @@ void ProjectManager::validateTree()
                 changed = true;
             }
         } else {
-            qDebug() << "ProjectManager: validateTree: creating missing authoritative folder" << canonicalPath;
-            QModelIndex newIdx = m_treeModel->addFolder(i18n(spec.defaultName), canonicalPath, QModelIndex());
+            qDebug() << "ProjectManager: validateTree: creating missing authoritative folder"
+                     << canonicalPath;
+            QModelIndex newIdx = m_treeModel->addFolder(i18n(spec.defaultName),
+                                                         canonicalPath, QModelIndex());
             if (ProjectTreeItem *newItem = m_treeModel->itemFromIndex(newIdx)) {
                 newItem->category = spec.category;
             }
             changed = true;
         }
 
-        // Always ensure the on-disk folder exists. mkpath is a no-op when
-        // the directory is already there, so this is safe to call every time.
+        // mkpath is a no-op when the directory exists, so this is safe to
+        // run every time.
         if (!projectDirPath.isEmpty()) {
             QDir(projectDirPath).mkpath(canonicalPath);
         }
@@ -1459,12 +1567,6 @@ void ProjectManager::validateTree()
     if (changed) {
         qDebug() << "ProjectManager: validateTree: Tree corrections applied, saving project.";
         saveProject();
-    }
-
-    if (!reconciliation.isEmpty()) {
-        qDebug() << "ProjectManager: validateTree: emitting reconciliationRequired with"
-                 << reconciliation.size() << "entries";
-        Q_EMIT reconciliationRequired(reconciliation);
     }
 }
 

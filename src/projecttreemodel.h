@@ -117,6 +117,29 @@ public:
     void setProjectData(const QJsonObject &data);
     QJsonObject projectData() const;
 
+    /**
+     * \brief Rebuild the tree by walking the project directory on disk.
+     *
+     * Phase 6 of the tree-refactor: disk is the source of truth for
+     * structure. Per-node metadata (synopsis, status, categoryOverride,
+     * displayName) is looked up in \a nodeMetadata by project-relative
+     * path and stamped onto the created nodes. Sibling ordering is
+     * driven by \a orderHints (parentPath -> QJsonArray of child
+     * filenames); absent or empty entries fall back to alphanumeric.
+     *
+     * Skips hidden / dot-prefixed files and directories, RPG Forge's own
+     * on-disk side-files (rpgforge.project, .rpgforge-vectors.db) and
+     * common OS / build artefacts that are never part of a project (.git,
+     * .rpgforge, node_modules, .DS_Store, etc.).
+     *
+     * Runs under beginResetModel / endResetModel; attached views receive
+     * a single modelReset at the end. Safe to call with an empty project
+     * path (returns an empty tree).
+     */
+    void buildFromDisk(const QString &projectPath,
+                       const QJsonObject &nodeMetadata,
+                       const QJsonObject &orderHints);
+
     ProjectTreeItem* rootItem() const { return m_rootItem; }
     ProjectTreeItem* itemFromIndex(const QModelIndex &index) const;
     ProjectTreeItem* findItem(const QString &relativePath, ProjectTreeItem *root = nullptr) const;
