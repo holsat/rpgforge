@@ -32,6 +32,7 @@
 #include <KLocalizedString>
 #include <QDateTime>
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 
 // ---------------------------------------------------------------------------
 // SelfMutationScope: RAII guard bracketed around PM's own disk+tree mutations.
@@ -1230,7 +1231,9 @@ void ProjectManager::triggerWordCountUpdate()
 {
     if (!isProjectOpen()) return;
 
-    QtConcurrent::run([this]() {
+    // Fire-and-forget: result reaches listeners via totalWordCountUpdated
+    // signal; no future to hold on to.
+    QThreadPool::globalInstance()->start([this]() {
         int count = countWordsInTree(m_treeModel->projectData(), projectPath());
         Q_EMIT totalWordCountUpdated(count);
     });

@@ -81,6 +81,13 @@ QMap<QString, QString> VariableManager::mergedVariables() const
 
 QString VariableManager::resolve(const QString &expression, bool shouldEvaluateMath) const
 {
+    // shouldEvaluateMath is preserved in the API for when math evaluation is
+    // re-enabled (see comment before the return statement). Callers, e.g.
+    // VariablesPanel at variablespanel.cpp:282, already pass a meaningful
+    // value through, so the parameter is worth keeping. Silence the unused-
+    // parameter warning until the QJSEngine-backed path lands.
+    Q_UNUSED(shouldEvaluateMath);
+
     static const int MAX_RESULT_SIZE = 1024 * 1024;
     static QRegularExpression varRegex(QStringLiteral("\\{\\{([A-Za-z0-9_\\.]+)\\}\\}"));
     

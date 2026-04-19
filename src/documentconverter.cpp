@@ -133,7 +133,7 @@ QString DocumentConverter::sanitizePrefix(const QString &input)
     QString result = input;
     result.replace(QLatin1Char(' '), QLatin1Char('_'));
 
-    // 2. Remove all shell-special characters: * " ' [ ] { } ( ) # ! @ $ % < > & | ; ? \\
+    // 2. Remove all shell-special characters: * " ' [ ] { } ( ) # ! @ $ % < > & | ; ? backslash.
     // Allow Alphanumeric, underscores, hyphens, and DOTS.
     static QRegularExpression re(QStringLiteral("[^a-zA-Z0-9_\\-\\.]"));
     result.remove(re);

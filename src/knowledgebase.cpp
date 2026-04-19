@@ -33,6 +33,7 @@
 #include <QtMath>
 #include <QFileSystemWatcher>
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 #include <QUuid>
 #include <KLocalizedString>
 #include <QPointer>
@@ -309,7 +310,11 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             return;
         }
 
-        QtConcurrent::run([weakThis, queryVector, topK, excludeFile, relativeActiveFiles, callback]() {
+        // Fire-and-forget: we don't hold the QFuture (callback is delivered
+        // via QueuedConnection from inside the task). QThreadPool::start
+        // expresses that intent directly and avoids the [[nodiscard]]
+        // warning from QtConcurrent::run.
+        QThreadPool::globalInstance()->start([weakThis, queryVector, topK, excludeFile, relativeActiveFiles, callback]() {
             if (!weakThis) return;
             
             QList<SearchResult> results;
