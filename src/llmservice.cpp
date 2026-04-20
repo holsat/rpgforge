@@ -669,10 +669,21 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
         body[QStringLiteral("model")] = embModel;
         body[QStringLiteral("prompt")] = text;
     } else if (provider == LLMProvider::Gemini) {
-        // Gemini uses a dedicated embeddings endpoint. The caller's `model`
-        // is typically their chat model (e.g. gemini-3.1-pro-preview), which
-        // won't work for embedContent — so if the model isn't one of the
-        // known embedding models, default to text-embedding-004.
+        // Gemini uses a dedicated embeddings endpoint with a fixed URL
+        // structure. The user's `llm/gemini/endpoint` setting is their
+        // CHAT endpoint (typically ".../v1beta/openai/chat/completions"
+        // or ".../v1beta"), which we must NOT concatenate with
+        // "/models/...:embedContent" — that produces the bogus URL
+        // ".../openai/chat/completions/models/X:embedContent" that
+        // Google returns 404 for.
+        //
+        // Instead: pin the embeddings base to Google's canonical URL.
+        // If Google ever changes it, one hardcode update fixes every
+        // deployment; users don't need to (and shouldn't have to)
+        // customize this.
+        const QString embedBase = QStringLiteral(
+            "https://generativelanguage.googleapis.com/v1beta");
+
         QString embModel = settings.value(QStringLiteral("llm/embedding_model")).toString();
         if (embModel.isEmpty()) embModel = model;
         if (embModel.isEmpty()
@@ -683,15 +694,11 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
             // purpose embedding endpoint Gemini exposes.
             embModel = QStringLiteral("models/text-embedding-004");
         }
-        // Ensure the "models/" prefix Gemini's REST API expects.
         if (!embModel.startsWith(QLatin1String("models/"))) {
             embModel = QStringLiteral("models/") + embModel;
         }
 
-        QString endpoint = settings.value(QStringLiteral("llm/gemini/endpoint"),
-            QStringLiteral("https://generativelanguage.googleapis.com/v1beta")).toString();
-        if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
-        url = QUrl(QStringLiteral("%1/%2:embedContent?key=%3").arg(endpoint, embModel, key));
+        url = QUrl(QStringLiteral("%1/%2:embedContent?key=%3").arg(embedBase, embModel, key));
 
         QJsonObject contentObj;
         QJsonArray parts;
@@ -747,9 +754,16 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
             }
         } else {
             const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            // Redact any ?key=... query string from the error string —
+            // Gemini's embedding endpoint puts the API key there, so the
+            // raw errorString() leaks it into the log.
+            QString err = reply->errorString();
+            static const QRegularExpression keyRe(
+                QStringLiteral("([?&])key=[^&\\s]+"));
+            err.replace(keyRe, QStringLiteral("\\1key=REDACTED"));
             qWarning().noquote() << "LLM embedding failed: provider=" << static_cast<int>(provider)
                                   << "HTTP" << httpStatus
-                                  << reply->errorString()
+                                  << err
                                   << "- body:" << QString::fromUtf8(body).left(512);
         }
         if (callback) {
