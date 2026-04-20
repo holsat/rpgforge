@@ -27,6 +27,7 @@
 #include <KTextEditor/Range>
 
 #include <KLocalizedString>
+#include <QAction>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -48,24 +49,31 @@ InlineAIInvoker::InlineAIInvoker(KTextEditor::View *view, QObject *parent)
 {
     Q_ASSERT(m_view);
 
-    // Ctrl+Return triggers an @-command on the current line. QShortcut
-    // with WidgetWithChildrenShortcut scope beats QObject::eventFilter
-    // here: Kate's focused text widget is several layers below the
-    // KTextEditor::View object, so event filters installed on the view
-    // or its direct children never see the KeyPress. QShortcut walks
-    // the focus-widget-up-to-scope chain and reliably fires when the
-    // user is typing in Kate's editor.
-    auto bindShortcut = [this](Qt::Key keycode) {
-        auto *s = new QShortcut(QKeySequence(Qt::CTRL | keycode), m_view);
-        s->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(s, &QShortcut::activated, this, [this]() {
+    // Ctrl+Return triggers an @-command on the current line. We register
+    // the trigger as a QAction with an explicit shortcut and add it to
+    // the view widget — Qt's shortcut-event dispatch favours actions on
+    // the focused widget and walk upward, so the action fires even when
+    // Kate's internal editing widget has focus. (Plain QShortcut inside
+    // a KTextEditor::View doesn't reliably fire; Kate's own action
+    // collection intercepts key events before they reach child
+    // QShortcuts.)
+    //
+    // Event-loop order of operations: Qt routes the KeyPress as a
+    // ShortcutOverride event first, the focused widget either accepts
+    // (overrides the shortcut) or ignores. If nobody overrides, the
+    // QAction fires. Kate doesn't override Ctrl+Return by default, so
+    // this path wins.
+    auto addAction = [this](Qt::Key keycode) {
+        auto *a = new QAction(this);
+        a->setShortcut(QKeySequence(Qt::CTRL | keycode));
+        a->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        connect(a, &QAction::triggered, this, [this]() {
             tryDispatchOnCurrentLine();
         });
+        m_view->addAction(a);
     };
-    // Qt reports the main-row Enter as Key_Return and the numpad one
-    // as Key_Enter — some keyboards distinguish them. Bind both.
-    bindShortcut(Qt::Key_Return);
-    bindShortcut(Qt::Key_Enter);
+    addAction(Qt::Key_Return);
+    addAction(Qt::Key_Enter);
 
     registerDefaultCommands();
 
