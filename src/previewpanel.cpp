@@ -90,13 +90,21 @@ void PreviewPanel::setProjectMode(bool enabled)
 
 void PreviewPanel::setBaseUrl(const QUrl &url)
 {
-    // Use the project directory as base URL so relative image paths resolve correctly.
-    // If no project is open, fall back to the file's parent directory.
+    // Base URL controls how <img src="..."> and similar relative paths
+    // resolve. Standard markdown convention: paths are relative to the
+    // DOCUMENT's directory — not the project root. Using the project
+    // root breaks every "../../media/X.png" link in a file nested one
+    // or more directories deep, because the editor resolves it as
+    // "project-root/../../media" which is two levels above the project.
     QUrl baseUrl;
-    if (ProjectManager::instance().isProjectOpen()) {
-        baseUrl = QUrl::fromLocalFile(ProjectManager::instance().projectPath() + QDir::separator());
-    } else if (url.isLocalFile()) {
-        baseUrl = QUrl::fromLocalFile(QFileInfo(url.toLocalFile()).absolutePath() + QDir::separator());
+    if (url.isLocalFile()) {
+        baseUrl = QUrl::fromLocalFile(
+            QFileInfo(url.toLocalFile()).absolutePath() + QDir::separator());
+    } else if (ProjectManager::instance().isProjectOpen()) {
+        // No document URL — fall back to project root so at least
+        // project-relative paths resolve.
+        baseUrl = QUrl::fromLocalFile(
+            ProjectManager::instance().projectPath() + QDir::separator());
     } else {
         baseUrl = url;
     }

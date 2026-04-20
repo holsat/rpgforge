@@ -432,18 +432,23 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
     req.stream = true;
     req.requireCitations = true;
 
-    // Short files go in whole as priority-0 context (author's intent is
-    // to reason about exactly what they're looking at). Long files stay
-    // out of the prompt — the service's RAG layer pulls the relevant
-    // passages from the same file (plus the rest of the project) and
-    // skips duplicates of activeFilePath.
+    // Short active doc goes in as context but at a LOWER priority than
+    // RAG retrievals would be (conceptually). The doc is "what the user
+    // is looking at" — useful supplementary context, but the question
+    // might be about something else entirely ("what are the aptitudes"
+    // asked from inside a character dossier). Labelling it clearly and
+    // setting priority=5 keeps it in the prompt without it monopolising
+    // the LLM's attention over RAG-retrieved passages.
+    //
+    // Long files stay out entirely — the service's RAG layer pulls
+    // relevant passages from the same file plus the rest of the project.
     constexpr int kInlineDocThreshold = 32000;
     if (!activeDocText.isEmpty() && activeDocText.length() < kInlineDocThreshold) {
         ContextSource src;
-        src.label = i18n("ACTIVE DOCUMENT");
+        src.label = i18n("CURRENTLY-OPEN DOCUMENT (may or may not be relevant to the question)");
         src.content = activeDocText;
         src.citation = activeFilePath;
-        src.priority = 0;
+        src.priority = 5;   // below any caller-supplied priority-0 anchor
         req.extraSources.append(src);
     }
 

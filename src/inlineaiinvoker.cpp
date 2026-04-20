@@ -35,6 +35,7 @@
 #include <QKeyEvent>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QShortcut>
 #include <QStandardPaths>
 
 // Placeholder text shown in the editor while the LLM generates. Kept
@@ -46,13 +47,25 @@ InlineAIInvoker::InlineAIInvoker(KTextEditor::View *view, QObject *parent)
     , m_view(view)
 {
     Q_ASSERT(m_view);
-    // Install on the view itself AND on its focus proxy (the Kate
-    // editing widget) so we catch Ctrl+Enter regardless of which
-    // sub-widget has focus when the user presses it.
-    m_view->installEventFilter(this);
-    if (auto *proxy = m_view->focusProxy()) {
-        proxy->installEventFilter(this);
-    }
+
+    // Ctrl+Return triggers an @-command on the current line. QShortcut
+    // with WidgetWithChildrenShortcut scope beats QObject::eventFilter
+    // here: Kate's focused text widget is several layers below the
+    // KTextEditor::View object, so event filters installed on the view
+    // or its direct children never see the KeyPress. QShortcut walks
+    // the focus-widget-up-to-scope chain and reliably fires when the
+    // user is typing in Kate's editor.
+    auto bindShortcut = [this](Qt::Key keycode) {
+        auto *s = new QShortcut(QKeySequence(Qt::CTRL | keycode), m_view);
+        s->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(s, &QShortcut::activated, this, [this]() {
+            tryDispatchOnCurrentLine();
+        });
+    };
+    // Qt reports the main-row Enter as Key_Return and the numpad one
+    // as Key_Enter — some keyboards distinguish them. Bind both.
+    bindShortcut(Qt::Key_Return);
+    bindShortcut(Qt::Key_Enter);
 
     registerDefaultCommands();
 
@@ -207,27 +220,13 @@ void InlineAIInvoker::registerDefaultCommands()
     });
 }
 
+// eventFilter() retained only so existing installEventFilter calls on
+// subclasses don't break link-time; all actual key handling now lives
+// in the QShortcuts installed by the constructor.
 bool InlineAIInvoker::eventFilter(QObject *watched, QEvent *event)
 {
     Q_UNUSED(watched);
-
-    if (event->type() != QEvent::KeyPress) return false;
-    auto *key = static_cast<QKeyEvent*>(event);
-
-    // Ctrl+Return / Ctrl+Enter is the trigger. Picked over plain Enter
-    // because (a) Enter is already a universal "insert newline"
-    // convention and intercepting it would surprise users, and (b)
-    // Ctrl+Enter is Cursor/Copilot/Notion convention for "submit AI
-    // prompt". On Wayland both Return and Enter reach us as Qt::Key_*
-    // variants; accept both.
-    const bool isCtrl = key->modifiers().testFlag(Qt::ControlModifier);
-    const bool isReturn = (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter);
-    if (!isCtrl || !isReturn) return false;
-
-    if (tryDispatchOnCurrentLine()) {
-        key->accept();
-        return true;  // swallow — we've handled the key
-    }
+    Q_UNUSED(event);
     return false;
 }
 

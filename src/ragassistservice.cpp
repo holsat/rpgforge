@@ -95,9 +95,13 @@ QString composeSystemPrompt(const RagAssistRequest &request)
     if (request.requireCitations) {
         parts << QStringLiteral(
             "When you reference material from the supplied context, cite the "
-            "source inline using the format (path/to/file.md) immediately "
-            "after the referenced claim. This helps the author verify every "
-            "detail against their own text. Do not invent citations.");
+            "source inline using the EXACT path shown in the [SOURCE: path] "
+            "header of the passage you drew from. Format the citation as "
+            "(exact/path/from/the/SOURCE/header.md) immediately after the "
+            "referenced claim. DO NOT abbreviate, truncate, guess, or invent "
+            "paths. DO NOT cite 'Manuscript.md' or similar short names — use "
+            "the full path as given. If no SOURCE header is present for a "
+            "claim, do not add a citation rather than inventing one.");
     }
 
     if (!request.entityName.isEmpty()) {
