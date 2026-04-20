@@ -338,8 +338,6 @@ QList<QPair<LLMProvider, QString>> LLMService::composeDefaultFallbackChain(LLMPr
 bool LLMService::tryFallback(const LLMRequest &request, const NonStreamCallback &nonStreamCallback,
                               const QString &previousError)
 {
-    if (!nonStreamCallback) return false; // streaming fallback: future work
-
     // Use the caller-supplied chain if any, else auto-compose from configured
     // providers (excluding the primary).
     QList<QPair<LLMProvider, QString>> chain = request.fallbackChain;
@@ -366,6 +364,13 @@ bool LLMService::tryFallback(const LLMRequest &request, const NonStreamCallback 
             << "LLM fallback: switching" << serviceLabel
             << "to" << providerName(retried.provider) << "/" << retried.model
             << "(previous error:" << previousError.left(160) << ")";
+
+        // Both modes re-enter via validateModelThenDispatch. For streaming
+        // (nonStreamCallback empty) the dispatch will re-emit requestStarted
+        // with a fresh LLMService stream ID; RagAssistService's
+        // responseChunk / errorOccurred listeners don't filter on that ID,
+        // so they continue to route chunks/errors to the same RagAssist-
+        // level request. The chat panel sees an uninterrupted turn.
         validateModelThenDispatch(retried, nonStreamCallback);
         return true;
     }
@@ -436,7 +441,9 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
             // Try fallback before notifying the caller. If a configured
             // alternative provider exists and isn't also cooled down, we
             // swap to it silently; the user sees an uninterrupted result.
-            if (nonStreamCallback && tryFallback(request, nonStreamCallback, msg)) {
+            // Applies to both modes: non-streaming dossier generation and
+            // streaming chat alike.
+            if (tryFallback(request, nonStreamCallback, msg)) {
                 return;
             }
 
@@ -461,11 +468,22 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
         if (cached.isEmpty() || cached.contains(model)) {
             // Empty cache = fetch failed previously; give the request a chance.
             dispatchRequest(request, model, nonStreamCallback);
-        } else if (!m_isShowingModelDialog) {
-            m_hasPendingRequest = true;
-            m_pendingRequest = {request, nonStreamCallback};
-            m_isShowingModelDialog = true;
-            Q_EMIT modelNotFound(provider, model, cached, request.serviceName);
+        } else {
+            // Model not in cache for this provider. Before bothering the
+            // user with a picker dialog, try the fallback chain — if
+            // another configured provider can take this request silently,
+            // that's preferable.
+            const QString msg = i18n("Model '%1' not available from %2; trying fallback.",
+                                     model, providerName(provider));
+            if (tryFallback(request, nonStreamCallback, msg)) {
+                return;
+            }
+            if (!m_isShowingModelDialog) {
+                m_hasPendingRequest = true;
+                m_pendingRequest = {request, nonStreamCallback};
+                m_isShowingModelDialog = true;
+                Q_EMIT modelNotFound(provider, model, cached, request.serviceName);
+            }
         }
         return;
     }
@@ -478,11 +496,18 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
 
         if (available.isEmpty() || available.contains(model)) {
             weakThis->dispatchRequest(request, model, nonStreamCallback);
-        } else if (!weakThis->m_isShowingModelDialog) {
-            weakThis->m_hasPendingRequest = true;
-            weakThis->m_pendingRequest = {request, nonStreamCallback};
-            weakThis->m_isShowingModelDialog = true;
-            Q_EMIT weakThis->modelNotFound(request.provider, model, available, request.serviceName);
+        } else {
+            const QString msg = i18n("Model '%1' not available from %2; trying fallback.",
+                                     model, providerName(request.provider));
+            if (weakThis->tryFallback(request, nonStreamCallback, msg)) {
+                return;
+            }
+            if (!weakThis->m_isShowingModelDialog) {
+                weakThis->m_hasPendingRequest = true;
+                weakThis->m_pendingRequest = {request, nonStreamCallback};
+                weakThis->m_isShowingModelDialog = true;
+                Q_EMIT weakThis->modelNotFound(request.provider, model, available, request.serviceName);
+            }
         }
     });
 }
@@ -947,6 +972,30 @@ void LLMService::handleFinished()
             errorMsg += QStringLiteral("\n") + QString::fromUtf8(serverResponse);
         }
         qWarning().noquote() << "LLM request terminal failure:" << errorMsg;
+
+        // Streaming fallback: if nothing has streamed yet, silently try
+        // the next configured provider. Skip the fallback once chunks
+        // have been delivered — splicing output from two providers would
+        // produce confusing double-text, and the user has already
+        // received partial value from the primary.
+        const bool noContentStreamed = m_fullResponse.isEmpty();
+        if (noContentStreamed) {
+            // Must null m_activeReply before dispatching the fallback so
+            // the fallback's fresh stream setup doesn't see a stale reply
+            // pointer and invoke cancelRequest() on the already-finished
+            // reply we're about to delete.
+            QNetworkReply *dyingReply = m_activeReply;
+            m_activeReply = nullptr;
+            LLMRequest reqCopy = m_activeRequest; // capture before dispatch mutates state
+            if (tryFallback(reqCopy, nullptr, errorMsg)) {
+                dyingReply->deleteLater();
+                return;
+            }
+            // Fallback chain had nothing usable — restore state and fall
+            // through to the error-surfacing path below.
+            m_activeReply = dyingReply;
+        }
+
         handleError(errorMsg);
     } else if (m_activeReply->error() == QNetworkReply::NoError) {
         Q_EMIT responseFinished(m_currentStreamId, m_fullResponse);
