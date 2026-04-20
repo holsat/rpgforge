@@ -162,86 +162,109 @@ QWidget* SettingsDialog::createLLMTab()
     providerLayout->addRow(i18n("Embedding Model:"), m_embeddingModelEdit);
     layout->addLayout(providerLayout);
 
-    // OpenAI Group
-    auto *openaiGroup = new QGroupBox(i18n("OpenAI"), this);
-    auto *openaiLayout = new QFormLayout(openaiGroup);
-    m_openaiKeyEdit = new QLineEdit(this);
-    m_openaiKeyEdit->setEchoMode(QLineEdit::Password);
-    openaiLayout->addRow(i18n("API Key:"), m_openaiKeyEdit);
-    m_openaiModelEdit = new QLineEdit(this);
-    m_openaiModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    openaiLayout->addRow(i18n("Default Model:"), m_openaiModelEdit);
-    m_openaiEndpointEdit = new QLineEdit(this);
-    m_openaiEndpointEdit->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
-    openaiLayout->addRow(i18n("Endpoint:"), m_openaiEndpointEdit);
-    layout->addWidget(openaiGroup);
+    // Helper: build one provider group box with API-key (optional),
+    // endpoint, default-model combo, and inline status label. Wires
+    // editingFinished on the key/endpoint fields to testProviderConnection
+    // so the combo auto-populates once the user has credentials.
+    auto buildProviderGroup = [this, layout](LLMProvider provider,
+                                             const QString &title,
+                                             const QString &endpointPlaceholder,
+                                             bool hasKey,
+                                             bool keyOptional,
+                                             QLineEdit **keyOut,
+                                             QLineEdit **endpointOut,
+                                             QComboBox **modelComboOut,
+                                             const QString &endpointLabel = QString()) {
+        auto *group = new QGroupBox(title, this);
+        auto *form = new QFormLayout(group);
 
-    // Anthropic Group
-    auto *anthropicGroup = new QGroupBox(i18n("Anthropic"), this);
-    auto *anthropicLayout = new QFormLayout(anthropicGroup);
-    m_anthropicKeyEdit = new QLineEdit(this);
-    m_anthropicKeyEdit->setEchoMode(QLineEdit::Password);
-    anthropicLayout->addRow(i18n("API Key:"), m_anthropicKeyEdit);
-    m_anthropicModelEdit = new QLineEdit(this);
-    m_anthropicModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    anthropicLayout->addRow(i18n("Default Model:"), m_anthropicModelEdit);
-    m_anthropicEndpointEdit = new QLineEdit(this);
-    m_anthropicEndpointEdit->setPlaceholderText(QStringLiteral("https://api.anthropic.com/v1/messages"));
-    anthropicLayout->addRow(i18n("Endpoint:"), m_anthropicEndpointEdit);
-    layout->addWidget(anthropicGroup);
+        QLineEdit *keyEdit = nullptr;
+        if (hasKey) {
+            keyEdit = new QLineEdit(this);
+            keyEdit->setEchoMode(QLineEdit::Password);
+            form->addRow(keyOptional ? i18n("API Key (Optional):")
+                                     : i18n("API Key:"),
+                         keyEdit);
+        }
 
-    // Ollama Group
-    auto *ollamaGroup = new QGroupBox(i18n("Ollama"), this);
-    auto *ollamaLayout = new QFormLayout(ollamaGroup);
-    m_ollamaEndpointEdit = new QLineEdit(this);
-    m_ollamaEndpointEdit->setPlaceholderText(QStringLiteral("http://localhost:11434/api/chat"));
-    ollamaLayout->addRow(i18n("Local Endpoint:"), m_ollamaEndpointEdit);
-    m_ollamaModelEdit = new QLineEdit(this);
-    m_ollamaModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    ollamaLayout->addRow(i18n("Default Model:"), m_ollamaModelEdit);
-    layout->addWidget(ollamaGroup);
+        auto *endpointEdit = new QLineEdit(this);
+        endpointEdit->setPlaceholderText(endpointPlaceholder);
+        form->addRow(endpointLabel.isEmpty() ? i18n("Endpoint:")
+                                             : endpointLabel,
+                     endpointEdit);
 
-    // Grok Group
-    auto *grokGroup = new QGroupBox(i18n("Grok (xAI)"), this);
-    auto *grokLayout = new QFormLayout(grokGroup);
-    m_grokKeyEdit = new QLineEdit(this);
-    m_grokKeyEdit->setEchoMode(QLineEdit::Password);
-    grokLayout->addRow(i18n("API Key:"), m_grokKeyEdit);
-    m_grokModelEdit = new QLineEdit(this);
-    m_grokModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    grokLayout->addRow(i18n("Default Model:"), m_grokModelEdit);
-    m_grokEndpointEdit = new QLineEdit(this);
-    m_grokEndpointEdit->setPlaceholderText(QStringLiteral("https://api.x.ai/v1/chat/completions"));
-    grokLayout->addRow(i18n("Endpoint:"), m_grokEndpointEdit);
-    layout->addWidget(grokGroup);
+        auto *modelCombo = new QComboBox(this);
+        modelCombo->setEditable(true);
+        modelCombo->setMinimumWidth(350);
+        modelCombo->lineEdit()->setPlaceholderText(
+            i18n("Enter API key above to auto-populate"));
+        form->addRow(i18n("Default Model:"), modelCombo);
 
-    // Google Group
-    auto *geminiGroup = new QGroupBox(i18n("Google"), this);
-    auto *geminiLayout = new QFormLayout(geminiGroup);
-    m_geminiKeyEdit = new QLineEdit(this);
-    m_geminiKeyEdit->setEchoMode(QLineEdit::Password);
-    geminiLayout->addRow(i18n("API Key:"), m_geminiKeyEdit);
-    m_geminiModelEdit = new QLineEdit(this);
-    m_geminiModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    geminiLayout->addRow(i18n("Default Model:"), m_geminiModelEdit);
-    m_geminiEndpointEdit = new QLineEdit(this);
-    m_geminiEndpointEdit->setPlaceholderText(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"));
-    geminiLayout->addRow(i18n("Endpoint:"), m_geminiEndpointEdit);
-    layout->addWidget(geminiGroup);
+        auto *statusLabel = new QLabel(QString(), this);
+        statusLabel->setWordWrap(true);
+        QFont sf = statusLabel->font();
+        sf.setItalic(true);
+        statusLabel->setFont(sf);
+        form->addRow(QString(), statusLabel);
 
-    // LM Studio Group
-    auto *lmstudioGroup = new QGroupBox(i18n("LM Studio"), this);
-    auto *lmstudioLayout = new QFormLayout(lmstudioGroup);
-    m_lmstudioKeyEdit = new QLineEdit(this);
-    m_lmstudioKeyEdit->setEchoMode(QLineEdit::Password);
-    lmstudioLayout->addRow(i18n("API Key (Optional):"), m_lmstudioKeyEdit);
-    m_lmstudioModelEdit = new QLineEdit(this);
-    m_lmstudioModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    lmstudioLayout->addRow(i18n("Default Model:"), m_lmstudioModelEdit);
-    m_lmstudioEndpointEdit = new QLineEdit(this);
-    m_lmstudioEndpointEdit->setPlaceholderText(QStringLiteral("http://localhost:1234/v1/chat/completions"));
-    lmstudioLayout->addRow(i18n("Endpoint:"), m_lmstudioEndpointEdit);
-    layout->addWidget(lmstudioGroup);
+        layout->addWidget(group);
+
+        m_providerModelCombos.insert(provider, modelCombo);
+        m_providerStatusLabels.insert(provider, statusLabel);
+
+        // Trigger the API-key-test + model-fetch when the user finishes
+        // editing either credential-bearing field. KWallet write happens
+        // inside testProviderConnection so the fetch uses the fresh key.
+        if (keyEdit) {
+            connect(keyEdit, &QLineEdit::editingFinished, this, [this, provider]() {
+                testProviderConnection(provider);
+            });
+        }
+        connect(endpointEdit, &QLineEdit::editingFinished, this, [this, provider]() {
+            testProviderConnection(provider);
+        });
+
+        if (keyOut) *keyOut = keyEdit;
+        if (endpointOut) *endpointOut = endpointEdit;
+        if (modelComboOut) *modelComboOut = modelCombo;
+    };
+
+    // OpenAI
+    buildProviderGroup(LLMProvider::OpenAI, i18n("OpenAI"),
+                       QStringLiteral("https://api.openai.com/v1/chat/completions"),
+                       /*hasKey=*/true, /*keyOptional=*/false,
+                       &m_openaiKeyEdit, &m_openaiEndpointEdit, &m_openaiModelCombo);
+
+    // Anthropic
+    buildProviderGroup(LLMProvider::Anthropic, i18n("Anthropic"),
+                       QStringLiteral("https://api.anthropic.com/v1/messages"),
+                       /*hasKey=*/true, /*keyOptional=*/false,
+                       &m_anthropicKeyEdit, &m_anthropicEndpointEdit, &m_anthropicModelCombo);
+
+    // Ollama — local, no key. Endpoint label matches the previous UI.
+    buildProviderGroup(LLMProvider::Ollama, i18n("Ollama"),
+                       QStringLiteral("http://localhost:11434/api/chat"),
+                       /*hasKey=*/false, /*keyOptional=*/false,
+                       /*keyOut=*/nullptr, &m_ollamaEndpointEdit, &m_ollamaModelCombo,
+                       i18n("Local Endpoint:"));
+
+    // Grok
+    buildProviderGroup(LLMProvider::Grok, i18n("Grok (xAI)"),
+                       QStringLiteral("https://api.x.ai/v1/chat/completions"),
+                       /*hasKey=*/true, /*keyOptional=*/false,
+                       &m_grokKeyEdit, &m_grokEndpointEdit, &m_grokModelCombo);
+
+    // Google / Gemini
+    buildProviderGroup(LLMProvider::Gemini, i18n("Google"),
+                       QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
+                       /*hasKey=*/true, /*keyOptional=*/false,
+                       &m_geminiKeyEdit, &m_geminiEndpointEdit, &m_geminiModelCombo);
+
+    // LM Studio — local with optional key
+    buildProviderGroup(LLMProvider::LMStudio, i18n("LM Studio"),
+                       QStringLiteral("http://localhost:1234/v1/chat/completions"),
+                       /*hasKey=*/true, /*keyOptional=*/true,
+                       &m_lmstudioKeyEdit, &m_lmstudioEndpointEdit, &m_lmstudioModelCombo);
 
     layout->addStretch();
     return tab;
@@ -343,6 +366,7 @@ QWidget* SettingsDialog::createAgentsTab()
 void SettingsDialog::updateModelCombos(LLMProvider provider)
 {
     if (m_modelCache.contains(provider)) {
+        // Agents tab rows whose primary is this provider.
         for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
             auto &config = it.value();
             if (static_cast<LLMProvider>(config.providerCombo->currentIndex()) == provider) {
@@ -352,13 +376,21 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
                 config.modelCombo->setEditText(current);
             }
         }
-        
-        // Handle Analyzer Model Combo
+
+        // Analyzer tab.
         if (static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()) == provider) {
             QString current = m_analyzerModelCombo->currentText();
             m_analyzerModelCombo->clear();
             m_analyzerModelCombo->addItems(m_modelCache[provider]);
             m_analyzerModelCombo->setEditText(current);
+        }
+
+        // LLM tab — the per-provider default-model combo.
+        if (QComboBox *combo = m_providerModelCombos.value(provider, nullptr)) {
+            const QString current = combo->currentText();
+            combo->clear();
+            combo->addItems(m_modelCache[provider]);
+            combo->setEditText(current);
         }
         return;
     }
@@ -366,6 +398,80 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
     LLMService::instance().fetchModels(provider, [this, provider](const QStringList &models) {
         m_modelCache[provider] = models;
         updateModelCombos(provider);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// testProviderConnection: on API-key / endpoint edit, write the new key to
+// KWallet (cloud providers only) and kick off a live fetchModels call. On
+// success, populate the provider's model combo and show a green "Connected
+// — N models" status. On failure (empty list), show an italic warning so
+// the user knows to recheck credentials.
+// ---------------------------------------------------------------------------
+void SettingsDialog::testProviderConnection(LLMProvider provider)
+{
+    QLabel *status = m_providerStatusLabels.value(provider, nullptr);
+
+    // Persist the freshly-typed key to KWallet so fetchModels picks it up.
+    // Local providers (Ollama, optional-key LMStudio) may not have a key
+    // edit widget; skip the write in those cases.
+    QLineEdit *keyEdit = nullptr;
+    switch (provider) {
+        case LLMProvider::OpenAI:    keyEdit = m_openaiKeyEdit; break;
+        case LLMProvider::Anthropic: keyEdit = m_anthropicKeyEdit; break;
+        case LLMProvider::Grok:      keyEdit = m_grokKeyEdit; break;
+        case LLMProvider::Gemini:    keyEdit = m_geminiKeyEdit; break;
+        case LLMProvider::LMStudio:  keyEdit = m_lmstudioKeyEdit; break;
+        case LLMProvider::Ollama:    break; // no key
+    }
+    if (keyEdit && !keyEdit->text().isEmpty()) {
+        LLMService::instance().setApiKey(provider, keyEdit->text());
+    }
+
+    // Also persist the endpoint so fetchModels (which reads from QSettings)
+    // uses the user's freshly-typed value. Without this the test would run
+    // against the stale endpoint from last save, which is exactly what we
+    // don't want when the user is actively configuring.
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QLineEdit *endpointEdit = nullptr;
+    switch (provider) {
+        case LLMProvider::OpenAI:    endpointEdit = m_openaiEndpointEdit; break;
+        case LLMProvider::Anthropic: endpointEdit = m_anthropicEndpointEdit; break;
+        case LLMProvider::Ollama:    endpointEdit = m_ollamaEndpointEdit; break;
+        case LLMProvider::Grok:      endpointEdit = m_grokEndpointEdit; break;
+        case LLMProvider::Gemini:    endpointEdit = m_geminiEndpointEdit; break;
+        case LLMProvider::LMStudio:  endpointEdit = m_lmstudioEndpointEdit; break;
+    }
+    if (endpointEdit) {
+        settings.setValue(LLMService::providerSettingsKey(provider) + QStringLiteral("/endpoint"),
+                          endpointEdit->text());
+    }
+
+    // Invalidate the session model cache for this provider so the fetch
+    // below goes to the network with the user's new credentials rather
+    // than returning the stale previous list.
+    m_modelCache.remove(provider);
+
+    if (status) {
+        status->setText(i18n("Testing…"));
+        status->setStyleSheet(QString());
+    }
+
+    QPointer<SettingsDialog> weakThis(this);
+    LLMService::instance().fetchModels(provider, [weakThis, provider](const QStringList &models) {
+        if (!weakThis) return;
+        weakThis->m_modelCache[provider] = models;
+        weakThis->updateModelCombos(provider);
+
+        QLabel *status = weakThis->m_providerStatusLabels.value(provider, nullptr);
+        if (!status) return;
+        if (models.isEmpty()) {
+            status->setText(i18n("Could not fetch models. Check your API key and endpoint."));
+            status->setStyleSheet(QStringLiteral("color: #c0392b;")); // red
+        } else {
+            status->setText(i18n("Connected — %1 models available", models.size()));
+            status->setStyleSheet(QStringLiteral("color: #27ae60;")); // green
+        }
     });
 }
 
@@ -493,28 +599,41 @@ void SettingsDialog::load()
     // Placeholder text in the widget gives the user a hint without seeding QSettings.
     m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model")).toString());
 
-    m_openaiModelEdit->setText(settings.value(QStringLiteral("llm/openai/model")).toString());
+    m_openaiModelCombo->setEditText(settings.value(QStringLiteral("llm/openai/model")).toString());
     m_openaiEndpointEdit->setText(settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString());
     m_openaiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::OpenAI));
 
-    m_anthropicModelEdit->setText(settings.value(QStringLiteral("llm/anthropic/model")).toString());
+    m_anthropicModelCombo->setEditText(settings.value(QStringLiteral("llm/anthropic/model")).toString());
     m_anthropicEndpointEdit->setText(settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString());
     m_anthropicKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Anthropic));
 
-    m_ollamaModelEdit->setText(settings.value(QStringLiteral("llm/ollama/model")).toString());
+    m_ollamaModelCombo->setEditText(settings.value(QStringLiteral("llm/ollama/model")).toString());
     m_ollamaEndpointEdit->setText(settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434/api/chat")).toString());
 
-    m_grokModelEdit->setText(settings.value(QStringLiteral("llm/grok/model"), QString()).toString());
+    m_grokModelCombo->setEditText(settings.value(QStringLiteral("llm/grok/model"), QString()).toString());
     m_grokEndpointEdit->setText(settings.value(QStringLiteral("llm/grok/endpoint"), QStringLiteral("https://api.x.ai/v1/chat/completions")).toString());
     m_grokKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Grok));
 
-    m_geminiModelEdit->setText(settings.value(QStringLiteral("llm/gemini/model"), QString()).toString());
+    m_geminiModelCombo->setEditText(settings.value(QStringLiteral("llm/gemini/model"), QString()).toString());
     m_geminiEndpointEdit->setText(settings.value(QStringLiteral("llm/gemini/endpoint"), QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")).toString());
     m_geminiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Gemini));
 
-    m_lmstudioModelEdit->setText(settings.value(QStringLiteral("llm/lmstudio/model"), QString()).toString());
+    m_lmstudioModelCombo->setEditText(settings.value(QStringLiteral("llm/lmstudio/model"), QString()).toString());
     m_lmstudioEndpointEdit->setText(settings.value(QStringLiteral("llm/lmstudio/endpoint"), QStringLiteral("http://localhost:1234/v1/chat/completions")).toString());
     m_lmstudioKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::LMStudio));
+
+    // For any provider that already has credentials configured, trigger a
+    // silent model-list fetch so the combos populate on dialog open. We
+    // don't block on this — the combos already carry the stored default,
+    // so the user can work without waiting. The status labels update when
+    // each fetch completes.
+    for (LLMProvider p : {LLMProvider::OpenAI, LLMProvider::Anthropic,
+                           LLMProvider::Ollama, LLMProvider::Grok,
+                           LLMProvider::Gemini, LLMProvider::LMStudio}) {
+        if (LLMService::instance().isProviderConfigured(p)) {
+            testProviderConnection(p);
+        }
+    }
 
     m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
     m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/analyzer_provider"), 0).toInt());
@@ -646,26 +765,26 @@ void SettingsDialog::save()
     // the draggable list at the top of the LLM tab.
     saveProviderOrderList();
 
-    settings.setValue(QStringLiteral("llm/openai/model"), m_openaiModelEdit->text());
+    settings.setValue(QStringLiteral("llm/openai/model"), m_openaiModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/openai/endpoint"), m_openaiEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::OpenAI, m_openaiKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/anthropic/model"), m_anthropicModelEdit->text());
+    settings.setValue(QStringLiteral("llm/anthropic/model"), m_anthropicModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/anthropic/endpoint"), m_anthropicEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Anthropic, m_anthropicKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelEdit->text());
+    settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/ollama/endpoint"), m_ollamaEndpointEdit->text());
 
-    settings.setValue(QStringLiteral("llm/grok/model"), m_grokModelEdit->text());
+    settings.setValue(QStringLiteral("llm/grok/model"), m_grokModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/grok/endpoint"), m_grokEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Grok, m_grokKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/gemini/model"), m_geminiModelEdit->text());
+    settings.setValue(QStringLiteral("llm/gemini/model"), m_geminiModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/gemini/endpoint"), m_geminiEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Gemini, m_geminiKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/lmstudio/model"), m_lmstudioModelEdit->text());
+    settings.setValue(QStringLiteral("llm/lmstudio/model"), m_lmstudioModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/lmstudio/endpoint"), m_lmstudioEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::LMStudio, m_lmstudioKeyEdit->text());
 

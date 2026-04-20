@@ -79,23 +79,37 @@ private:
     // LLM settings
     QComboBox *m_activeProviderCombo;
     QLineEdit *m_openaiKeyEdit;
-    QLineEdit *m_openaiModelEdit;
+    QComboBox *m_openaiModelCombo;
     QLineEdit *m_openaiEndpointEdit;
     QLineEdit *m_anthropicKeyEdit;
-    QLineEdit *m_anthropicModelEdit;
+    QComboBox *m_anthropicModelCombo;
     QLineEdit *m_anthropicEndpointEdit;
-    QLineEdit *m_ollamaModelEdit;
+    QComboBox *m_ollamaModelCombo;
     QLineEdit *m_ollamaEndpointEdit;
     QLineEdit *m_grokKeyEdit;
-    QLineEdit *m_grokModelEdit;
+    QComboBox *m_grokModelCombo;
     QLineEdit *m_grokEndpointEdit;
     QLineEdit *m_geminiKeyEdit;
-    QLineEdit *m_geminiModelEdit;
+    QComboBox *m_geminiModelCombo;
     QLineEdit *m_geminiEndpointEdit;
     QLineEdit *m_lmstudioKeyEdit;
-    QLineEdit *m_lmstudioModelEdit;
+    QComboBox *m_lmstudioModelCombo;
     QLineEdit *m_lmstudioEndpointEdit;
     QLineEdit *m_embeddingModelEdit;
+
+    // Per-provider inline status label under the API key / endpoint row.
+    // Updated by the API-key-test flow to show "Connected — N models" on
+    // success or the HTTP error on failure. Null keys are skipped.
+    QHash<LLMProvider, QLabel*> m_providerStatusLabels;
+
+    // Map LLMProvider -> its default-model combo in the LLM tab, used by
+    // updateModelCombos so one function populates both tabs' combos.
+    QHash<LLMProvider, QComboBox*> m_providerModelCombos;
+
+    // Trigger an API-key-test + model-fetch for the given provider. Called
+    // when the user finishes editing the key/endpoint field, and during
+    // load() to pre-populate combos on dialog open.
+    void testProviderConnection(LLMProvider provider);
 
     // Prompts
     QListWidget *m_promptsList;
