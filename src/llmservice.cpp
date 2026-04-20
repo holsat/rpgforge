@@ -237,6 +237,19 @@ bool LLMService::isProviderEnabled(LLMProvider provider)
                           true).toBool();
 }
 
+QStringList LLMService::filterEmbeddingModels(LLMProvider /*provider*/,
+                                              const QStringList &allModels)
+{
+    QStringList out;
+    for (const QString &m : allModels) {
+        if (m.contains(QStringLiteral("embed"), Qt::CaseInsensitive)
+            || m.contains(QStringLiteral("similarity"), Qt::CaseInsensitive)) {
+            out.append(m);
+        }
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Cooldown tracker: records per-{provider, model} retry-after windows from
 // 429 responses and lets dispatchers short-circuit before hitting the network.

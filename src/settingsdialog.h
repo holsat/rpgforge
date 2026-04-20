@@ -95,7 +95,6 @@ private:
     QLineEdit *m_lmstudioKeyEdit;
     QComboBox *m_lmstudioModelCombo;
     QLineEdit *m_lmstudioEndpointEdit;
-    QLineEdit *m_embeddingModelEdit;
 
     // Per-provider inline status label under the API key / endpoint row.
     // Updated by the API-key-test flow to show "Connected — N models" on
@@ -105,6 +104,11 @@ private:
     // Map LLMProvider -> its default-model combo in the LLM tab, used by
     // updateModelCombos so one function populates both tabs' combos.
     QHash<LLMProvider, QComboBox*> m_providerModelCombos;
+
+    // Per-provider embedding-model combos. Populated by
+    // LLMService::filterEmbeddingModels applied to the fetchModels result.
+    // Empty filter result -> combo is disabled with "Not supported".
+    QHash<LLMProvider, QComboBox*> m_providerEmbeddingCombos;
 
     // Trigger an API-key-test + model-fetch for the given provider. Called
     // when the user finishes editing the key/endpoint field, and during

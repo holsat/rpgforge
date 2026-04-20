@@ -191,6 +191,20 @@ public:
     static bool isProviderEnabled(LLMProvider provider);
 
     /**
+     * @brief Given the full chat-model list returned by fetchModels, extract
+     * just the ones that look like embedding models. Name-based heuristic:
+     * anything containing "embed" or "similarity" (case-insensitive) —
+     * covers OpenAI's text-embedding-3-*, Gemini's text-embedding-004 /
+     * gemini-embedding-001, Ollama's nomic-embed-text / mxbai-embed-large,
+     * and LMStudio's OpenAI-compatible embedding models. Anthropic / Grok
+     * don't publish embedding endpoints, so their filtered list comes back
+     * empty — callers should treat that as "embeddings not available for
+     * this provider" and grey out / skip the entry.
+     */
+    static QStringList filterEmbeddingModels(LLMProvider provider,
+                                             const QStringList &allModels);
+
+    /**
      * @brief Returns true if the given {provider, model} pair is currently in
      * a cooldown window (recorded from a prior 429 with retry-after). If @p
      * expiresAtMsOut is non-null, the wall-clock millisecond epoch when the

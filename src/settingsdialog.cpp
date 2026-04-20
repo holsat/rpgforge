@@ -156,10 +156,9 @@ QWidget* SettingsDialog::createLLMTab()
 
     auto *providerLayout = new QFormLayout();
     providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
-    // Provider agnostic
-    m_embeddingModelEdit = new QLineEdit(this);
-    m_embeddingModelEdit->setPlaceholderText(i18n("Select via provider model list"));
-    providerLayout->addRow(i18n("Embedding Model:"), m_embeddingModelEdit);
+    // Note: per-provider embedding model combos live inside each provider
+    // group box below; see buildProviderGroup. Embeddings fall back down
+    // the provider list if the primary's embedding model is unavailable.
     layout->addLayout(providerLayout);
 
     // Helper: build one provider group box with API-key (optional),
@@ -200,6 +199,19 @@ QWidget* SettingsDialog::createLLMTab()
             i18n("Enter API key above to auto-populate"));
         form->addRow(i18n("Default Model:"), modelCombo);
 
+        // Per-provider embedding model combo. Populated by the same fetch;
+        // filterEmbeddingModels returns only embedding-capable entries. If
+        // the filter yields nothing (Anthropic/Grok don't publish
+        // embedding endpoints) the combo stays disabled with a "Not
+        // supported" placeholder — KnowledgeBase's chain walk will skip
+        // this provider for embedding requests.
+        auto *embeddingCombo = new QComboBox(this);
+        embeddingCombo->setEditable(true);
+        embeddingCombo->setMinimumWidth(350);
+        embeddingCombo->lineEdit()->setPlaceholderText(
+            i18n("Populates after key/endpoint is set"));
+        form->addRow(i18n("Embedding Model:"), embeddingCombo);
+
         auto *statusLabel = new QLabel(QString(), this);
         statusLabel->setWordWrap(true);
         QFont sf = statusLabel->font();
@@ -210,6 +222,7 @@ QWidget* SettingsDialog::createLLMTab()
         layout->addWidget(group);
 
         m_providerModelCombos.insert(provider, modelCombo);
+        m_providerEmbeddingCombos.insert(provider, embeddingCombo);
         m_providerStatusLabels.insert(provider, statusLabel);
 
         // Trigger the API-key-test + model-fetch when the user finishes
@@ -391,6 +404,24 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
             combo->clear();
             combo->addItems(m_modelCache[provider]);
             combo->setEditText(current);
+        }
+
+        // LLM tab — the per-provider embedding-model combo. Filter the
+        // fetched list for embedding-capable entries; if none found, the
+        // combo is disabled with placeholder text so the user knows this
+        // provider won't participate in embedding requests.
+        if (QComboBox *eCombo = m_providerEmbeddingCombos.value(provider, nullptr)) {
+            const QStringList embeds = LLMService::filterEmbeddingModels(
+                provider, m_modelCache[provider]);
+            const QString current = eCombo->currentText();
+            eCombo->clear();
+            eCombo->addItems(embeds);
+            eCombo->setEditText(current);
+            eCombo->setEnabled(!embeds.isEmpty() || !current.isEmpty());
+            eCombo->lineEdit()->setPlaceholderText(
+                embeds.isEmpty()
+                    ? i18n("Not supported by this provider")
+                    : i18n("Choose embedding model"));
         }
         return;
     }
@@ -597,7 +628,30 @@ void SettingsDialog::load()
     m_activeProviderCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     // Model fields: no hardcoded defaults — empty means "not configured yet"
     // Placeholder text in the widget gives the user a hint without seeding QSettings.
-    m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model")).toString());
+
+    // Legacy migration: if the old global llm/embedding_model is set but no
+    // per-provider slot is yet, copy it into the active provider's slot so
+    // the user doesn't silently lose their configured model on first open.
+    const QString legacyEmbedding = settings.value(QStringLiteral("llm/embedding_model")).toString();
+    if (!legacyEmbedding.isEmpty()) {
+        const LLMProvider active = static_cast<LLMProvider>(
+            settings.value(QStringLiteral("llm/provider"), 0).toInt());
+        const QString activeKey = LLMService::providerSettingsKey(active)
+                                  + QStringLiteral("/embedding_model");
+        if (settings.value(activeKey).toString().isEmpty()) {
+            settings.setValue(activeKey, legacyEmbedding);
+        }
+        settings.remove(QStringLiteral("llm/embedding_model"));
+    }
+
+    // Load per-provider embedding models into each combo.
+    for (auto it = m_providerEmbeddingCombos.constBegin();
+         it != m_providerEmbeddingCombos.constEnd(); ++it) {
+        const QString stored = settings.value(
+            LLMService::providerSettingsKey(it.key())
+            + QStringLiteral("/embedding_model")).toString();
+        it.value()->setEditText(stored);
+    }
 
     m_openaiModelCombo->setEditText(settings.value(QStringLiteral("llm/openai/model")).toString());
     m_openaiEndpointEdit->setText(settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString());
@@ -759,7 +813,19 @@ void SettingsDialog::save()
     settings.setValue(QStringLiteral("editor/typewriterScrolling"), m_typewriterScrollingCheck->isChecked());
 
     settings.setValue(QStringLiteral("llm/provider"), m_activeProviderCombo->currentIndex());
-    settings.setValue(QStringLiteral("llm/embedding_model"), m_embeddingModelEdit->text());
+
+    // Per-provider embedding model (replaces the single global field).
+    for (auto it = m_providerEmbeddingCombos.constBegin();
+         it != m_providerEmbeddingCombos.constEnd(); ++it) {
+        settings.setValue(
+            LLMService::providerSettingsKey(it.key())
+            + QStringLiteral("/embedding_model"),
+            it.value()->currentText().trimmed());
+    }
+    // Retire the legacy global key — any value gets migrated into the
+    // active provider's slot in load(); on subsequent saves it should not
+    // come back.
+    settings.remove(QStringLiteral("llm/embedding_model"));
 
     // Persist provider fallback order + per-provider enable flags from
     // the draggable list at the top of the LLM tab.
