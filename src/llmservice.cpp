@@ -326,11 +326,30 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
         url = QUrl(settings.value(sk + QStringLiteral("/endpoint"), defaultEndpoint).toString());
         netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
-        body[QStringLiteral("model")] = model;
+
+        // Gemini's OpenAI-compatible endpoint wants the bare model
+        // name (e.g. "gemini-2.5-pro") — not the "models/..." native
+        // Gemini prefix we get back from fetchModels(). Sending the
+        // prefixed form to /v1beta/openai/chat/completions returns a
+        // 404 "model not found". Strip the prefix here so the rest
+        // of the app can stay consistent with native naming.
+        QString sendModel = model;
+        if (request.provider == LLMProvider::Gemini
+            && sendModel.startsWith(QLatin1String("models/"))) {
+            sendModel = sendModel.mid(7);
+        }
+
+        body[QStringLiteral("model")] = sendModel;
         body[QStringLiteral("messages")] = messagesArray;
         body[QStringLiteral("stream")] = streaming;
         body[QStringLiteral("temperature")] = request.temperature;
         body[QStringLiteral("max_tokens")] = request.maxTokens;
+
+        qInfo().noquote() << "LLM chat dispatch: provider="
+                          << static_cast<int>(request.provider)
+                          << "model=" << sendModel
+                          << "service=" << request.serviceName
+                          << "endpoint=" << url.toString();
     }
     else if (request.provider == LLMProvider::Anthropic) {
         QString endpoint = settings.value(QStringLiteral("llm/anthropic/endpoint"),
