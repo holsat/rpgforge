@@ -61,12 +61,13 @@ private:
     void setupStylesheetWatcher();
     QString wrapHtml(const QString &body) const;
     QString loadProjectStylesheets() const;
-    /// Rewrite <img src="..."> in rendered HTML so relative paths
-    /// resolve to absolute file:// URLs, trying the document's
-    /// directory first (CommonMark convention) and falling back to
-    /// the project root (matches how Word-imported / Scrivener docs
-    /// were written). Broken paths pass through unchanged.
-    QString resolveRelativeImageUrls(const QString &html) const;
+    /// Rewrite ![alt](path) in markdown source so relative paths
+    /// resolve to absolute file:// URLs BEFORE cmark-gfm renders.
+    /// Tries the document directory first (CommonMark convention)
+    /// and falls back to the project root (matches how Word/Scrivener
+    /// imports were written). Paths that don't resolve against either
+    /// are left as-is and show a broken-image indicator.
+    QString resolveRelativeImageUrlsInMarkdown(const QString &markdown) const;
 };
 
 #endif // PREVIEWPANEL_H

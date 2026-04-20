@@ -381,6 +381,16 @@ void InlineAIInvoker::beginInvocation(const Command &cmd,
     // @cmd line with an error comment.
     QPointer<InlineAIInvoker> weakThis(this);
     RagAssistCallbacks cb;
+    // Log which passages the RAG pipeline surfaced so we can see
+    // whether the retrieval is actually contributing context, vs.
+    // the LLM only having the active-doc extraSource.
+    cb.onPassagesRetrieved = [](const QString &requestId, const QStringList &paths) {
+        RPGFORGE_DLOG("INLINE-AI") << "RAG retrieved" << paths.size()
+                                    << "passage(s) for request" << requestId;
+        for (const QString &p : paths) {
+            RPGFORGE_DLOG("INLINE-AI") << "  passage:" << p;
+        }
+    };
     cb.onChunk = [weakThis](const QString &, const QString &chunk) {
         if (!weakThis || !weakThis->m_invocationActive || !weakThis->m_activeRange) return;
 

@@ -137,25 +137,28 @@ void PreviewPanel::onLoadFinished(bool ok)
     }
 }
 
-QString PreviewPanel::resolveRelativeImageUrls(const QString &html) const
+QString PreviewPanel::resolveRelativeImageUrlsInMarkdown(const QString &markdown) const
 {
-    // Rewrite every <img src="path"> so relative paths become absolute
-    // file:// URLs. The app's documents mix two conventions:
+    // Rewrite every ![alt](relative/path) in the MARKDOWN so relative
+    // paths become absolute file:// URLs before cmark-gfm runs. The
+    // app's documents mix two conventions:
     //   - Imported docs (Word importer, Scrivener) emit "./media/X.png"
     //     assuming the base is the project root.
     //   - Hand-authored / drag-dropped paths emit "../../media/X.png"
     //     assuming the base is the document's directory.
     //
-    // A single baseUrl can only accommodate one of these. Rather than
-    // forcing authors to pick, we try both: doc-dir first (matches the
-    // CommonMark spec), then project-root. Whichever resolves to a
-    // file that exists on disk wins.
+    // A single baseUrl can only accommodate one of these. We try both:
+    // doc-dir first (matches the CommonMark spec), then project-root.
+    // Whichever resolves to a file that exists on disk wins. Rewriting
+    // at the markdown level (rather than post-processing HTML) ensures
+    // the absolute URL survives the downstream JS-escape + innerHTML
+    // pipeline intact.
     //
     // URLs with a scheme (http://, https://, file://) and absolute
-    // paths are left alone. Anchor-only refs never appear in <img>.
-    if (html.isEmpty()) return html;
+    // paths are left alone.
+    if (markdown.isEmpty()) return markdown;
     if (!m_baseUrl.isLocalFile() && !ProjectManager::instance().isProjectOpen()) {
-        return html;   // no local context to resolve against
+        return markdown;
     }
 
     const QString docDir = m_baseUrl.toLocalFile();
@@ -166,9 +169,8 @@ QString PreviewPanel::resolveRelativeImageUrls(const QString &html) const
     auto resolve = [&](const QString &src) -> QString {
         if (src.isEmpty()) return src;
         static const QRegularExpression scheme(QStringLiteral("^[a-zA-Z][a-zA-Z0-9+.-]*:"));
-        if (scheme.match(src).hasMatch()) return src;       // url
-        if (src.startsWith(QLatin1Char('/'))) return src;    // absolute path
-        if (src.startsWith(QLatin1Char('#'))) return src;    // anchor (not for <img>, but belt-and-braces)
+        if (scheme.match(src).hasMatch()) return src;
+        if (src.startsWith(QLatin1Char('/'))) return src;
 
         auto tryBase = [&](const QString &base) -> QString {
             if (base.isEmpty()) return QString();
@@ -183,24 +185,32 @@ QString PreviewPanel::resolveRelativeImageUrls(const QString &html) const
         if (!fromDoc.isEmpty()) return fromDoc;
         const QString fromProject = tryBase(projectRoot);
         if (!fromProject.isEmpty()) return fromProject;
-        return src;   // neither exists — leave as-is, broken image shows
+
+        qInfo().noquote() << "PreviewPanel: image path"
+                          << src << "could not be resolved against"
+                          << docDir << "or" << projectRoot;
+        return src;
     };
 
-    QString out = html;
+    // Matches ![alt](path) and ![alt](path "title"). Alt can contain
+    // anything except newlines and unmatched brackets; path has no
+    // whitespace (standard cmark rule without angle-bracket wrapping).
+    // Captures: (1) "![...]", (2) path, (3) optional " \"title\""
     static const QRegularExpression imgRe(
-        QStringLiteral("<img([^>]*?)\\s+src=\"([^\"]+)\"([^>]*)>"));
+        QStringLiteral("(!\\[[^\\]\\n]*\\])\\(([^)\\s]+)((?:\\s+\"[^\"]*\")?)\\)"));
+
+    QString out = markdown;
     int offset = 0;
-    auto it = imgRe.globalMatch(out);
+    auto it = imgRe.globalMatch(markdown);
     while (it.hasNext()) {
         const auto m = it.next();
-        const QString pre = m.captured(1);
+        const QString altPart = m.captured(1);
         const QString src = m.captured(2);
-        const QString post = m.captured(3);
+        const QString titlePart = m.captured(3);
         const QString resolved = resolve(src);
         if (resolved == src) continue;
 
-        const QString replacement = QStringLiteral("<img%1 src=\"%2\"%3>")
-                                        .arg(pre, resolved, post);
+        const QString replacement = altPart + QLatin1Char('(') + resolved + titlePart + QLatin1Char(')');
         const int start = m.capturedStart() + offset;
         const int len = m.capturedLength();
         out.replace(start, len, replacement);
@@ -223,8 +233,14 @@ void PreviewPanel::updatePreview()
 
     // Replace variables before rendering markdown to HTML
     QString processedMarkdown = VariableManager::instance().processMarkdown(contentOnly);
+    // Rewrite ![alt](relative/path) AT THE MARKDOWN LEVEL before cmark
+    // renders. HTML post-processing was unreliable because the rendered
+    // HTML goes through a JS-escape + innerHTML assignment that mangled
+    // file:// URLs in edge cases. Rewriting the source markdown
+    // produces a ready-to-render absolute URL that survives every
+    // downstream step intact.
+    processedMarkdown = resolveRelativeImageUrlsInMarkdown(processedMarkdown);
     QString htmlBody = m_parser.renderHtml(processedMarkdown);
-    htmlBody = resolveRelativeImageUrls(htmlBody);
     
     // Escape for JavaScript string
     QString escaped = htmlBody;
