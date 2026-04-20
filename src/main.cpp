@@ -43,19 +43,22 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QDir>
+#include <QMutex>
 #include <QStandardPaths>
 
 // Custom message handler to log to file and console
 static QTextStream *logStream = nullptr;
 static QFile *logFile = nullptr;
+// QTextStream::operator<< and fprintf on shared FILE* are NOT thread-
+// safe. The handler is called from whichever thread emitted the
+// qDebug/qWarning, so background workers (LibrarianService,
+// KnowledgeBase embedding tasks, QtConcurrent runs) race the main
+// thread. This mutex serialises writes; a single lock covers both the
+// stderr mirror and the file stream.
+static QMutex logMutex;
 
 void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
-    // Also print to original console
-    fprintf(stderr, "%s\n", msg.toLocal8Bit().constData());
-    
-    if (!logStream) return;
-
     QString level;
     switch (type) {
         case QtDebugMsg:    level = QStringLiteral("DEBUG"); break;
@@ -64,15 +67,22 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
         case QtCriticalMsg: level = QStringLiteral("CRITICAL"); break;
         case QtFatalMsg:    level = QStringLiteral("FATAL"); break;
     }
-    
+
     QString formattedMessage = QStringLiteral("%1 [%2] %3 (%4:%5, %6)\n")
-        .arg(QDateTime::currentDateTime().toString(Qt::ISODate), 
-             level, 
+        .arg(QDateTime::currentDateTime().toString(Qt::ISODate),
+             level,
              msg,
-             context.file ? context.file : "unknown", 
-             QString::number(context.line), 
+             context.file ? context.file : "unknown",
+             QString::number(context.line),
              context.function ? context.function : "unknown");
 
+    QMutexLocker lock(&logMutex);
+
+    // Console mirror (inside the lock so stdout/stderr stay interleaved
+    // in a sane order across threads).
+    fprintf(stderr, "%s\n", msg.toLocal8Bit().constData());
+
+    if (!logStream) return;
     *logStream << formattedMessage;
     logStream->flush();
 }
