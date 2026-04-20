@@ -49,14 +49,13 @@ InlineAIInvoker::InlineAIInvoker(KTextEditor::View *view, QObject *parent)
 {
     Q_ASSERT(m_view);
 
-    // Ctrl+Shift+Return triggers an @-command on the current line.
+    // Ctrl+Shift+Space triggers an @-command on the current line.
     //
-    // Initially bound to plain Ctrl+Return, but Kate reserves that
-    // combination for its own action (inserts a newline in some
-    // contexts) and Qt's QAction-level ambiguity detection popped a
-    // "multiple actions bound" dialog. Ctrl+Shift+Return is unbound in
-    // Kate and matches Cursor/Copilot's "submit AI prompt" convention,
-    // so it's the safer default.
+    // History: tried Ctrl+Return (collides with Kate's newline action)
+    // and Ctrl+Shift+Return (collides with Kate's "Insert Newline
+    // Below Current Line"). Ctrl+Shift+Space is confirmed unbound in
+    // Kate's default keymap — easier to hit than Alt+Return and doesn't
+    // compete with any text-entry action.
     //
     // We register as a QAction on the view because plain QShortcut
     // inside a KTextEditor::View doesn't reliably fire — Kate's
@@ -64,19 +63,15 @@ InlineAIInvoker::InlineAIInvoker(KTextEditor::View *view, QObject *parent)
     // see it. QAction with Qt::WidgetWithChildrenShortcut context
     // goes through Qt's shortcut-override dispatch and fires
     // regardless of which Kate sub-widget has focus.
-    auto addAction = [this](Qt::Key keycode) {
-        auto *a = new QAction(this);
-        a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | keycode));
-        a->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        connect(a, &QAction::triggered, this, [this]() {
-            tryDispatchOnCurrentLine();
-        });
-        m_view->addAction(a);
-    };
-    // Main-row Return + numpad Enter — some keyboards report them
-    // differently. Bind both for robustness.
-    addAction(Qt::Key_Return);
-    addAction(Qt::Key_Enter);
+    auto *action = new QAction(this);
+    action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space));
+    action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(action, &QAction::triggered, this, [this]() {
+        RPGFORGE_DLOG("INLINE-AI") << "shortcut activated — trying current line";
+        tryDispatchOnCurrentLine();
+    });
+    m_view->addAction(action);
+    RPGFORGE_DLOG("INLINE-AI") << "Ctrl+Shift+Space bound on view" << m_view;
 
     registerDefaultCommands();
 

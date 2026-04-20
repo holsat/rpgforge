@@ -61,6 +61,12 @@ private:
     void setupStylesheetWatcher();
     QString wrapHtml(const QString &body) const;
     QString loadProjectStylesheets() const;
+    /// Rewrite <img src="..."> in rendered HTML so relative paths
+    /// resolve to absolute file:// URLs, trying the document's
+    /// directory first (CommonMark convention) and falling back to
+    /// the project root (matches how Word-imported / Scrivener docs
+    /// were written). Broken paths pass through unchanged.
+    QString resolveRelativeImageUrls(const QString &html) const;
 };
 
 #endif // PREVIEWPANEL_H

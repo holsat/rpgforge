@@ -137,6 +137,78 @@ void PreviewPanel::onLoadFinished(bool ok)
     }
 }
 
+QString PreviewPanel::resolveRelativeImageUrls(const QString &html) const
+{
+    // Rewrite every <img src="path"> so relative paths become absolute
+    // file:// URLs. The app's documents mix two conventions:
+    //   - Imported docs (Word importer, Scrivener) emit "./media/X.png"
+    //     assuming the base is the project root.
+    //   - Hand-authored / drag-dropped paths emit "../../media/X.png"
+    //     assuming the base is the document's directory.
+    //
+    // A single baseUrl can only accommodate one of these. Rather than
+    // forcing authors to pick, we try both: doc-dir first (matches the
+    // CommonMark spec), then project-root. Whichever resolves to a
+    // file that exists on disk wins.
+    //
+    // URLs with a scheme (http://, https://, file://) and absolute
+    // paths are left alone. Anchor-only refs never appear in <img>.
+    if (html.isEmpty()) return html;
+    if (!m_baseUrl.isLocalFile() && !ProjectManager::instance().isProjectOpen()) {
+        return html;   // no local context to resolve against
+    }
+
+    const QString docDir = m_baseUrl.toLocalFile();
+    const QString projectRoot = ProjectManager::instance().isProjectOpen()
+        ? ProjectManager::instance().projectPath()
+        : QString();
+
+    auto resolve = [&](const QString &src) -> QString {
+        if (src.isEmpty()) return src;
+        static const QRegularExpression scheme(QStringLiteral("^[a-zA-Z][a-zA-Z0-9+.-]*:"));
+        if (scheme.match(src).hasMatch()) return src;       // url
+        if (src.startsWith(QLatin1Char('/'))) return src;    // absolute path
+        if (src.startsWith(QLatin1Char('#'))) return src;    // anchor (not for <img>, but belt-and-braces)
+
+        auto tryBase = [&](const QString &base) -> QString {
+            if (base.isEmpty()) return QString();
+            const QString candidate = QDir(base).absoluteFilePath(src);
+            if (QFileInfo::exists(candidate)) {
+                return QUrl::fromLocalFile(candidate).toString();
+            }
+            return QString();
+        };
+
+        const QString fromDoc = tryBase(docDir);
+        if (!fromDoc.isEmpty()) return fromDoc;
+        const QString fromProject = tryBase(projectRoot);
+        if (!fromProject.isEmpty()) return fromProject;
+        return src;   // neither exists — leave as-is, broken image shows
+    };
+
+    QString out = html;
+    static const QRegularExpression imgRe(
+        QStringLiteral("<img([^>]*?)\\s+src=\"([^\"]+)\"([^>]*)>"));
+    int offset = 0;
+    auto it = imgRe.globalMatch(out);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const QString pre = m.captured(1);
+        const QString src = m.captured(2);
+        const QString post = m.captured(3);
+        const QString resolved = resolve(src);
+        if (resolved == src) continue;
+
+        const QString replacement = QStringLiteral("<img%1 src=\"%2\"%3>")
+                                        .arg(pre, resolved, post);
+        const int start = m.capturedStart() + offset;
+        const int len = m.capturedLength();
+        out.replace(start, len, replacement);
+        offset += replacement.length() - len;
+    }
+    return out;
+}
+
 void PreviewPanel::updatePreview()
 {
     if (m_needsFullReload || !m_isLoaded) {
@@ -152,6 +224,7 @@ void PreviewPanel::updatePreview()
     // Replace variables before rendering markdown to HTML
     QString processedMarkdown = VariableManager::instance().processMarkdown(contentOnly);
     QString htmlBody = m_parser.renderHtml(processedMarkdown);
+    htmlBody = resolveRelativeImageUrls(htmlBody);
     
     // Escape for JavaScript string
     QString escaped = htmlBody;
