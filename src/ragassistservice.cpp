@@ -646,11 +646,17 @@ void RagAssistService::dispatchGeneration(const RagAssistRequest &request,
         llm->sendRequest(llmReq);
     } else {
         // Non-streaming path: one callback at the end with the full
-        // text. LLMService::sendNonStreamingRequest returns result as a
-        // single QString to the supplied lambda.
-        llmService()->sendNonStreamingRequest(
+        // text and an (empty-on-success) error string. When the provider
+        // returns 429 / auth failure / etc. the detailed callback carries
+        // the real provider message so the UI can show "quota exceeded,
+        // retry in 3h13m" instead of a generic "Empty response from LLM".
+        llmService()->sendNonStreamingRequestDetailed(
             llmReq,
-            [callbacks, requestId](const QString &response) {
+            [callbacks, requestId](const QString &response, const QString &error) {
+                if (!error.isEmpty()) {
+                    if (callbacks.onError) callbacks.onError(requestId, error);
+                    return;
+                }
                 if (response.isEmpty()) {
                     if (callbacks.onError) {
                         callbacks.onError(requestId, i18n("Empty response from LLM"));

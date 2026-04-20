@@ -99,8 +99,23 @@ public:
 
     /**
      * @brief Sends a request to the LLM without interrupting the active stream, useful for background tasks.
+     *
+     * Callback receives the raw response body on success, or an empty string
+     * on any failure. Consumers that need to distinguish "empty response"
+     * from "request failed with HTTP 429/401/..." should use the detailed
+     * overload below.
      */
     virtual void sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback);
+
+    /**
+     * @brief Detailed variant of sendNonStreamingRequest. The callback receives
+     * both the response body (empty on failure) and an error message (empty
+     * on success). Lets callers show the real provider error — e.g. Google's
+     * "You exceeded your current quota (retry in 3h13m)" — instead of a
+     * generic placeholder like "Empty response from LLM".
+     */
+    using NonStreamCallback = std::function<void(const QString &response, const QString &error)>;
+    virtual void sendNonStreamingRequestDetailed(const LLMRequest &request, NonStreamCallback callback);
 
     /**
      * @brief Pings the Anthropic API to verify connectivity.
@@ -136,6 +151,33 @@ public:
      * @brief Returns the settings key prefix for the given provider (e.g. "llm/openai").
      */
     static QString providerSettingsKey(LLMProvider provider);
+
+    /**
+     * @brief Returns true if the given {provider, model} pair is currently in
+     * a cooldown window (recorded from a prior 429 with retry-after). If @p
+     * expiresAtMsOut is non-null, the wall-clock millisecond epoch when the
+     * cooldown ends is written there; if @p reasonOut is non-null, a short
+     * human-readable reason is written there.
+     *
+     * Expired cooldowns are lazily cleaned up on check.
+     */
+    bool isCooledDown(LLMProvider provider, const QString &model,
+                      qint64 *expiresAtMsOut = nullptr,
+                      QString *reasonOut = nullptr) const;
+
+    /**
+     * @brief Records a cooldown for the given {provider, model} pair. Further
+     * requests to that pair within the window will short-circuit with an
+     * errorOccurred() and an empty callback result (no network traffic).
+     */
+    void recordCooldown(LLMProvider provider, const QString &model,
+                        int seconds, const QString &reason);
+
+    /**
+     * @brief Clears any active cooldown for the given pair (used by tests and
+     * by manual retry after the user confirms quota restoration).
+     */
+    void clearCooldown(LLMProvider provider, const QString &model);
 
 Q_SIGNALS:
     /// Emitted when a new streaming request begins. requestId is a UUID that
@@ -179,8 +221,9 @@ private:
     // Validates the model against the session-cached provider model list,
     // fetching it on first use. Dispatches the request if valid, otherwise
     // emits modelNotFound() and stores the request for retryWithModel().
+    // Passing a null nonStreamCallback means streaming mode.
     void validateModelThenDispatch(const LLMRequest &request,
-                                   std::function<void(const QString&)> nonStreamCallback = nullptr);
+                                   NonStreamCallback nonStreamCallback = nullptr);
 
     // Builds and POSTs the request with the already-resolved model.
     // nonStreamCallback == nullptr → streaming path; non-null → non-streaming path.
@@ -188,7 +231,7 @@ private:
     // emission so the chat UI doesn't get spammed with fresh "AI is thinking"
     // placeholders on every network retry. Also skips model revalidation.
     void dispatchRequest(const LLMRequest &request, const QString &model,
-                         std::function<void(const QString&)> nonStreamCallback,
+                         NonStreamCallback nonStreamCallback,
                          bool isRetry = false);
 
     QNetworkAccessManager *m_networkManager;
@@ -213,7 +256,7 @@ private:
     // Pending request held while the user selects a replacement model.
     struct PendingRequest {
         LLMRequest request;
-        std::function<void(const QString&)> nonStreamCallback;
+        NonStreamCallback nonStreamCallback;
     };
     bool m_hasPendingRequest = false;
     PendingRequest m_pendingRequest;
@@ -222,6 +265,28 @@ private:
     // opens on every request. Invalidated when setApiKey() is called.
     mutable QHash<LLMProvider, QString> m_apiKeyCache;
     bool m_isShowingModelDialog = false;
+
+    // Per-{provider, model} cooldown tracker. When a provider returns 429
+    // with a retry-after window, the pair is blocked until wall-clock time
+    // reaches the recorded expiry. Subsequent requests during the window
+    // short-circuit with errorOccurred() and an empty callback result so
+    // we don't keep hammering a quota-exhausted endpoint.
+    struct CooldownEntry {
+        qint64 expiresAtMs = 0;
+        QString reason;
+    };
+    static QString cooldownKey(LLMProvider provider, const QString &model);
+    mutable QHash<QString, CooldownEntry> m_cooldowns;
+
+    // Parses Google's protobuf-duration strings ("11617s", "3h13m37.37s",
+    // "17m0.5s") into seconds. Returns 0 on parse failure.
+    static int parseRetryDelaySeconds(const QString &delayStr);
+
+    // Scans a raw provider error body for a retry-after hint. Understands
+    // Google's error.details[].RetryInfo.retryDelay shape and, as a
+    // fallback, "Please retry in ..." substrings in error.message.
+    // Returns 0 if no hint is present.
+    static int extractRetryDelaySecondsFromErrorBody(const QByteArray &body);
 };
 
 #endif // LLMSERVICE_H

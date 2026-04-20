@@ -175,12 +175,17 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     req.stream = false;
 
     QPointer<AnalyzerService> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req, [weakThis, filePath](const QString &response) {
+    LLMService::instance().sendNonStreamingRequestDetailed(req, [weakThis, filePath](const QString &response, const QString &error) {
         if (!weakThis) return;
-        
+
         qDebug() << "Analyzer AI: Received response from LLM for" << filePath << "(length:" << response.length() << ")";
         weakThis->m_activeAnalysisFile.clear();
-        
+
+        if (!error.isEmpty()) {
+            qWarning() << "Analyzer AI: LLM error for" << filePath << ":" << error;
+            Q_EMIT weakThis->analysisFailed(filePath, error);
+            return;
+        }
         if (response.isEmpty()) {
             qWarning() << "Analyzer AI: Received EMPTY response from LLM.";
             Q_EMIT weakThis->analysisFailed(filePath, i18n("Empty response from LLM."));

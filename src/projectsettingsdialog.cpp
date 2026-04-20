@@ -283,17 +283,28 @@ void ProjectSettingsDialog::enhanceCurrentPrompt()
     m_lkEnhanceBtn->setEnabled(false);
     m_lkEnhanceBtn->setText(i18n("Enhancing..."));
 
+    // Use the detailed callback: response is the enhanced prompt on success;
+    // error is populated with the provider's actual error (quota, auth, etc.)
+    // when the request fails, letting us surface a useful dialog instead of
+    // the generic "empty response" placeholder.
     QPointer<ProjectSettingsDialog> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req,
-        [weakThis](const QString &response) {
+    LLMService::instance().sendNonStreamingRequestDetailed(req,
+        [weakThis](const QString &response, const QString &error) {
             if (!weakThis) return;
             weakThis->m_lkEnhanceBtn->setEnabled(true);
             weakThis->m_lkEnhanceBtn->setText(i18n("Enhance Prompt"));
+
+            if (!error.isEmpty()) {
+                QMessageBox::warning(weakThis, i18n("Enhance Prompt failed"),
+                    i18n("The LLM provider returned an error:\n\n%1", error));
+                return;
+            }
             const QString cleaned = response.trimmed();
             if (cleaned.isEmpty()) {
                 QMessageBox::warning(weakThis, i18n("Enhance Prompt"),
-                    i18n("The LLM returned an empty response. Check your API "
-                         "key and configured model, then try again."));
+                    i18n("The LLM returned an empty response. Check that "
+                         "your API key, provider, and model are configured "
+                         "correctly, then try again."));
                 return;
             }
             weakThis->m_lkPromptEdit->setPlainText(cleaned);

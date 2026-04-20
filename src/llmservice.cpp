@@ -31,6 +31,9 @@
 #include <QFile>
 #include <QTextStream>
 #include <QStandardPaths>
+#include <QDateTime>
+#include <QRegularExpression>
+#include <cmath>
 
 #ifdef QT_DEBUG
 static void logRequest(const QUrl &url, const QJsonObject &body, const QNetworkRequest &netRequest) {
@@ -174,6 +177,102 @@ QString LLMService::providerSettingsKey(LLMProvider p)
 }
 
 // ---------------------------------------------------------------------------
+// Cooldown tracker: records per-{provider, model} retry-after windows from
+// 429 responses and lets dispatchers short-circuit before hitting the network.
+// ---------------------------------------------------------------------------
+QString LLMService::cooldownKey(LLMProvider provider, const QString &model)
+{
+    return LLMService::providerSettingsKey(provider) + QStringLiteral("|") + model;
+}
+
+bool LLMService::isCooledDown(LLMProvider provider, const QString &model,
+                              qint64 *expiresAtMsOut, QString *reasonOut) const
+{
+    const QString key = cooldownKey(provider, model);
+    auto it = m_cooldowns.constFind(key);
+    if (it == m_cooldowns.cend()) return false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (it.value().expiresAtMs <= now) {
+        // Lazily drop expired entries so the hash doesn't grow unbounded.
+        m_cooldowns.remove(key);
+        return false;
+    }
+    if (expiresAtMsOut) *expiresAtMsOut = it.value().expiresAtMs;
+    if (reasonOut)      *reasonOut      = it.value().reason;
+    return true;
+}
+
+void LLMService::recordCooldown(LLMProvider provider, const QString &model,
+                                int seconds, const QString &reason)
+{
+    if (seconds <= 0) return;
+    CooldownEntry entry;
+    entry.expiresAtMs = QDateTime::currentMSecsSinceEpoch()
+                        + static_cast<qint64>(seconds) * 1000;
+    entry.reason = reason;
+    m_cooldowns.insert(cooldownKey(provider, model), entry);
+    qWarning().noquote()
+        << "LLM cooldown recorded:" << providerName(provider) << "/" << model
+        << "for" << seconds << "seconds:" << reason;
+}
+
+void LLMService::clearCooldown(LLMProvider provider, const QString &model)
+{
+    m_cooldowns.remove(cooldownKey(provider, model));
+}
+
+// Parse protobuf-duration-ish strings: "11617s", "3h13m37.37s", "17m0.5s",
+// "30.2s". Returns 0 on no match so callers can decide a default window.
+int LLMService::parseRetryDelaySeconds(const QString &delayStr)
+{
+    static const QRegularExpression re(
+        QStringLiteral(R"(^\s*(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?\s*$)"));
+    const QRegularExpressionMatch m = re.match(delayStr);
+    if (!m.hasMatch()) return 0;
+    const int hours   = m.captured(1).toInt();
+    const int minutes = m.captured(2).toInt();
+    const double seconds = m.captured(3).toDouble();
+    const int total = hours * 3600 + minutes * 60
+                      + static_cast<int>(std::ceil(seconds));
+    return total;
+}
+
+// Google Cloud 429 responses carry a retryDelay either inline in
+// error.details[].retryDelay (when the detail @type ends with "RetryInfo")
+// or embedded in error.message as "Please retry in <dur>.". We parse both
+// so cooldowns also apply to providers that only include the human text.
+int LLMService::extractRetryDelaySecondsFromErrorBody(const QByteArray &body)
+{
+    if (body.isEmpty()) return 0;
+    const QJsonDocument doc = QJsonDocument::fromJson(body);
+    if (!doc.isObject()) return 0;
+    const QJsonObject err = doc.object().value(QStringLiteral("error")).toObject();
+
+    // Preferred: structured details[] entry of type google.rpc.RetryInfo.
+    const QJsonArray details = err.value(QStringLiteral("details")).toArray();
+    for (const QJsonValue &v : details) {
+        const QJsonObject o = v.toObject();
+        const QString type = o.value(QStringLiteral("@type")).toString();
+        if (!type.endsWith(QStringLiteral("RetryInfo"))) continue;
+        const QString delay = o.value(QStringLiteral("retryDelay")).toString();
+        const int s = parseRetryDelaySeconds(delay);
+        if (s > 0) return s;
+    }
+
+    // Fallback: scrape the human-readable message.
+    const QString msg = err.value(QStringLiteral("message")).toString();
+    static const QRegularExpression msgRe(
+        QStringLiteral(R"(retry in\s+([0-9hms.]+))"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = msgRe.match(msg);
+    if (m.hasMatch()) {
+        const int s = parseRetryDelaySeconds(m.captured(1));
+        if (s > 0) return s;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Resolve the model: prefer request.model, else read settings (no fallback).
 // ---------------------------------------------------------------------------
 QString LLMService::resolvedModel(const LLMRequest &request) const
@@ -197,18 +296,53 @@ void LLMService::sendRequest(const LLMRequest &request)
 // request if the model is absent from the provider's current model list.
 // ---------------------------------------------------------------------------
 void LLMService::validateModelThenDispatch(const LLMRequest &request,
-                                           std::function<void(const QString&)> nonStreamCallback)
+                                           NonStreamCallback nonStreamCallback)
 {
     const QString model = resolvedModel(request);
     qDebug() << "LLM Service: Validating model" << model << "for provider" << static_cast<int>(request.provider) << "Service:" << request.serviceName;
     if (model.isEmpty()) {
+        const QString err = i18n("No model configured. Open Settings and enter a model name for this provider.");
         if (nonStreamCallback) {
             qWarning() << "LLM: no model configured — aborting request";
-            nonStreamCallback(QString());
+            nonStreamCallback(QString(), err);
         } else {
-            handleError(i18n("No model configured. Open Settings and enter a model name for this provider."));
+            handleError(err);
         }
         return;
+    }
+
+    // Short-circuit: if this {provider, model} pair is in a recorded cooldown
+    // window from a prior 429, don't hit the network at all. Emit the stored
+    // reason and invoke the non-streaming callback with an empty response +
+    // error string so the consumer's error path fires just as if the request
+    // failed.
+    {
+        qint64 expiresAt = 0;
+        QString reason;
+        if (isCooledDown(request.provider, model, &expiresAt, &reason)) {
+            const qint64 remainingMs = expiresAt - QDateTime::currentMSecsSinceEpoch();
+            const int remainingSec = static_cast<int>(qMax<qint64>(1, (remainingMs + 999) / 1000));
+            const QString when = QDateTime::fromMSecsSinceEpoch(expiresAt)
+                                    .toString(QStringLiteral("HH:mm:ss"));
+            const QString providerLabel = request.serviceName.isEmpty()
+                ? providerName(request.provider)
+                : request.serviceName;
+            const QString msg = i18n(
+                "%1: model '%2' is cooling down (retry after %3, in %4s). Reason: %5",
+                providerLabel, model, when, remainingSec,
+                reason.isEmpty() ? i18n("rate-limited by provider") : reason);
+            qWarning().noquote() << "LLM cooldown short-circuit:" << msg;
+            if (nonStreamCallback) {
+                QPointer<LLMService> weakThis(this);
+                QMetaObject::invokeMethod(this, [weakThis, msg, nonStreamCallback]() {
+                    if (weakThis) Q_EMIT weakThis->errorOccurred(msg);
+                    nonStreamCallback(QString(), msg);
+                }, Qt::QueuedConnection);
+            } else {
+                handleError(msg);
+            }
+            return;
+        }
     }
 
     const LLMProvider provider = request.provider;
@@ -277,7 +411,7 @@ void LLMService::retryWithModel(const QString &newModel)
 // Build and POST the request. nonStreamCallback==nullptr → streaming path.
 // ---------------------------------------------------------------------------
 void LLMService::dispatchRequest(const LLMRequest &request, const QString &model,
-                                  std::function<void(const QString&)> nonStreamCallback,
+                                  NonStreamCallback nonStreamCallback,
                                   bool isRetry)
 {
     const bool streaming = (nonStreamCallback == nullptr);
@@ -344,7 +478,7 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         }
         if (bareModel.isEmpty()) {
             qWarning() << "LLM Gemini: no model configured — aborting";
-            if (nonStreamCallback) nonStreamCallback(QString());
+            if (nonStreamCallback) nonStreamCallback(QString(), i18n("Gemini: no model configured"));
             return;
         }
 
@@ -500,8 +634,9 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         connect(reply, &QNetworkReply::finished, this, &LLMService::handleFinished);
     } else {
         QPointer<LLMService> weakThis(this);
-        connect(reply, &QNetworkReply::finished, this, [weakThis, reply, nonStreamCallback, provider = request.provider]() {
+        connect(reply, &QNetworkReply::finished, this, [weakThis, reply, nonStreamCallback, provider = request.provider, model = model, serviceName = request.serviceName]() {
             QString result;
+            QString errorMessage;
             if (reply->error() == QNetworkReply::NoError) {
                 QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
                 if (!doc.isNull() && doc.isObject()) {
@@ -535,13 +670,66 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
                     }
                 }
             } else {
-                qWarning() << "LLM Non-Streaming Error:" << reply->errorString() << reply->readAll();
+                // Build a user-facing error message with HTTP status + provider's
+                // error body (truncated) so callers like the Enhance Prompt dialog
+                // can show a meaningful failure reason instead of "empty response".
+                const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const QByteArray body = reply->readAll();
+                QString bodyMsg;
+                // Try to extract a structured error message from common provider
+                // shapes (OpenAI: error.message, Gemini: error.message, Anthropic:
+                // error.message). Fall back to raw body truncated to 500 chars.
+                QJsonDocument edoc = QJsonDocument::fromJson(body);
+                if (edoc.isObject()) {
+                    QJsonObject eobj = edoc.object().value(QStringLiteral("error")).toObject();
+                    bodyMsg = eobj.value(QStringLiteral("message")).toString();
+                }
+                if (bodyMsg.isEmpty()) {
+                    bodyMsg = QString::fromUtf8(body).left(500);
+                }
+                const QString providerLabel = serviceName.isEmpty()
+                    ? QStringLiteral("LLM")
+                    : serviceName;
+                errorMessage = QStringLiteral("%1 request failed")
+                    .arg(providerLabel);
+                if (httpStatus > 0) {
+                    errorMessage += QStringLiteral(" (HTTP %1)").arg(httpStatus);
+                }
+                errorMessage += QStringLiteral(": %1").arg(reply->errorString());
+                if (!bodyMsg.isEmpty()) {
+                    errorMessage += QStringLiteral(" — %1").arg(bodyMsg);
+                }
+                qWarning() << "LLM Non-Streaming Error:" << errorMessage;
+
+                // On HTTP 429, record a cooldown for {provider, model} so
+                // subsequent requests within the retry window short-circuit
+                // instead of hammering the quota-exhausted endpoint.
+                if (weakThis && httpStatus == 429 && !model.isEmpty()) {
+                    int seconds = extractRetryDelaySecondsFromErrorBody(body);
+                    if (seconds <= 0) {
+                        // Provider didn't give us a retry hint — fall back to a
+                        // conservative 60s window so we don't spam but also
+                        // recover quickly for transient per-minute limits.
+                        seconds = 60;
+                    }
+                    const QString reasonText = bodyMsg.isEmpty()
+                        ? QStringLiteral("HTTP 429 (rate-limited)")
+                        : bodyMsg.left(240);
+                    weakThis->recordCooldown(provider, model, seconds, reasonText);
+                }
+
+                if (weakThis) {
+                    QMetaObject::invokeMethod(weakThis.data(), [weakThis, errorMessage]() {
+                        if (weakThis)
+                            Q_EMIT weakThis->errorOccurred(errorMessage);
+                    }, Qt::QueuedConnection);
+                }
             }
-            
+
             if (nonStreamCallback) {
                 if (weakThis) {
-                    QMetaObject::invokeMethod(weakThis.data(), [nonStreamCallback, result]() {
-                        nonStreamCallback(result);
+                    QMetaObject::invokeMethod(weakThis.data(), [nonStreamCallback, result, errorMessage]() {
+                        nonStreamCallback(result, errorMessage);
                     }, Qt::QueuedConnection);
                 } else {
                     // LLMService was destroyed, but we can still run the callback if it doesn't depend on LLMService state.
@@ -599,6 +787,23 @@ void LLMService::handleFinished()
         // identically on every retry and only serve to spam the UI. 5xx
         // and connection errors still retry with the existing 3-attempt cap.
         const bool isClientError = (httpStatus >= 400 && httpStatus < 500);
+
+        // On HTTP 429 record a cooldown for the active {provider, model}
+        // before handing off to the error path; this blocks subsequent
+        // requests in the retry-after window (see validateModelThenDispatch).
+        if (httpStatus == 429 && !m_activeRequest.model.isEmpty()) {
+            int seconds = extractRetryDelaySecondsFromErrorBody(serverResponse);
+            if (seconds <= 0) seconds = 60;
+            // Prefer the provider's structured error.message as the reason.
+            QString reason;
+            const QJsonDocument edoc = QJsonDocument::fromJson(serverResponse);
+            if (edoc.isObject()) {
+                reason = edoc.object().value(QStringLiteral("error")).toObject()
+                             .value(QStringLiteral("message")).toString().left(240);
+            }
+            if (reason.isEmpty()) reason = QStringLiteral("HTTP 429 (rate-limited)");
+            recordCooldown(m_activeRequest.provider, m_activeRequest.model, seconds, reason);
+        }
 
         if (!isClientError && m_retryCount < 3) {
             m_retryCount++;
@@ -908,7 +1113,18 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
 
 void LLMService::sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback)
 {
-    validateModelThenDispatch(request, callback);
+    // Legacy 1-arg callback: adapt to the detailed 2-arg form by dropping the
+    // error string. New code should prefer sendNonStreamingRequestDetailed()
+    // so it can distinguish "empty response" from "provider returned 429".
+    NonStreamCallback adapter = [callback = std::move(callback)](const QString &response, const QString &) {
+        if (callback) callback(response);
+    };
+    validateModelThenDispatch(request, std::move(adapter));
+}
+
+void LLMService::sendNonStreamingRequestDetailed(const LLMRequest &request, NonStreamCallback callback)
+{
+    validateModelThenDispatch(request, std::move(callback));
 }
 
 void LLMService::pingAnthropic(std::function<void(bool, const QString&)> callback)
@@ -928,9 +1144,11 @@ void LLMService::pingAnthropic(std::function<void(bool, const QString&)> callbac
         req.messages.append({QStringLiteral("user"), QStringLiteral("ping")});
 
         // Bypass the cache-validation step — we already know the model is live.
-        dispatchRequest(req, req.model, [callback](const QString &result) {
+        dispatchRequest(req, req.model, [callback](const QString &result, const QString &error) {
             if (!result.isEmpty())
                 callback(true, QString());
+            else if (!error.isEmpty())
+                callback(false, error);
             else
                 callback(false, i18n("API test failed. Check your key and logs."));
         });
