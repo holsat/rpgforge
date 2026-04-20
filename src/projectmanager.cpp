@@ -20,6 +20,7 @@
 #include "projectkeys.h"
 #include "projecttreemodel.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
@@ -1458,10 +1459,117 @@ bool ProjectManager::moveItem(const QString &draggedPath,
     // the on-disk location. Skipped when the parent didn't change.
     if (!sameParent) {
         m_treeModel->updatePathsAfterMoveOrRename(dragged, oldPathSaved, newRelPath);
+
+        // Rewrite relative markdown links inside the moved file (or
+        // every .md/.markdown file under the moved folder) so links
+        // to media/, other chapters, etc. keep resolving against the
+        // new location. Without this, moving a chapter into a
+        // subdirectory breaks every ![](image.png) inside it.
+        rewriteRelativeLinksAfterMove(oldFi.absoluteFilePath(), newAbs);
     }
 
     maybeSaveAfterMutation();
     return true;
+}
+
+void ProjectManager::rewriteRelativeLinksAfterMove(const QString &oldAbsPath,
+                                                     const QString &newAbsPath)
+{
+    // Collect every markdown file in the moved subtree (just the single
+    // file when moving a .md file; all nested .md files when moving a
+    // folder). The QDir::absolutePath() values we compare are "the
+    // directory the file lived in BEFORE the move" vs "the directory
+    // the file lives in NOW" — only those paths need updating.
+    struct FileMove { QString oldDir; QString newAbs; };
+    QList<FileMove> targets;
+
+    const QFileInfo newInfo(newAbsPath);
+    if (newInfo.isFile()) {
+        const QString suffix = newInfo.suffix().toLower();
+        if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+            targets.append({QFileInfo(oldAbsPath).absolutePath(), newAbsPath});
+        }
+    } else if (newInfo.isDir()) {
+        QDirIterator it(newAbsPath, {QStringLiteral("*.md"), QStringLiteral("*.markdown")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString newFileAbs = it.next();
+            const QString relUnderMove = QDir(newAbsPath).relativeFilePath(newFileAbs);
+            const QString oldFileDir = QFileInfo(QDir(oldAbsPath).absoluteFilePath(relUnderMove))
+                                        .absolutePath();
+            targets.append({oldFileDir, newFileAbs});
+        }
+    }
+
+    // Link-rewrite regex. Catches standard CommonMark image/link
+    // syntax: ![alt](path) and [text](path). URLs with a scheme
+    // (http://, https://, file://) or absolute paths pass through
+    // unchanged — only relative paths need repointing.
+    static const QRegularExpression linkRe(
+        QStringLiteral("(!?\\[[^\\]]*\\])\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)"));
+
+    int totalFiles = 0;
+    int totalRewrites = 0;
+    for (const FileMove &fm : targets) {
+        QFile f(fm.newAbs);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+        const QByteArray originalBytes = f.readAll();
+        f.close();
+        const QString originalText = QString::fromUtf8(originalBytes);
+
+        QString rewritten = originalText;
+        int offset = 0;
+        int rewritesInFile = 0;
+        auto it = linkRe.globalMatch(originalText);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const QString linkPrefix = m.captured(1);
+            const QString target = m.captured(2);
+
+            // Skip absolute paths, URLs, anchors, and empty targets.
+            if (target.isEmpty()) continue;
+            if (target.startsWith(QLatin1Char('#'))) continue;
+            if (target.startsWith(QLatin1Char('/'))) continue;
+            static const QRegularExpression scheme(QStringLiteral("^[a-zA-Z][a-zA-Z0-9+.-]*:"));
+            if (scheme.match(target).hasMatch()) continue;
+
+            // Resolve the link against the file's OLD directory to get
+            // the absolute target, then recompute the path relative to
+            // the file's NEW directory.
+            const QString targetAbs = QDir(fm.oldDir).absoluteFilePath(target);
+            const QString newDir = QFileInfo(fm.newAbs).absolutePath();
+            QString newRel = QDir(newDir).relativeFilePath(targetAbs);
+            // Prefer forward slashes in the markdown source even on
+            // systems where QDir::separator() is backslash.
+            newRel.replace(QLatin1Char('\\'), QLatin1Char('/'));
+
+            if (newRel == target) continue;   // already good
+
+            const QString replacement = linkPrefix + QLatin1Char('(') + newRel + QLatin1Char(')');
+            const int matchStart = m.capturedStart() + offset;
+            const int matchLen = m.capturedLength();
+            rewritten.replace(matchStart, matchLen, replacement);
+            offset += replacement.length() - matchLen;
+            ++rewritesInFile;
+        }
+
+        if (rewritesInFile > 0) {
+            QFile out(fm.newAbs);
+            if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                out.write(rewritten.toUtf8());
+                out.close();
+                totalRewrites += rewritesInFile;
+                ++totalFiles;
+            }
+        }
+    }
+
+    if (totalRewrites > 0) {
+        qInfo().noquote() << "ProjectManager: rewrote" << totalRewrites
+                           << "relative link(s) across" << totalFiles
+                           << "markdown file(s) after move" << oldAbsPath
+                           << "->" << newAbsPath;
+    }
 }
 
 void ProjectManager::validateTree()
