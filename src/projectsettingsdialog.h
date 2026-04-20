@@ -21,6 +21,8 @@
 
 #include <QDialog>
 
+class QPushButton;
+
 class QLineEdit;
 class QComboBox;
 class QDoubleSpinBox;
@@ -37,6 +39,12 @@ public:
     ~ProjectSettingsDialog() override;
 
     void save();
+
+private Q_SLOTS:
+    /// Rewrite the LoreKeeper extraction prompt via the configured LLM
+    /// following prompt-engineering best practices. Invoked by the
+    /// "Enhance Prompt" button on the LoreKeeper tab.
+    void enhanceCurrentPrompt();
 
 private:
     void setupUi();
@@ -55,6 +63,7 @@ private:
     // LoreKeeper
     QTableWidget *m_lkTable = nullptr;
     QPlainTextEdit *m_lkPromptEdit = nullptr;
+    QPushButton *m_lkEnhanceBtn = nullptr;
 };
 
 #endif // PROJECTSETTINGSDIALOG_H

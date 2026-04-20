@@ -65,6 +65,10 @@ private Q_SLOTS:
     void renameItem();
     void renameFile();
     void editMetadata();
+    /// Trigger a single-file rescan: LoreKeeper entity discovery,
+    /// Librarian variable extraction, and synopsis refresh. Called
+    /// from the project tree's context menu on .md/.markdown files.
+    void rescanSingleDocument(const QString &relativePath);
     void syncProject();
     void onRepoCreated(const QString &cloneUrl);
     void createExploration();

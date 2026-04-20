@@ -28,6 +28,9 @@
 #include "historydialog.h"
 #include "markdownparser.h"
 #include "synopsisservice.h"
+#include "lorekeeperservice.h"
+#include "librarianservice.h"
+#include "mainwindow.h"
 #include <QComboBox>
 #include <QLabel>
 
@@ -736,12 +739,58 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
             }
         }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);
+
+        // "Rescan Document" — for files only, and only .md/.markdown
+        // where it makes sense. Runs the same heuristic + LLM-discovery
+        // pass the Variables-panel "Re-index" button triggers, but
+        // scoped to this single document. Useful after editing a file
+        // to update its extracted variables without waiting for the
+        // full-project rescan timer.
+        if (isFile) {
+            const QString suffix = QFileInfo(itemPath).suffix().toLower();
+            if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("view-refresh")),
+                               i18n("Rescan Document"), this, [this, itemPath]() {
+                    rescanSingleDocument(itemPath);
+                });
+            }
+        }
+
         if (!isAuthoritative) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
         }
     }
 
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));
+}
+
+void ProjectTreePanel::rescanSingleDocument(const QString &relativePath)
+{
+    if (relativePath.isEmpty() || !ProjectManager::instance().isProjectOpen()) return;
+
+    const QString abs = QDir(ProjectManager::instance().projectPath())
+                           .absoluteFilePath(relativePath);
+
+    // Two-pass rescan:
+    //  1. LoreKeeperService::indexDocument — triggers LLM entity discovery
+    //     + dossier regeneration for whatever entities the file mentions.
+    //  2. LibrarianService::scanFile — re-runs the table/list variable
+    //     extractor on this file, replacing the prior extracted entries.
+    LoreKeeperService::instance().indexDocument(abs);
+
+    // LibrarianService's scanFile expects the absolute path (matches
+    // its scanAll output and its fs watcher behaviour).
+    if (auto *window = qobject_cast<MainWindow*>(this->window())) {
+        if (auto *lib = window->librarianService()) {
+            lib->scanFile(abs);
+        }
+    }
+
+    // Also request a synopsis refresh for the file. SynopsisService
+    // expects a project-relative path.
+    SynopsisService::instance().requestUpdate(relativePath, /*force=*/true);
+
+    qInfo().noquote() << "ProjectTreePanel: triggered rescan of" << abs;
 }
 
 void ProjectTreePanel::addFolder()

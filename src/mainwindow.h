@@ -169,6 +169,12 @@ public:
     Sidebar* sidebar() const { return m_sidebar; }
 
     /**
+     * @brief Returns the application's LibrarianService (variable extractor)
+     * instance. Used by the project-tree panel for per-document rescan.
+     */
+    LibrarianService* librarianService() const { return m_librarianService; }
+
+    /**
      * @brief Saves every open KTextEditor document that has an associated URL.
      *
      * Intended for "Save All" — also used by the DBus adaptor. Returns true if
