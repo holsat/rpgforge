@@ -30,6 +30,7 @@
 #include <KLocalizedString>
 
 #include <QApplication>
+#include <QThreadPool>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
 #include <QDebug>
@@ -41,6 +42,8 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QDir>
+#include <QStandardPaths>
 
 // Custom message handler to log to file and console
 static QTextStream *logStream = nullptr;
@@ -79,18 +82,37 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    // Setup logging
-    QString logFileName = QStringLiteral("rpgforge_debug.log");
+    // Setup logging. Historically this wrote to the current working
+    // directory, which fails silently when the app is launched from a
+    // desktop launcher (cwd=/) or any non-writable directory. Now we
+    // resolve an absolute path in user data, create the directory, and
+    // print the final path to stderr so it's always discoverable.
+    const QString logDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(logDir);
+    const QString logFileName = QDir(logDir).absoluteFilePath(QStringLiteral("rpgforge_debug.log"));
+
     logFile = new QFile(logFileName);
     if (logFile->exists()) {
-        QString backupName = QStringLiteral("%1.%2.bak").arg(logFileName, QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")));
+        const QString backupName = QStringLiteral("%1.%2.bak").arg(
+            logFileName,
+            QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")));
         logFile->rename(backupName);
+        logFile->setFileName(logFileName);
     }
     if (logFile->open(QIODevice::WriteOnly | QIODevice::Append)) {
         logStream = new QTextStream(logFile);
         qInstallMessageHandler(messageHandler);
+        // First line after installing the handler so it's captured in-file.
+        qInfo().noquote() << "RPG Forge log initialised at" << logFileName;
+        // And a stderr copy that's visible even if the user never opens
+        // the file: one line, on every startup, plus a startup timestamp.
+        fprintf(stderr, "RPG Forge: logging to %s\n", logFileName.toLocal8Bit().constData());
     } else {
-        qWarning() << "Could not open log file for writing:" << logFileName;
+        fprintf(stderr, "RPG Forge: COULD NOT OPEN LOG FILE %s — error: %s\n",
+                logFileName.toLocal8Bit().constData(),
+                logFile->errorString().toLocal8Bit().constData());
+        delete logFile;
+        logFile = nullptr;
     }
 
     // Disable and clear WebEngine cache for debugging and safety
@@ -158,5 +180,18 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    return app.exec();
+    const int rc = app.exec();
+
+    // Shutdown coordination: drain the thread pool so any in-flight DB
+    // operations (LibrarianService::processQueue, KnowledgeBase worker
+    // tasks, ProjectManager::triggerWordCountUpdate, etc.) complete
+    // while qApp is still alive. Without this, worker threads race the
+    // QCoreApplication destruction and emit "QSqlDatabase requires a
+    // QCoreApplication" warnings (or crash) when they next touch the DB.
+    // waitForDone returns once the pool is idle; the optional timeout
+    // caps wait in case a task is genuinely stuck.
+    QThreadPool::globalInstance()->clear();
+    QThreadPool::globalInstance()->waitForDone(5000);
+
+    return rc;
 }

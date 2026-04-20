@@ -17,6 +17,7 @@
 */
 
 #include "chatpanel.h"
+#include "ragassistservice.h"
 #include "markdownparser.h"
 #include "mainwindow.h"
 #include <KTextEditor/Document>
@@ -34,6 +35,7 @@
 #include <QJsonObject>
 #include <QTimer>
 #include <QKeyEvent>
+#include <QPointer>
 #include <QWebChannel>
 
 ChatBridge::ChatBridge(ChatPanel *panel) : QObject(panel), m_panel(panel) {}
@@ -54,16 +56,12 @@ ChatPanel::ChatPanel(QWidget *parent)
     channel->registerObject(QStringLiteral("chatBridge"), m_bridge);
     m_webView->page()->setWebChannel(channel);
 
-    connect(&LLMService::instance(), &LLMService::requestStarted, this, [this](const QString &requestId) {
-        m_currentStreamId = requestId;
-        m_progressBar->show();
-        m_sendBtn->setEnabled(false);
-        m_currentAiResponse.clear();
-        appendMessageToView(QStringLiteral("assistant"), i18n("AI is thinking..."), QString());
-    });
-
-    connect(&LLMService::instance(), &LLMService::responseChunk, this, &ChatPanel::onResponseChunk);
-    connect(&LLMService::instance(), &LLMService::responseFinished, this, &ChatPanel::onResponseFinished);
+    // Streaming is delivered via RagAssistCallbacks per-request (see
+    // askAI()), so we no longer subscribe to LLMService's global signals.
+    // Error signals from LLMService we still want — background operations
+    // that aren't chat-initiated (e.g. model validation errors) surface
+    // through errorOccurred and should still land in the chat panel so
+    // the user sees them.
     connect(&LLMService::instance(), &LLMService::errorOccurred, this, &ChatPanel::onError);
 }
 
@@ -149,6 +147,12 @@ void ChatPanel::setupUi()
     m_inputEdit = new QTextEdit(this);
     m_inputEdit->setPlaceholderText(i18n("Ask the AI about your RPG project..."));
     m_inputEdit->setMaximumHeight(100);
+    // Use the application palette's Base/Text roles explicitly so the input
+    // is readable under both light and dark themes. Without this, Qt picks
+    // QPalette::Window for the background in some KDE styles — which on a
+    // dark theme makes the default black text invisible.
+    m_inputEdit->setStyleSheet(QStringLiteral(
+        "QTextEdit { background-color: palette(base); color: palette(text); }"));
     m_inputEdit->installEventFilter(this);
     inputLayout->addWidget(m_inputEdit);
 
@@ -379,13 +383,24 @@ void ChatPanel::sendMessage()
 
 void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
 {
-    QString actualServiceName = serviceName.isEmpty() ? i18n("AI Chat") : serviceName;
+    const QString actualServiceName = serviceName.isEmpty() ? i18n("AI Chat") : serviceName;
+
+    // Echo the user's turn into the transcript immediately, and a "thinking"
+    // placeholder that the streaming callback will overwrite as tokens
+    // arrive.
     MarkdownParser parser;
-    QString html = parser.renderHtml(userPrompt);
-    appendMessageToView(QStringLiteral("user"), html, userPrompt);
-    
-    // Add current document context if history is empty
-    if (m_history.isEmpty()) {
+    appendMessageToView(QStringLiteral("user"), parser.renderHtml(userPrompt), userPrompt);
+    m_progressBar->show();
+    m_sendBtn->setEnabled(false);
+    m_currentAiResponse.clear();
+    appendMessageToView(QStringLiteral("assistant"), i18n("AI is thinking..."), QString());
+
+    // Pull the active document + path from MainWindow so we can send the
+    // whole file when it's short, or let the service RAG-search when it's
+    // long. Either way the service dedups against the active file path.
+    QString activeDocText;
+    QString activeFilePath;
+    {
         auto *mw = qobject_cast<MainWindow*>(window());
         if (!mw) {
             QWidget *p = parentWidget();
@@ -394,88 +409,72 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
                 p = p->parentWidget();
             }
         }
-
         if (mw && mw->editorDocument()) {
-            QString docText = mw->editorDocument()->text();
-            QString filePath = mw->editorDocument()->url().toLocalFile();
-
-            if (docText.length() < 32000) {
-                // File is small enough to send in full
-                m_history.append({QStringLiteral("system"), 
-                    QStringLiteral("The user is currently working on an RPG project. Here is the content of the active document for context:\n\n%1").arg(docText)});
-                
-                // Proceed immediately
-                m_history.append({QStringLiteral("user"), userPrompt});
-                LLMRequest request;
-                request.provider = currentProvider();
-                request.model = m_modelCombo->currentText();
-                request.serviceName = actualServiceName;
-                request.settingsKey = LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model");
-                request.messages = m_history;
-                LLMService::instance().sendRequest(request);
-                return;
-            } else {
-                // File is LARGE. Use RAG to pull relevant snippets from this specific file.
-                // Note: We search the KnowledgeBase but filter results to this file (or let it pull from others too if useful)
-                // For now, let's pull the top 10 relevant chunks from the project.
-                KnowledgeBase::instance().search(userPrompt, 10, QString(), [this, userPrompt, actualServiceName](const QList<SearchResult> &results) {
-                    QString context;
-                    for (const auto &res : results) {
-                        context += QStringLiteral("--- Source: %1 (Heading: %2) ---\n%3\n\n").arg(res.filePath, res.heading, res.content);
-                    }
-
-                    m_history.append({QStringLiteral("system"), 
-                        QStringLiteral("The user is working on a large RPG document. Here are the most relevant snippets found in the project for this query:\n\n%1").arg(context)});
-                    
-                    m_history.append({QStringLiteral("user"), userPrompt});
-                    
-                    LLMRequest request;
-                    request.provider = currentProvider();
-                    request.model = m_modelCombo->currentText().trimmed();
-                    request.serviceName = actualServiceName;
-                    request.settingsKey = LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model");
-                    request.messages = m_history;
-                    request.stream = true;
-                    LLMService::instance().sendRequest(request);
-                });
-                return;
-            }
+            activeDocText = mw->editorDocument()->text();
+            activeFilePath = mw->editorDocument()->url().toLocalFile();
         }
     }
 
+    // Assemble the request. The service handles:
+    //   - RAG retrieval against the project's KnowledgeBase
+    //   - dedup against the active file and supplied ContextSources
+    //   - citation-preserving prompt assembly
+    //   - multi-turn conversation via priorTurns
+    //   - streaming dispatch back through RagAssistCallbacks.
+    RagAssistRequest req;
+    req.provider = currentProvider();
+    req.model = m_modelCombo->currentText().trimmed();
+    req.serviceName = actualServiceName;
+    req.settingsKey = LLMService::providerSettingsKey(req.provider) + QStringLiteral("/model");
+    req.userPrompt = userPrompt;
+    req.priorTurns = m_history;          // may be empty on first turn
+    req.activeFilePath = activeFilePath;
+    req.stream = true;
+    req.requireCitations = true;
+
+    // Short files go in whole as priority-0 context (author's intent is
+    // to reason about exactly what they're looking at). Long files stay
+    // out of the prompt — the service's RAG layer pulls the relevant
+    // passages from the same file (plus the rest of the project) and
+    // skips duplicates of activeFilePath.
+    constexpr int kInlineDocThreshold = 32000;
+    if (!activeDocText.isEmpty() && activeDocText.length() < kInlineDocThreshold) {
+        ContextSource src;
+        src.label = i18n("ACTIVE DOCUMENT");
+        src.content = activeDocText;
+        src.citation = activeFilePath;
+        src.priority = 0;
+        req.extraSources.append(src);
+    }
+
+    // Chat keeps its own turn history so the caller sees the transcript.
     m_history.append({QStringLiteral("user"), userPrompt});
-    
-    LLMRequest request;
-    request.provider = currentProvider();
-    request.model = m_modelCombo->currentText().trimmed();
-    request.serviceName = actualServiceName;
-    request.settingsKey = LLMService::providerSettingsKey(request.provider) + QStringLiteral("/model");
-    request.messages = m_history;
-    request.stream = true;
-    
-    LLMService::instance().sendRequest(request);
-}
 
-void ChatPanel::onResponseChunk(const QString &requestId, const QString &chunk)
-{
-    if (requestId != m_currentStreamId) return; // not our request
-    m_currentAiResponse += chunk;
+    QPointer<ChatPanel> weakThis(this);
+    RagAssistCallbacks cb;
+    cb.onChunk = [weakThis](const QString &requestId, const QString &chunk) {
+        if (!weakThis || requestId != weakThis->m_currentStreamId) return;
+        weakThis->m_currentAiResponse += chunk;
+        MarkdownParser p;
+        weakThis->updateLastMessageInView(p.renderHtml(weakThis->m_currentAiResponse),
+                                          weakThis->m_currentAiResponse);
+    };
+    cb.onComplete = [weakThis](const QString &requestId, const QString &fullText) {
+        if (!weakThis || requestId != weakThis->m_currentStreamId) return;
+        weakThis->m_progressBar->hide();
+        weakThis->m_sendBtn->setEnabled(true);
+        weakThis->m_history.append({QStringLiteral("assistant"), fullText});
+        MarkdownParser p;
+        weakThis->updateLastMessageInView(p.renderHtml(fullText), fullText);
+    };
+    cb.onError = [weakThis](const QString &requestId, const QString &message) {
+        if (!weakThis || requestId != weakThis->m_currentStreamId) return;
+        weakThis->m_progressBar->hide();
+        weakThis->m_sendBtn->setEnabled(true);
+        weakThis->onError(message);
+    };
 
-    MarkdownParser parser;
-    QString html = parser.renderHtml(m_currentAiResponse);
-    updateLastMessageInView(html, m_currentAiResponse);
-}
-
-void ChatPanel::onResponseFinished(const QString &requestId, const QString &fullText)
-{
-    if (requestId != m_currentStreamId) return; // not our request
-    m_progressBar->hide();
-    m_sendBtn->setEnabled(true);
-    m_history.append({QStringLiteral("assistant"), fullText});
-    
-    MarkdownParser parser;
-    QString html = parser.renderHtml(fullText);
-    updateLastMessageInView(html, fullText);
+    m_currentStreamId = RagAssistService::instance().generate(req, cb);
 }
 
 void ChatPanel::onError(const QString &message)

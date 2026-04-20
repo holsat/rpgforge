@@ -304,9 +304,58 @@ public Q_SLOTS:
      *  no project is open. Used by tests to assert tree == disk. */
     QStringList diskSnapshot();
 
+    // ---------------- RagAssistService (headless test driver) ----------------
+    /**
+     *  \brief Synchronously drive RagAssistService::generate() and return
+     *  the final response text.
+     *
+     *  DBus calls are intrinsically blocking, and the service's pipeline
+     *  is asynchronous. This method runs a nested QEventLoop until the
+     *  service reports completion (or \a timeoutMs fires), then returns.
+     *
+     *  On success: returns the LLM's final text.
+     *  On error: returns an empty QString (check ragLastError()).
+     *  On timeout: returns an empty QString with ragLastError set to
+     *  "timeout".
+     *
+     *  Parameters map onto RagAssistRequest:
+     *    - \a providerInt    = static_cast<int>(LLMProvider), see llmservice.h
+     *    - \a comprehensive  = true → SynthesisDepth::Comprehensive
+     *                          (multi-hop + query expansion), false → Quick
+     *    - \a activeFilePath may be empty; used for RAG dedup
+     *
+     *  No history / priorTurns support here — tests that need multi-turn
+     *  conversation should issue multiple calls and thread their own
+     *  context via extraSources. Streaming is always off on this path.
+     */
+    QString ragGenerate(const QString &systemPrompt,
+                        const QString &userPrompt,
+                        const QString &entityName,
+                        int providerInt,
+                        const QString &model,
+                        bool comprehensive,
+                        const QString &activeFilePath,
+                        int timeoutMs);
+
+    /** \brief Error message from the most recent ragGenerate() call, or
+     *  "" if the last call succeeded. */
+    QString ragLastError() const { return m_ragLastError; }
+
+    /** \brief List of project-relative file paths whose chunks were
+     *  included in the most recent ragGenerate() prompt. Empty when
+     *  retrieval returned no passages or no ragGenerate has run. */
+    QStringList ragLastRetrievalSources() const { return m_ragLastRetrievalSources; }
+
 private:
     MainWindow *m_window;
     QList<ReconciliationEntry> m_pendingReconciliation;
+
+    // RagAssistService testing state. Populated by ragGenerate(); read
+    // by ragLastError() / ragLastRetrievalSources(). Tests interleave
+    // these two read methods between generate calls to make assertions
+    // about what the retrieval pipeline surfaced.
+    mutable QString m_ragLastError;
+    mutable QStringList m_ragLastRetrievalSources;
 };
 
 #endif // RPGFORGEDBUS_H

@@ -28,7 +28,9 @@
 #include <QDebug>
 #include <QRegularExpression>
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QSettings>
+#include <optional>
 #include <QDataStream>
 #include <QtMath>
 #include <QFileSystemWatcher>
@@ -57,11 +59,110 @@ KnowledgeBase::~KnowledgeBase()
     close();
 }
 
+namespace {
+
+// Resolve the LLM provider/model pair KnowledgeBase should use for
+// embeddings. Order of precedence:
+//   1. llm/embedding_provider  + llm/embedding_model        (explicit)
+//   2. llm/provider            + llm/embedding_model        (inherit provider)
+//   3. llm/provider            + llm/<provider>/model       (inherit both)
+// If the resolved provider is Anthropic (no embeddings API) we return a
+// failure sentinel; callers must treat this as "embeddings disabled"
+// and emit a diagnostic the user can see.
+struct EmbeddingConfig {
+    LLMProvider provider;
+    QString     model;
+    bool        supportsEmbeddings;
+    QString     reason;  // human-readable when supportsEmbeddings == false
+};
+
+EmbeddingConfig resolveEmbeddingConfig()
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    EmbeddingConfig out;
+
+    // Precedence:
+    //   1. llm/embedding_provider  (explicit)
+    //   2. llm/chat_provider       (if set and not Anthropic — matches
+    //                               whatever provider the user just picked
+    //                               in the Writing Assistant combo)
+    //   3. llm/provider            (global default)
+    //   4. Gemini                  (Anthropic-can't-do-embeddings fallback;
+    //                               explicit user request — most authors
+    //                               configuring Anthropic for chat usually
+    //                               also have Gemini available)
+    auto pick = [&](const QString &key, bool rejectAnthropic) -> std::optional<LLMProvider> {
+        if (!settings.contains(key)) return std::nullopt;
+        auto p = static_cast<LLMProvider>(settings.value(key).toInt());
+        if (rejectAnthropic && p == LLMProvider::Anthropic) return std::nullopt;
+        return p;
+    };
+
+    if (auto p = pick(QStringLiteral("llm/embedding_provider"), false)) {
+        out.provider = *p;
+    } else if (auto p = pick(QStringLiteral("llm/chat_provider"), true)) {
+        out.provider = *p;
+    } else if (auto p = pick(QStringLiteral("llm/provider"), true)) {
+        out.provider = *p;
+    } else {
+        // Anthropic-or-unset fallback: Gemini.
+        out.provider = LLMProvider::Gemini;
+        qWarning().noquote()
+            << "KnowledgeBase: primary provider does not support embeddings; "
+               "falling back to Gemini for RAG. Set llm/embedding_provider "
+               "to override.";
+    }
+
+    out.model = settings.value(QStringLiteral("llm/embedding_model")).toString();
+    if (out.model.isEmpty()) {
+        // Try a provider-specific embedding-model setting, then the
+        // provider's chat-model as a last resort (works for Ollama/LMStudio
+        // whose chat models double as embedding models on many setups;
+        // will just fail cleanly with a log line if the model doesn't
+        // support embeddings).
+        const QString sk = LLMService::providerSettingsKey(out.provider);
+        out.model = settings.value(sk + QStringLiteral("/embedding_model")).toString();
+        if (out.model.isEmpty()) {
+            out.model = settings.value(sk + QStringLiteral("/model")).toString();
+        }
+    }
+
+    // Anthropic still short-circuits — even if the user explicitly set
+    // llm/embedding_provider to Anthropic, there's no endpoint to hit.
+    if (out.provider == LLMProvider::Anthropic) {
+        out.supportsEmbeddings = false;
+        out.reason = QStringLiteral(
+            "Anthropic does not provide an embeddings API. Configure "
+            "llm/embedding_provider to Gemini, LMStudio, Ollama, or OpenAI.");
+        return out;
+    }
+    if (out.model.isEmpty()) {
+        out.supportsEmbeddings = false;
+        out.reason = QStringLiteral(
+            "No embedding model configured. Set llm/embedding_model or "
+            "the provider-specific <provider>/embedding_model in settings.");
+        return out;
+    }
+
+    out.supportsEmbeddings = true;
+    return out;
+}
+
+} // namespace
+
 void KnowledgeBase::initForProject(const QString &projectPath)
 {
     if (projectPath.isEmpty()) return;
-    qDebug() << "KnowledgeBase: Initializing for project:" << projectPath;
-    
+
+    const EmbeddingConfig emb = resolveEmbeddingConfig();
+    qWarning().noquote() << "KnowledgeBase::initForProject:" << projectPath;
+    qWarning().noquote() << "KnowledgeBase: embedding provider=" << static_cast<int>(emb.provider)
+                         << "model=" << emb.model
+                         << "supportsEmbeddings=" << emb.supportsEmbeddings;
+    if (!emb.supportsEmbeddings) {
+        qWarning().noquote() << "KnowledgeBase: RAG is DISABLED — reason:" << emb.reason;
+    }
+
     QMutexLocker locker(&m_dbMutex);
     close();
 
@@ -70,7 +171,9 @@ void KnowledgeBase::initForProject(const QString &projectPath)
     m_pendingFiles.clear();
 
     if (!setupDatabase()) {
-        qWarning() << "Failed to initialize vector database schema.";
+        qWarning() << "KnowledgeBase: Failed to initialize vector database schema.";
+    } else {
+        qWarning().noquote() << "KnowledgeBase: vector DB ready at" << m_dbPath;
     }
 }
 
@@ -112,10 +215,15 @@ bool KnowledgeBase::setupDatabase()
 
 QSqlDatabase KnowledgeBase::database() const
 {
+    // Shutdown-race guard: if QCoreApplication is gone the worker thread
+    // is racing program exit. QSqlDatabase::addDatabase() requires qApp
+    // and will emit "QSqlDatabase requires a QCoreApplication" otherwise.
+    // Return a disconnected handle — callers already check isOpen().
+    if (!QCoreApplication::instance()) return QSqlDatabase();
     if (m_dbPath.isEmpty()) return QSqlDatabase();
 
     QString connectionName = QStringLiteral("kb_thread_") + QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
-    
+
     QMutexLocker locker(&m_dbMutex);
 
     if (QSqlDatabase::contains(connectionName)) {
@@ -187,12 +295,20 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     }
 
     QStringList rawChunks = content.split(QRegularExpression(QStringLiteral("(?=\\n##? )")));
-    
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    if (provider == LLMProvider::Anthropic) return;
-    
-    QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
+
+    const EmbeddingConfig emb = resolveEmbeddingConfig();
+    if (!emb.supportsEmbeddings) {
+        static bool warned = false;
+        if (!warned) {
+            qWarning().noquote()
+                << "KnowledgeBase: RAG indexing is DISABLED —" << emb.reason
+                << "— the Writing Assistant will have no project context.";
+            warned = true;
+        }
+        return;
+    }
+    const LLMProvider provider = emb.provider;
+    const QString model = emb.model;
 
     {
         QSqlDatabase db = database();
@@ -297,11 +413,20 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
         relativeActiveFiles.append(QDir(m_projectPath).relativeFilePath(abs));
     }
 
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    if (provider == LLMProvider::Anthropic) { callback({}); return; }
-
-    QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
+    const EmbeddingConfig emb = resolveEmbeddingConfig();
+    if (!emb.supportsEmbeddings) {
+        static bool warned = false;
+        if (!warned) {
+            qWarning().noquote()
+                << "KnowledgeBase::search: RAG retrieval is DISABLED —" << emb.reason
+                << "— returning empty result list.";
+            warned = true;
+        }
+        callback({});
+        return;
+    }
+    const LLMProvider provider = emb.provider;
+    const QString model = emb.model;
 
     QPointer<KnowledgeBase> weakThis(this);
     LLMService::instance().generateEmbedding(provider, model, queryText, [weakThis, topK, excludeFile, relativeActiveFiles, callback](const QVector<float> &queryVector) {
@@ -318,19 +443,25 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             if (!weakThis) return;
             
             QList<SearchResult> results;
+            int totalChunks = 0;
+            int filteredByActive = 0;
             {
                 QSqlDatabase db = weakThis->database();
                 if (db.isOpen()) {
                     QSqlQuery query(db);
                     // Filter chunks to only those belonging to files currently in the project manager's logical tree.
                     QString sql = QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?");
-                    
+
                     query.prepare(sql);
                     query.addBindValue(excludeFile);
                     if (query.exec()) {
                         while (query.next()) {
+                            ++totalChunks;
                             QString chunkPath = query.value(0).toString();
-                            if (!relativeActiveFiles.contains(chunkPath)) continue;
+                            if (!relativeActiveFiles.contains(chunkPath)) {
+                                ++filteredByActive;
+                                continue;
+                            }
 
                             SearchResult res;
                             res.filePath = chunkPath;
@@ -344,9 +475,17 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
                             res.score = weakThis->cosineSimilarity(queryVector, emb);
                             results.append(res);
                         }
+                    } else {
+                        qWarning().noquote() << "KnowledgeBase::search: chunk query failed:"
+                                              << query.lastError().text();
                     }
+                } else {
+                    qWarning().noquote() << "KnowledgeBase::search: DB not open — no chunks to search";
                 }
             }
+            qWarning().noquote() << "KnowledgeBase::search: totalChunks=" << totalChunks
+                                  << "afterActiveFilter=" << (totalChunks - filteredByActive)
+                                  << "kept=" << results.size();
 
             std::sort(results.begin(), results.end(), [](const SearchResult &a, const SearchResult &b) {
                 return a.score > b.score;
@@ -364,15 +503,30 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
 
 void KnowledgeBase::reindexProject()
 {
-    if (m_projectPath.isEmpty()) return;
-    
-    qDebug() << "KnowledgeBase: Performing full project reindex...";
+    if (m_projectPath.isEmpty()) {
+        qWarning() << "KnowledgeBase::reindexProject: skipped — no project open";
+        return;
+    }
+
+    const EmbeddingConfig emb = resolveEmbeddingConfig();
+    qWarning().noquote() << "KnowledgeBase::reindexProject: starting";
+    qWarning().noquote() << "  embedding provider=" << static_cast<int>(emb.provider)
+                          << "model=" << emb.model
+                          << "supportsEmbeddings=" << emb.supportsEmbeddings;
+    if (!emb.supportsEmbeddings) {
+        qWarning().noquote() << "  ABORTING: embeddings disabled —" << emb.reason;
+        return;
+    }
+
     QStringList files = ProjectManager::instance().getActiveFiles();
-    
+    int mdFiles = 0;
     for (const QString &path : files) {
         QString suffix = QFileInfo(path).suffix().toLower();
         if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+            ++mdFiles;
             indexFile(path);
         }
     }
+    qWarning().noquote() << "KnowledgeBase::reindexProject: queued" << mdFiles
+                          << "markdown files for embedding";
 }

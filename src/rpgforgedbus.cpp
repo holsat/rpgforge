@@ -22,6 +22,7 @@
 #include "gitservice.h"
 #include "mainwindow.h"
 #include "projectmanager.h"
+#include "ragassistservice.h"
 #include "sidebar.h"
 
 #include <KTextEditor/Document>
@@ -877,4 +878,84 @@ bool RpgForgeDBus::waitForFsQuiescence(int timeoutMs)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     }
     return false;
+}
+
+QString RpgForgeDBus::ragGenerate(const QString &systemPrompt,
+                                   const QString &userPrompt,
+                                   const QString &entityName,
+                                   int providerInt,
+                                   const QString &model,
+                                   bool comprehensive,
+                                   const QString &activeFilePath,
+                                   int timeoutMs)
+{
+    m_ragLastError.clear();
+    m_ragLastRetrievalSources.clear();
+
+    if (userPrompt.trimmed().isEmpty()) {
+        m_ragLastError = QStringLiteral("userPrompt is empty");
+        return {};
+    }
+
+    RagAssistRequest req;
+    req.provider = static_cast<LLMProvider>(providerInt);
+    req.model = model;
+    req.serviceName = QStringLiteral("DBus ragGenerate");
+    req.settingsKey = QStringLiteral("rag/dbus_generate_model");
+    req.systemPrompt = systemPrompt;
+    req.userPrompt = userPrompt;
+    req.entityName = entityName;
+    req.activeFilePath = activeFilePath;
+    req.depth = comprehensive ? SynthesisDepth::Comprehensive
+                               : SynthesisDepth::Quick;
+    req.stream = false;
+    req.requireCitations = true;
+
+    // DBus is synchronous from the caller's perspective — the service
+    // pipeline is asynchronous. Spin a nested event loop until one of
+    // the three terminal callbacks fires, bounded by a timeout.
+    QEventLoop loop;
+    QString capturedResponse;
+    bool completed = false;
+    bool errored = false;
+
+    RagAssistCallbacks cb;
+    cb.onPassagesRetrieved = [this](const QString &, const QStringList &paths) {
+        m_ragLastRetrievalSources = paths;
+    };
+    cb.onComplete = [&loop, &capturedResponse, &completed]
+                    (const QString &, const QString &full) {
+        capturedResponse = full;
+        completed = true;
+        loop.quit();
+    };
+    cb.onError = [this, &loop, &errored](const QString &, const QString &message) {
+        m_ragLastError = message;
+        errored = true;
+        loop.quit();
+    };
+
+    // Kick off the async pipeline. generate() returns immediately with
+    // the requestId; we don't need it here because the callbacks carry it.
+    RagAssistService::instance().generate(req, cb);
+
+    // Arm the timeout. QTimer's QueuedConnection ensures the loop exits
+    // cleanly even if we're mid-HTTP when it fires.
+    QTimer timeoutTimer;
+    timeoutTimer.setSingleShot(true);
+    QObject::connect(&timeoutTimer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeoutTimer.start(timeoutMs > 0 ? timeoutMs : 30000);
+
+    loop.exec();
+
+    if (completed) {
+        return capturedResponse;
+    }
+    if (errored) {
+        // m_ragLastError already populated by the onError callback.
+        return {};
+    }
+    // Neither fired → timed out.
+    m_ragLastError = QStringLiteral("timeout");
+    return {};
 }

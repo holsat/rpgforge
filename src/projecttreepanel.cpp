@@ -333,39 +333,11 @@ void ProjectTreePanel::syncProject()
         file.close();
     }
 
-    Q_EMIT syncProgress(50, i18n("Aligning hierarchy..."));
-
-    // 4. Hierarchy Alignment (Move files on disk to match logical tree)
-    // We do this by calculating the \"target\" path for every file in the tree
-    // Target path is based on the names of parent folders.
-    
-    std::function<QString(ProjectTreeItem*)> getLogicalPath = [&](ProjectTreeItem *item) -> QString {
-        if (!item || !item->parent || item->parent == m_model->itemFromIndex(QModelIndex())) {
-            return QStringLiteral(".");
-        }
-        QString parentPath = getLogicalPath(item->parent);
-        if (parentPath == QStringLiteral(".")) return item->name;
-        return parentPath + QDir::separator() + item->name;
-    };
-
-    for (auto *item : allItems) {
-        if (item->type == ProjectTreeItem::Folder) {
-            item->path = getLogicalPath(item);
-            continue;
-        }
-
-        QString logicalName = getLogicalPath(item->parent) + QDir::separator() + QFileInfo(item->path).fileName();
-        QString targetRelPath = logicalName;
-        QString oldAbsPath = QDir(projectPath).absoluteFilePath(item->path);
-        QString newAbsPath = QDir(projectPath).absoluteFilePath(targetRelPath);
-
-        if (oldAbsPath != newAbsPath && QFile::exists(oldAbsPath)) {
-            QDir().mkpath(QFileInfo(newAbsPath).absolutePath());
-            if (QFile::rename(oldAbsPath, newAbsPath)) {
-                item->path = targetRelPath;
-            }
-        }
-    }
+    // Hierarchy alignment (previously step 4) removed: the Phase-6
+    // refactor made the filesystem the authoritative source for tree
+    // structure, and ProjectManager::moveItem/renameItem keep disk and
+    // the live model in sync atomically. There is no longer a "logical
+    // tree" that can drift from disk, so no alignment pass is needed.
 
     Q_EMIT syncProgress(80, i18n("Saving changes..."));
 

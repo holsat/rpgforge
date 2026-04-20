@@ -80,6 +80,9 @@ private Q_SLOTS:
     void addVariable();
     void addVariant();
     void removeVariable();
+    /// Delete a librarian-extracted entity from the library DB.
+    /// Invoked by the context menu's "Remove from Library" action.
+    void removeLibraryEntry();
     void onItemChanged(QTreeWidgetItem *item, int column);
     void onCustomContextMenu(const QPoint &pos);
     void refreshLibrary();

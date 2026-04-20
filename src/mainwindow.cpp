@@ -36,6 +36,9 @@
 #include "variablespanel.h"
 #include "variablemanager.h"
 #include "variablecompletionmodel.h"
+#include "inlineaiinvoker.h"
+#include "inlineaicompletionmodel.h"
+#include "debuglog.h"
 #include "projectmanager.h"
 #include "projectsettingsdialog.h"
 #include "reconciliationdialog.h"
@@ -122,6 +125,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(m_librarianService, &LibrarianService::entityUpdated, this, &MainWindow::updateLibrarianHighlights);
     connect(m_librarianService, &LibrarianService::libraryVariablesChanged, this, [](const QMap<QString, QString> &vars) {
+        RPGFORGE_DLOG("VARS") << "MainWindow: libraryVariablesChanged received"
+                              << vars.size() << "entries; pushing into VariableManager";
         VariableManager::instance().setLibraryVariables(vars);
     });
 
@@ -325,6 +330,20 @@ void MainWindow::setupEditor()
             view->setAutomaticInvocationEnabled(true);
             auto *completionModel = new VariableCompletionModel(this);
             view->registerCompletionModel(completionModel);
+            RPGFORGE_DLOG("VARS") << "Registered VariableCompletionModel on view"
+                                   << view << "automaticInvocation="
+                                   << view->isAutomaticInvocationEnabled();
+
+            // Inline AI invocation (@lore, @forge, @chat, etc.) — Ctrl+Enter
+            // on a command line fires the RagAssistService pipeline and
+            // streams the response into the document at the original line.
+            auto *invoker = new InlineAIInvoker(view, this);
+
+            // Autocomplete popup for @-commands: types `@` → list of
+            // registered commands drops in, typing more filters it,
+            // Enter on a selection inserts "@<name> ".
+            auto *aiCompletion = new InlineAICompletionModel(invoker, this);
+            view->registerCompletionModel(aiCompletion);
 
             view->installEventFilter(this);
             const auto children = view->findChildren<QWidget*>();
@@ -737,6 +756,11 @@ void MainWindow::setupSidebar()
         QString projectDir = ProjectManager::instance().projectPath();
         KnowledgeBase::instance().initForProject(projectDir);
         LoreKeeperService::instance().setProjectPath(projectDir);
+        // Also wire the librarian (variable extractor). Previously this was
+        // only called from the openProject() menu handler — so session
+        // restore never set it up, leaving dbOpen=false for the entire
+        // session and silently dropping every extraction.
+        if (m_librarianService) m_librarianService->setProjectPath(projectDir);
 
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();

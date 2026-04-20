@@ -18,6 +18,9 @@
 
 #include "variablespanel.h"
 #include "variablemanager.h"
+#include "librarianservice.h"
+#include "librariandatabase.h"
+#include "debuglog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTreeWidget>
@@ -259,15 +262,60 @@ void VariablesPanel::onCustomContextMenu(const QPoint &pos)
     auto *item = m_treeWidget->itemAt(pos);
     QMenu menu(this);
 
-    menu.addAction(QIcon::fromTheme(QStringLiteral("list-add")), i18n("Add Main Variable"), this, &VariablesPanel::addVariable);
-    
-    if (item) {
-        menu.addAction(QIcon::fromTheme(QStringLiteral("entry-new")), i18n("Add Variant"), this, &VariablesPanel::addVariant);
-        menu.addSeparator();
-        menu.addAction(QIcon::fromTheme(QStringLiteral("list-remove")), i18n("Remove"), this, &VariablesPanel::removeVariable);
+    // Decide which branch the clicked item lives in by walking up to
+    // a known root. Library items come from the librarian DB; custom
+    // items from user-authored settings. Each tree has its own menu.
+    auto isUnder = [](QTreeWidgetItem *node, QTreeWidgetItem *root) {
+        for (auto *p = node; p; p = p->parent()) if (p == root) return true;
+        return false;
+    };
+
+    const bool inLibrary = item && m_libraryRoot && isUnder(item, m_libraryRoot);
+
+    if (inLibrary) {
+        menu.addAction(QIcon::fromTheme(QStringLiteral("list-remove")),
+                       i18n("Remove from Library"), this, &VariablesPanel::removeLibraryEntry);
+    } else {
+        menu.addAction(QIcon::fromTheme(QStringLiteral("list-add")),
+                       i18n("Add Main Variable"), this, &VariablesPanel::addVariable);
+
+        if (item) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("entry-new")),
+                           i18n("Add Variant"), this, &VariablesPanel::addVariant);
+            menu.addSeparator();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("list-remove")),
+                           i18n("Remove"), this, &VariablesPanel::removeVariable);
+        }
     }
 
     menu.exec(m_treeWidget->viewport()->mapToGlobal(pos));
+}
+
+void VariablesPanel::removeLibraryEntry()
+{
+    auto *item = m_treeWidget->currentItem();
+    if (!item || !m_librarianService || !m_libraryRoot) return;
+
+    // If the user clicked on an attribute row, walk up to the entity
+    // node (the direct child of a type group, which is itself the
+    // direct child of m_libraryRoot). We always delete the whole
+    // entity — per-attribute removal is noise given the cleanup goal.
+    QTreeWidgetItem *entityItem = item;
+    while (entityItem && entityItem->parent()
+           && entityItem->parent()->parent() != m_libraryRoot) {
+        entityItem = entityItem->parent();
+    }
+    if (!entityItem) return;
+
+    const qint64 entityId = entityItem->data(0, Qt::UserRole).toLongLong();
+    if (entityId <= 0) return;
+
+    if (m_librarianService->database()->deleteEntity(entityId)) {
+        refreshLibrary();
+        // Trigger a rescan so libraryVariablesChanged re-emits with the
+        // removed entry absent — Writing Assistant and preview drop it.
+        m_librarianService->scanAll();
+    }
 }
 
 void VariablesPanel::recalculateAll()
@@ -417,8 +465,11 @@ void VariablesPanel::onLoreScanFinished(const QString &filePath)
 
 void VariablesPanel::triggerReindex()
 {
+    RPGFORGE_DLOG("VARS") << "VariablesPanel::triggerReindex clicked";
     if (m_librarianService) {
         m_librarianService->scanAll();
+    } else {
+        RPGFORGE_DLOG("VARS") << "  no librarianService wired — re-index cannot run";
     }
 }
 
@@ -457,6 +508,11 @@ void VariablesPanel::refreshLibrary()
 
         auto *entityItem = new QTreeWidgetItem(typeGroups[type]);
         entityItem->setText(0, name);
+        // Library entities are selectable (so right-click can remove
+        // them) but not currently inline-editable — a rename would be
+        // overwritten by the next scan unless we persist overrides
+        // separately. Use the right-click "Remove from Library" action
+        // to purge bad entries.
         entityItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         entityItem->setData(0, Qt::UserRole, id);
 
@@ -467,9 +523,23 @@ void VariablesPanel::refreshLibrary()
             attrItem->setText(0, it.key());
             attrItem->setText(1, it.value().toString());
             attrItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            attrItem->setData(0, Qt::UserRole, id);
         }
     }
 
     m_treeWidget->blockSignals(false);
-    qDebug() << "VariablesPanel: Library refreshed with" << m_libraryRoot->childCount() << "types.";
+
+    int totalEntities = 0;
+    int totalAttrs = 0;
+    for (int g = 0; g < m_libraryRoot->childCount(); ++g) {
+        auto *group = m_libraryRoot->child(g);
+        totalEntities += group->childCount();
+        for (int e = 0; e < group->childCount(); ++e) {
+            totalAttrs += group->child(e)->childCount();
+        }
+    }
+    RPGFORGE_DLOG("VARS") << "VariablesPanel::refreshLibrary:"
+                          << m_libraryRoot->childCount() << "type group(s),"
+                          << totalEntities << "entities,"
+                          << totalAttrs << "attributes total";
 }

@@ -649,8 +649,43 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
         url = normalizeOllamaUrl(endpoint, QStringLiteral("/api/embeddings"));
         body[QStringLiteral("model")] = embModel;
         body[QStringLiteral("prompt")] = text;
+    } else if (provider == LLMProvider::Gemini) {
+        // Gemini uses a dedicated embeddings endpoint. The caller's `model`
+        // is typically their chat model (e.g. gemini-3.1-pro-preview), which
+        // won't work for embedContent — so if the model isn't one of the
+        // known embedding models, default to text-embedding-004.
+        QString embModel = settings.value(QStringLiteral("llm/embedding_model")).toString();
+        if (embModel.isEmpty()) embModel = model;
+        if (embModel.isEmpty()
+            || (!embModel.contains(QLatin1String("embedding"), Qt::CaseInsensitive)
+                && !embModel.contains(QLatin1String("embed"), Qt::CaseInsensitive))) {
+            // User's model was a chat model. Force the current production
+            // embedding model. text-embedding-004 is the default general-
+            // purpose embedding endpoint Gemini exposes.
+            embModel = QStringLiteral("models/text-embedding-004");
+        }
+        // Ensure the "models/" prefix Gemini's REST API expects.
+        if (!embModel.startsWith(QLatin1String("models/"))) {
+            embModel = QStringLiteral("models/") + embModel;
+        }
+
+        QString endpoint = settings.value(QStringLiteral("llm/gemini/endpoint"),
+            QStringLiteral("https://generativelanguage.googleapis.com/v1beta")).toString();
+        if (endpoint.endsWith(QLatin1Char('/'))) endpoint.chop(1);
+        url = QUrl(QStringLiteral("%1/%2:embedContent?key=%3").arg(endpoint, embModel, key));
+
+        QJsonObject contentObj;
+        QJsonArray parts;
+        QJsonObject part;
+        part[QStringLiteral("text")] = text;
+        parts.append(part);
+        contentObj[QStringLiteral("parts")] = parts;
+        body[QStringLiteral("content")] = contentObj;
+        body[QStringLiteral("model")] = embModel;
     } else {
-        // Anthropic doesn't have an embedding API currently
+        // Anthropic, Grok: no embedding API available.
+        qWarning() << "LLM: provider" << static_cast<int>(provider)
+                   << "does not have an embeddings API — returning empty.";
         if (callback) callback(QVector<float>());
         return;
     }
@@ -661,12 +696,12 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
     QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [reply, callback, provider]() {
         QVector<float> embedding;
+        const QByteArray body = reply->readAll();
         if (reply->error() == QNetworkReply::NoError) {
-            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            QJsonDocument doc = QJsonDocument::fromJson(body);
             if (!doc.isNull() && doc.isObject()) {
-                QJsonArray dataArray;
                 if (provider == LLMProvider::OpenAI || provider == LLMProvider::LMStudio) {
-                    dataArray = doc.object().value(QStringLiteral("data")).toArray();
+                    QJsonArray dataArray = doc.object().value(QStringLiteral("data")).toArray();
                     if (!dataArray.isEmpty()) {
                         QJsonArray embeddingArray = dataArray.at(0).toObject().value(QStringLiteral("embedding")).toArray();
                         for (const QJsonValue &val : embeddingArray) {
@@ -678,8 +713,25 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
                     for (const QJsonValue &val : embeddingArray) {
                         embedding.append(val.toDouble());
                     }
+                } else if (provider == LLMProvider::Gemini) {
+                    // Gemini's embedContent returns { "embedding": { "values": [...] } }
+                    QJsonObject embObj = doc.object().value(QStringLiteral("embedding")).toObject();
+                    QJsonArray values = embObj.value(QStringLiteral("values")).toArray();
+                    for (const QJsonValue &val : values) {
+                        embedding.append(val.toDouble());
+                    }
                 }
             }
+            if (embedding.isEmpty()) {
+                qWarning().noquote() << "LLM embedding: 200 OK but response parse produced empty vector. Body:"
+                                      << QString::fromUtf8(body).left(512);
+            }
+        } else {
+            const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            qWarning().noquote() << "LLM embedding failed: provider=" << static_cast<int>(provider)
+                                  << "HTTP" << httpStatus
+                                  << reply->errorString()
+                                  << "- body:" << QString::fromUtf8(body).left(512);
         }
         if (callback) {
             callback(embedding);

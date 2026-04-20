@@ -5,6 +5,7 @@
 #include <QTextStream>
 #include <functional>
 #include "../src/lorekeeperservice.h"
+#include "../src/ragassistservice.h"
 #include "../src/llmservice.h"
 #include "../src/projectmanager.h"
 #include "../src/projecttreemodel.h"
@@ -83,6 +84,13 @@ I wake up, eyes closed, heart racing.
         PromptCaptureLLM mockLlm;
         LoreKeeperService::instance().init(&mockLlm, nullptr);
         LoreKeeperService::instance().setProjectPath(m_testDirPath);
+
+        // LoreKeeper's dossier generation now goes through RagAssistService
+        // (see lorekeeperservice.cpp::updateEntityLore). Inject the same
+        // mock LLM into the service so it intercepts the Generator request
+        // the same way it intercepts the Discovery request that still
+        // flows through LoreKeeper's own m_llm pointer.
+        RagAssistService::instance().setLlmServiceForTesting(&mockLlm);
         
         // 4. Trigger Scan
         QSignalSpy loreSpy(&LoreKeeperService::instance(), &LoreKeeperService::loreUpdated);
@@ -98,14 +106,17 @@ I wake up, eyes closed, heart racing.
         
         QVERIFY(!mockLlm.lastSystemPrompt.isEmpty());
         QVERIFY(mockLlm.lastUserPrompt.contains(QStringLiteral("OmoWale")));
-        
+
         // Verify file was written to disk
         QString charPath = m_testDirPath + QStringLiteral("/lorekeeper/Characters/OmoWale.md");
         QVERIFY(QFile::exists(charPath));
-        
+
         // Verify it was added to the tree (ProjectManager::findItem walks
         // from root for us — no model access required).
         QVERIFY(pm.findItem(QStringLiteral("lorekeeper/Characters/OmoWale.md")) != nullptr);
+
+        // Restore the global LLMService for any tests that run after this one.
+        RagAssistService::instance().setLlmServiceForTesting(nullptr);
     }
 
 private:

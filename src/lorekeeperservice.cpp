@@ -1,7 +1,7 @@
 #include "lorekeeperservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
-#include "knowledgebase.h"
+#include "ragassistservice.h"
 #include "projectmanager.h"
 #include "projecttreemodel.h"
 #include "projectkeys.h"
@@ -277,111 +277,109 @@ void LoreKeeperService::updateEntityLore(const QString &categoryName, const QStr
         if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
     }
 
-    // Pull entity-specific passages from the project's KnowledgeBase
-    // (semantic search over the full project). This is the RAG layer the
-    // Writing Assistant uses — feeding LoreKeeper the same retrieval
-    // depth brings dossier quality in line with interactive chat output.
-    // See chatpanel.cpp:421 for the equivalent call on the chat side.
-    const QString ragQuery = QStringLiteral("%1 %2").arg(entityName, categoryName);
-    QPointer<LoreKeeperService> weakThis(this);
-    KnowledgeBase::instance().search(ragQuery, 10, QString(),
-        [weakThis, categoryName, entityName, contextText](const QList<SearchResult> &ragResults) {
-            if (!weakThis) return;
-            weakThis->dispatchLoreGeneration(categoryName, entityName, contextText, ragResults);
-        });
-}
-
-void LoreKeeperService::dispatchLoreGeneration(const QString &categoryName,
-                                                const QString &entityName,
-                                                const QString &rawContext,
-                                                const QList<SearchResult> &ragResults)
-{
-    {
-        QMutexLocker locker(&m_mutex);
-        if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
-    }
-
-    // Determine category prompt
+    // Find the category-specific system prompt (e.g. the 8-section
+    // "Character Dossier" template for Characters, etc.). Falls back to
+    // empty string if the project's LoreKeeper config doesn't define one
+    // for this category — the service's baseline system prompt still
+    // applies.
     QString categoryPrompt;
-    QJsonArray categories = m_config.value(QStringLiteral("categories")).toArray();
-    for (const QJsonValue &cv : categories) {
-        if (cv.toObject().value(QStringLiteral("name")).toString() == categoryName) {
-            categoryPrompt = cv.toObject().value(QStringLiteral("prompt")).toString();
-            break;
+    {
+        QJsonArray categories = m_config.value(QStringLiteral("categories")).toArray();
+        for (const QJsonValue &cv : categories) {
+            if (cv.toObject().value(QStringLiteral("name")).toString() == categoryName) {
+                categoryPrompt = cv.toObject().value(QStringLiteral("prompt")).toString();
+                break;
+            }
         }
     }
 
-    QString relPath = QStringLiteral("lorekeeper/") + categoryName + QDir::separator() + entityName + QStringLiteral(".md");
-    QString absPath = QDir(m_projectPath).absoluteFilePath(relPath);
-
+    // Load any existing dossier so the service can feed it back in as
+    // priority-0 context. This both preserves the author's edits and
+    // gives the LLM the canonical prior state to extend rather than
+    // rewrite from scratch.
+    const QString relPath = QStringLiteral("lorekeeper/") + categoryName + QDir::separator() + entityName + QStringLiteral(".md");
+    const QString absPath = QDir(m_projectPath).absoluteFilePath(relPath);
     QString existingContent;
-    QFile file(absPath);
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        existingContent = QString::fromUtf8(file.readAll());
-        file.close();
+    {
+        QFile file(absPath);
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            existingContent = QString::fromUtf8(file.readAll());
+            file.close();
+        }
     }
 
-    LLMRequest req;
+    // Resolve provider + model from settings (falling back through
+    // lorekeeper-specific → global defaults). Mirrors the pattern the
+    // original pre-service implementation used so user config stays
+    // honoured.
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    const LLMProvider provider = static_cast<LLMProvider>(
+        settings.value(QStringLiteral("lorekeeper/lorekeeper_provider"),
+                       settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    QString model = settings.value(QStringLiteral("lorekeeper/lorekeeper_model")).toString();
+    if (model.isEmpty()) {
+        switch (provider) {
+            case LLMProvider::OpenAI: model = settings.value(QStringLiteral("llm/openai/model")).toString(); break;
+            case LLMProvider::Anthropic: model = settings.value(QStringLiteral("llm/anthropic/model")).toString(); break;
+            case LLMProvider::Ollama: model = settings.value(QStringLiteral("llm/ollama/model")).toString(); break;
+            case LLMProvider::Grok: model = settings.value(QStringLiteral("llm/grok/model")).toString(); break;
+            case LLMProvider::Gemini: model = settings.value(QStringLiteral("llm/gemini/model")).toString(); break;
+            case LLMProvider::LMStudio: model = settings.value(QStringLiteral("llm/lmstudio/model")).toString(); break;
+        }
+    }
+
+    // Build the request. The service owns the heavy lifting: KB
+    // retrieval, dedup, citation-preserving assembly, multi-hop synthesis
+    // (once Comprehensive mode is fully wired up), and output formatting.
+    RagAssistRequest req;
+    req.provider = provider;
+    req.model = model;
     req.serviceName = i18n("LoreKeeper Generator (%1)", categoryName);
     req.settingsKey = QStringLiteral("lorekeeper/lorekeeper_model");
-    // Rich dossiers span multiple sections (Identity / Description /
-    // Personality / Habits / Background / Goals / Conflicts / Key Moments
-    // per the default prompt) and routinely exceed the 1024-token default.
-    // 4096 matches the Anthropic-branch fallback in llmservice.cpp.
+    req.systemPrompt = categoryPrompt +
+        QStringLiteral("\n\nReturn ONLY the full updated Markdown content for the dossier file. "
+                       "Do not wrap the output in code fences. Preserve existing headings where still accurate.");
+    req.userPrompt = i18n("Update the dossier for \"%1\". Integrate anything new from the "
+                          "retrieved project passages, keep anything still accurate from the "
+                          "existing dossier, and rewrite sections whose factual basis has "
+                          "changed. Output the whole updated file.", entityName);
+    req.entityName = entityName;
+
+    // Existing dossier takes absolute priority: the author may have hand-
+    // edited it. The raw discovery text is lower priority — it's the
+    // context the entity was found in and sometimes repeats content
+    // already indexed in the KB.
+    if (!existingContent.isEmpty()) {
+        req.extraSources.append(ContextSource{
+            i18n("EXISTING DOSSIER"), existingContent, relPath, /*priority=*/0
+        });
+    }
+    if (!contextText.isEmpty()) {
+        req.extraSources.append(ContextSource{
+            i18n("ORIGINATING CONTEXT"),
+            contextText.left(16000),   // raw discovery text, not citable
+            QString(),
+            /*priority=*/10
+        });
+    }
+
+    // Dossier generation is the synthesis use case the Comprehensive
+    // multi-hop pipeline is designed for. Until that pipeline lands on
+    // this branch, the service treats Comprehensive identically to
+    // Quick — setting it now means LoreKeeper gets the benefit for free
+    // when multi-hop arrives.
+    req.depth = SynthesisDepth::Comprehensive;
     req.maxTokens = 4096;
-
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("lorekeeper/lorekeeper_provider"),
-                                                            settings.value(QStringLiteral("llm/provider"), 0)).toInt());
-
-    req.model = settings.value(QStringLiteral("lorekeeper/lorekeeper_model")).toString();
-    if (req.model.isEmpty()) {
-        switch(req.provider) {
-            case LLMProvider::OpenAI: req.model = settings.value(QStringLiteral("llm/openai/model")).toString(); break;
-            case LLMProvider::Anthropic: req.model = settings.value(QStringLiteral("llm/anthropic/model")).toString(); break;
-            case LLMProvider::Ollama: req.model = settings.value(QStringLiteral("llm/ollama/model")).toString(); break;
-            case LLMProvider::Grok: req.model = settings.value(QStringLiteral("llm/grok/model")).toString(); break;
-            case LLMProvider::Gemini: req.model = settings.value(QStringLiteral("llm/gemini/model")).toString(); break;
-            case LLMProvider::LMStudio: req.model = settings.value(QStringLiteral("llm/lmstudio/model")).toString(); break;
-        }
-    }
-
-    QString genPromptBase = settings.value(QStringLiteral("lorekeeper/gen_prompt"),
-        QStringLiteral("You are an expert world-builder. %1\\n\\nReturn ONLY the updated Markdown content.")).toString();
-
-    // Assemble RAG-retrieved passages, clearly labelled per source so the
-    // model can attribute details to specific files / headings.
-    QString ragContext;
-    if (!ragResults.isEmpty()) {
-        for (const SearchResult &res : ragResults) {
-            ragContext += QStringLiteral("--- Source: %1 (Heading: %2) ---\n%3\n\n")
-                              .arg(res.filePath, res.heading, res.content);
-        }
-    }
-
-    // The raw discovery context is supplementary — mostly the raw text the
-    // entity was discovered in. Cap it at 16 KiB to leave headroom for the
-    // RAG passages and the generation output itself.
-    const QString trimmedRaw = rawContext.left(16000);
-
-    req.messages << LLMMessage{QStringLiteral("system"), genPromptBase.arg(categoryPrompt)};
-    req.messages << LLMMessage{QStringLiteral("user"),
-        i18n("ENTITY: %1\\n"
-             "EXISTING LORE:\\n%2\\n\\n"
-             "RELEVANT PROJECT PASSAGES (retrieved by semantic search):\\n%3\\n"
-             "ORIGINATING CONTEXT:\\n%4\\n\\n"
-             "Update the lore now.",
-             entityName,
-             existingContent.isEmpty() ? i18n("[New Entity]") : existingContent,
-             ragContext.isEmpty() ? i18n("[No retrieved passages]") : ragContext,
-             trimmedRaw)};
-    req.stream = false;
+    req.topK = 30;
+    req.finalK = 12;
+    req.requireCitations = true;
 
     QPointer<LoreKeeperService> weakThis(this);
-    m_llm->sendNonStreamingRequest(req, [weakThis, categoryName, entityName, absPath, relPath](const QString &response) {
+    RagAssistCallbacks callbacks;
+    callbacks.onComplete = [weakThis, categoryName, entityName, absPath, relPath]
+                           (const QString &, const QString &response) {
         if (!weakThis || response.isEmpty()) return;
 
-        // Write the file to disk
         qDebug() << "Lore AI: Writing lore for" << entityName << "to" << absPath;
         QDir().mkpath(QFileInfo(absPath).absolutePath());
         QFile outFile(absPath);
@@ -390,10 +388,13 @@ void LoreKeeperService::dispatchLoreGeneration(const QString &categoryName,
             out << response;
             outFile.close();
 
-            // Authoritative request to update the tree structure
             ProjectManager::instance().requestTreeUpdate(categoryName, entityName, relPath);
-
             Q_EMIT weakThis->loreUpdated(categoryName, entityName);
         }
-    });
+    };
+    callbacks.onError = [entityName](const QString &, const QString &message) {
+        qWarning() << "Lore AI:" << entityName << "generation failed:" << message;
+    };
+
+    RagAssistService::instance().generate(req, callbacks);
 }

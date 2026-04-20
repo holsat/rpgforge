@@ -18,6 +18,7 @@
 
 #include "variablecompletionmodel.h"
 #include "variablemanager.h"
+#include "debuglog.h"
 #include <KTextEditor/View>
 #include <KTextEditor/Document>
 #include <QIcon>
@@ -29,6 +30,7 @@ VariableCompletionModel::VariableCompletionModel(QObject *parent)
     : KTextEditor::CodeCompletionModel(parent)
 {
     setHasGroups(false);
+    RPGFORGE_DLOG("VARS") << "VariableCompletionModel constructed";
 }
 
 void VariableCompletionModel::updateVariables()
@@ -43,6 +45,9 @@ void VariableCompletionModel::updateVariables()
         }
     }
     m_variables.sort(Qt::CaseInsensitive);
+    RPGFORGE_DLOG("VARS") << "updateVariables: loaded" << m_variables.size()
+                          << "names. First 5:"
+                          << m_variables.mid(0, qMin(5, m_variables.size()));
 }
 
 // --- Two-level hierarchy: root -> group header -> items ---
@@ -125,7 +130,9 @@ void VariableCompletionModel::completionInvoked(KTextEditor::View *view, const K
 {
     Q_UNUSED(view);
     Q_UNUSED(range);
-    Q_UNUSED(invocationType);
+    RPGFORGE_DLOG("VARS") << "completionInvoked invocationType=" << int(invocationType)
+                          << "range=" << range.start().column() << ".."
+                          << range.end().column();
 
     // Match KateWordCompletionModel: just update data, no beginResetModel/endResetModel.
     // The presentation model calls createGroups() after this returns.
@@ -134,7 +141,6 @@ void VariableCompletionModel::completionInvoked(KTextEditor::View *view, const K
 
 bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, const QString &insertedText, bool userBehaved, const KTextEditor::Cursor &position)
 {
-    Q_UNUSED(insertedText);
     Q_UNUSED(userBehaved);
     if (!view || !view->document() || !position.isValid()) return false;
 
@@ -153,12 +159,23 @@ bool VariableCompletionModel::shouldStartCompletion(KTextEditor::View *view, con
         }
     }
 
-    // Trigger if cursor is inside {{ ... (unclosed)
-    if (searchCol >= 2 && line.at(searchCol - 1) == QLatin1Char('{') && line.at(searchCol - 2) == QLatin1Char('{')) {
-        return true;
+    // Trigger if cursor is inside {{ ... (unclosed) — two braces are
+    // the actual var-substitution syntax VariableManager::resolve
+    // recognises. Single-brace triggering would produce a lot of false
+    // positives in tables, dice rolls, and inline math.
+    bool trigger = false;
+    if (searchCol >= 2
+        && line.at(searchCol - 1) == QLatin1Char('{')
+        && line.at(searchCol - 2) == QLatin1Char('{')) {
+        trigger = true;
     }
 
-    return false;
+    RPGFORGE_DLOG("VARS") << "shouldStartCompletion inserted=" << insertedText
+                          << "line=" << position.line()
+                          << "col=" << col
+                          << "searchCol=" << searchCol
+                          << "trigger=" << trigger;
+    return trigger;
 }
 
 KTextEditor::Range VariableCompletionModel::completionRange(KTextEditor::View *view, const KTextEditor::Cursor &position)

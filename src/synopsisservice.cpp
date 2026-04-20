@@ -246,7 +246,20 @@ void SynopsisService::updateFileSynopsis(const QString &relativePath, const QStr
     LLMService::instance().sendNonStreamingRequest(req, [weakThis, relativePath](const QString &response) {
         if (!weakThis) return;
 
-        ProjectManager::instance().setNodeSynopsis(relativePath, response.trimmed());
+        // Only overwrite the existing synopsis when the LLM actually
+        // produced text. An empty response indicates the request failed
+        // (4xx error, missing API key, wrong model, etc.) — clobbering
+        // the existing synopsis with "" would silently erase either the
+        // previous AI-generated synopsis or a hand-written frontmatter
+        // one. Leave prior content in place so the corkboard keeps
+        // showing something useful.
+        const QString trimmed = response.trimmed();
+        if (!trimmed.isEmpty()) {
+            ProjectManager::instance().setNodeSynopsis(relativePath, trimmed);
+        } else {
+            qWarning() << "Synopsis AI: empty response for" << relativePath
+                       << "— keeping prior synopsis";
+        }
 
         {
             QMutexLocker locker(&weakThis->m_mutex);
@@ -287,7 +300,15 @@ void SynopsisService::updateFolderSynopsis(const QString &relativePath,
     LLMService::instance().sendNonStreamingRequest(req, [weakThis, relativePath](const QString &response) {
         if (!weakThis) return;
 
-        ProjectManager::instance().setNodeSynopsis(relativePath, response.trimmed());
+        // Same guard as updateFileSynopsis: don't erase an existing
+        // synopsis on a failed LLM call.
+        const QString trimmed = response.trimmed();
+        if (!trimmed.isEmpty()) {
+            ProjectManager::instance().setNodeSynopsis(relativePath, trimmed);
+        } else {
+            qWarning() << "Synopsis AI: empty response for folder" << relativePath
+                       << "— keeping prior synopsis";
+        }
 
         {
             QMutexLocker locker(&weakThis->m_mutex);
