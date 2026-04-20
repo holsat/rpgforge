@@ -159,6 +159,38 @@ public:
     static QString providerSettingsKey(LLMProvider provider);
 
     /**
+     * @brief Returns the short key for the given provider ("openai",
+     * "anthropic", …). Used when storing provider identities in
+     * QStringList-shaped settings like llm/provider_order, where a
+     * human-readable key ages better than an int enum index.
+     */
+    static QString providerKey(LLMProvider provider);
+
+    /**
+     * @brief Reverse of providerKey(). Returns true and writes the matching
+     * enum to @p out on success; returns false if the key is unknown.
+     */
+    static bool providerFromKey(const QString &key, LLMProvider *out);
+
+    /**
+     * @brief Returns the user's ordered list of providers as stored in
+     * QSettings "llm/provider_order". On first run (or when the key is
+     * missing), seeds the list with the historical preference order
+     * (Gemini > Anthropic > OpenAI > Grok > Ollama > LMStudio). Unknown
+     * keys in storage are dropped; providers added to the enum after
+     * the user first saved are appended at the tail so upgrades don't
+     * silently lose them.
+     */
+    static QList<LLMProvider> readProviderOrderFromSettings();
+
+    /**
+     * @brief Returns true if the user has the given provider enabled for
+     * fallback participation. Default is true — existing installs that
+     * haven't written the key continue to behave as before.
+     */
+    static bool isProviderEnabled(LLMProvider provider);
+
+    /**
      * @brief Returns true if the given {provider, model} pair is currently in
      * a cooldown window (recorded from a prior 429 with retry-after). If @p
      * expiresAtMsOut is non-null, the wall-clock millisecond epoch when the

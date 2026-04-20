@@ -165,15 +165,76 @@ static QUrl normalizeOllamaUrl(const QString &rawEndpoint, const QString &target
 // ---------------------------------------------------------------------------
 QString LLMService::providerSettingsKey(LLMProvider p)
 {
+    return QStringLiteral("llm/") + providerKey(p);
+}
+
+QString LLMService::providerKey(LLMProvider p)
+{
     switch (p) {
-        case LLMProvider::OpenAI:    return QStringLiteral("llm/openai");
-        case LLMProvider::Anthropic: return QStringLiteral("llm/anthropic");
-        case LLMProvider::Grok:      return QStringLiteral("llm/grok");
-        case LLMProvider::Gemini:    return QStringLiteral("llm/gemini");
-        case LLMProvider::Ollama:    return QStringLiteral("llm/ollama");
-        case LLMProvider::LMStudio:  return QStringLiteral("llm/lmstudio");
+        case LLMProvider::OpenAI:    return QStringLiteral("openai");
+        case LLMProvider::Anthropic: return QStringLiteral("anthropic");
+        case LLMProvider::Grok:      return QStringLiteral("grok");
+        case LLMProvider::Gemini:    return QStringLiteral("gemini");
+        case LLMProvider::Ollama:    return QStringLiteral("ollama");
+        case LLMProvider::LMStudio:  return QStringLiteral("lmstudio");
     }
-    return QStringLiteral("llm/openai");
+    return QStringLiteral("openai");
+}
+
+bool LLMService::providerFromKey(const QString &key, LLMProvider *out)
+{
+    static const QHash<QString, LLMProvider> map = {
+        {QStringLiteral("openai"),    LLMProvider::OpenAI},
+        {QStringLiteral("anthropic"), LLMProvider::Anthropic},
+        {QStringLiteral("grok"),      LLMProvider::Grok},
+        {QStringLiteral("gemini"),    LLMProvider::Gemini},
+        {QStringLiteral("ollama"),    LLMProvider::Ollama},
+        {QStringLiteral("lmstudio"),  LLMProvider::LMStudio},
+    };
+    auto it = map.constFind(key);
+    if (it == map.cend()) return false;
+    if (out) *out = it.value();
+    return true;
+}
+
+// Default provider order used when llm/provider_order is unset. Matches the
+// historical hardcoded preference so existing installs behave identically
+// until the user reorders in Settings.
+static const LLMProvider kDefaultProviderOrder[] = {
+    LLMProvider::Gemini, LLMProvider::Anthropic, LLMProvider::OpenAI,
+    LLMProvider::Grok,   LLMProvider::Ollama,    LLMProvider::LMStudio,
+};
+
+QList<LLMProvider> LLMService::readProviderOrderFromSettings()
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    const QStringList stored = settings.value(QStringLiteral("llm/provider_order")).toStringList();
+
+    QList<LLMProvider> result;
+    if (stored.isEmpty()) {
+        for (LLMProvider p : kDefaultProviderOrder) result.append(p);
+        return result;
+    }
+
+    for (const QString &k : stored) {
+        LLMProvider p;
+        if (providerFromKey(k.trimmed(), &p) && !result.contains(p)) {
+            result.append(p);
+        }
+    }
+    // Append anything missing (new enum values added after the user's last
+    // save) at the tail so upgrades don't silently hide a provider.
+    for (LLMProvider p : kDefaultProviderOrder) {
+        if (!result.contains(p)) result.append(p);
+    }
+    return result;
+}
+
+bool LLMService::isProviderEnabled(LLMProvider provider)
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    return settings.value(providerSettingsKey(provider) + QStringLiteral("/enabled"),
+                          true).toBool();
 }
 
 // ---------------------------------------------------------------------------
@@ -301,23 +362,18 @@ bool LLMService::isProviderConfigured(LLMProvider provider) const
 }
 
 // ---------------------------------------------------------------------------
-// Compose a default fallback chain: every other configured provider, in a
-// fixed preference order, using each provider's stored default model. The
-// primary is excluded so the caller doesn't loop on the exhausted entry.
+// Compose a default fallback chain from the user's ordered provider list in
+// QSettings (llm/provider_order). Respects the per-provider enable flag so
+// users can temporarily pause a provider without deleting its credentials.
+// The primary is excluded so the caller doesn't loop on the exhausted entry.
 // ---------------------------------------------------------------------------
 QList<QPair<LLMProvider, QString>> LLMService::composeDefaultFallbackChain(LLMProvider primary) const
 {
-    // Ordering picks quality-tier cloud providers first, then local as a
-    // last resort. Can be tightened once users have per-agent preferences.
-    static const LLMProvider preferenceOrder[] = {
-        LLMProvider::Gemini, LLMProvider::Anthropic, LLMProvider::OpenAI,
-        LLMProvider::Grok, LLMProvider::Ollama, LLMProvider::LMStudio,
-    };
-
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     QList<QPair<LLMProvider, QString>> chain;
-    for (LLMProvider p : preferenceOrder) {
+    for (LLMProvider p : readProviderOrderFromSettings()) {
         if (p == primary) continue;
+        if (!isProviderEnabled(p)) continue;
         if (!isProviderConfigured(p)) continue;
         const QString model = settings.value(
             providerSettingsKey(p) + QStringLiteral("/model")).toString().trimmed();
