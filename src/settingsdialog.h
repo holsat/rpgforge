@@ -68,6 +68,14 @@ private:
     // Editor settings
     QCheckBox *m_typewriterScrollingCheck = nullptr;
 
+    // Provider fallback order: draggable list of providers with per-row
+    // enable checkbox. Row order persists to QSettings llm/provider_order
+    // and check state to llm/{provider}/enabled. Used by LLMService's
+    // composeDefaultFallbackChain.
+    QListWidget *m_providerOrderList = nullptr;
+    void buildProviderOrderList();
+    void saveProviderOrderList();
+
     // LLM settings
     QComboBox *m_activeProviderCombo;
     QLineEdit *m_openaiKeyEdit;

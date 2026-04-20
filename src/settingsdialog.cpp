@@ -79,14 +79,81 @@ void SettingsDialog::setupUi()
     setMinimumSize(600, 650);
 }
 
+// ---------------------------------------------------------------------------
+// Populate the provider-order list from QSettings (via LLMService's reader).
+// Seeds from the hardcoded default order on first run. Each item carries the
+// LLMProvider enum as Qt::UserRole, a checkable state for the enabled flag,
+// and a hamburger icon as a visual drag-affordance (the whole row is
+// draggable regardless of grab point).
+// ---------------------------------------------------------------------------
+void SettingsDialog::buildProviderOrderList()
+{
+    m_providerOrderList->clear();
+    const QIcon gripIcon = QIcon::fromTheme(
+        QStringLiteral("application-menu"),
+        QIcon::fromTheme(QStringLiteral("open-menu-symbolic")));
+    for (LLMProvider p : LLMService::readProviderOrderFromSettings()) {
+        auto *item = new QListWidgetItem(gripIcon, LLMService::providerName(p));
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(LLMService::isProviderEnabled(p) ? Qt::Checked : Qt::Unchecked);
+        item->setData(Qt::UserRole, static_cast<int>(p));
+        item->setToolTip(i18n("Drag to reorder. Uncheck to exclude %1 from fallback.",
+                              LLMService::providerName(p)));
+        m_providerOrderList->addItem(item);
+    }
+}
+
+void SettingsDialog::saveProviderOrderList()
+{
+    if (!m_providerOrderList) return;
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QStringList orderKeys;
+    for (int row = 0; row < m_providerOrderList->count(); ++row) {
+        QListWidgetItem *item = m_providerOrderList->item(row);
+        const auto p = static_cast<LLMProvider>(item->data(Qt::UserRole).toInt());
+        orderKeys.append(LLMService::providerKey(p));
+        settings.setValue(LLMService::providerSettingsKey(p) + QStringLiteral("/enabled"),
+                          item->checkState() == Qt::Checked);
+    }
+    settings.setValue(QStringLiteral("llm/provider_order"), orderKeys);
+}
+
 QWidget* SettingsDialog::createLLMTab()
 {
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
 
+    // --- Provider Fallback Order ---
+    // Draggable list of providers that controls (a) the order in which
+    // LLMService walks the fallback chain when a service's primary fails,
+    // and (b) which providers participate via their checkbox. Services
+    // still pick a primary independently in the Agents tab; this list is
+    // the tiebreaker / failover order.
+    auto *orderGroup = new QGroupBox(i18n("Provider Fallback Order"), this);
+    auto *orderLayout = new QVBoxLayout(orderGroup);
+    m_providerOrderList = new QListWidget(this);
+    m_providerOrderList->setDragDropMode(QAbstractItemView::InternalMove);
+    m_providerOrderList->setDefaultDropAction(Qt::MoveAction);
+    m_providerOrderList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_providerOrderList->setMovement(QListView::Snap);
+    m_providerOrderList->setUniformItemSizes(true);
+    buildProviderOrderList();
+    orderLayout->addWidget(m_providerOrderList);
+
+    auto *orderHint = new QLabel(
+        i18n("Drag to reorder. Services try their selected provider first, "
+             "then walk this list top-to-bottom on failure, skipping "
+             "unchecked entries."), this);
+    orderHint->setWordWrap(true);
+    QFont hintFont = orderHint->font();
+    hintFont.setItalic(true);
+    orderHint->setFont(hintFont);
+    orderLayout->addWidget(orderHint);
+    layout->addWidget(orderGroup);
+
     m_activeProviderCombo = new QComboBox(this);
     m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok (xAI)"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
-    
+
     auto *providerLayout = new QFormLayout();
     providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
     // Provider agnostic
@@ -574,6 +641,10 @@ void SettingsDialog::save()
 
     settings.setValue(QStringLiteral("llm/provider"), m_activeProviderCombo->currentIndex());
     settings.setValue(QStringLiteral("llm/embedding_model"), m_embeddingModelEdit->text());
+
+    // Persist provider fallback order + per-provider enable flags from
+    // the draggable list at the top of the LLM tab.
+    saveProviderOrderList();
 
     settings.setValue(QStringLiteral("llm/openai/model"), m_openaiModelEdit->text());
     settings.setValue(QStringLiteral("llm/openai/endpoint"), m_openaiEndpointEdit->text());
