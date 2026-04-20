@@ -1029,9 +1029,12 @@ void MainWindow::openFileFromUrl(const QUrl &url)
 
         // Check project context via the model's path-aware inheritance.
         // effectiveCategory walks up the tree and honours the authoritative
-        // path-based categories, so an entry under lorekeeper/ is correctly
-        // flagged even if its own category field is None or stale.
-        bool isLoreKeeper = false;
+        // path-based categories. Currently used only to route Research
+        // files into the split research pane; LoreKeeper files open with
+        // full read/write access like any other document. The LoreKeeper
+        // tree-node protection (no rename/delete via the tree panel) lives
+        // in ProjectTreeModel::flags() and is independent of editor
+        // writability.
         bool isResearch = false;
         if (ProjectManager::instance().isProjectOpen()) {
             QString relPath = QDir(ProjectManager::instance().projectPath()).relativeFilePath(path);
@@ -1041,12 +1044,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
                     ProjectManager::instance().effectiveCategoryForPath(relPath));
                 qDebug() << "MainWindow: Found item in tree for" << relPath
                          << "effectiveCategory:" << cat;
-                if (cat == ProjectTreeItem::LoreKeeper
-                    || cat == ProjectTreeItem::Characters
-                    || cat == ProjectTreeItem::Places
-                    || cat == ProjectTreeItem::Cultures) {
-                    isLoreKeeper = true;
-                } else if (cat == ProjectTreeItem::Research) {
+                if (cat == ProjectTreeItem::Research) {
                     isResearch = true;
                 }
             }
@@ -1078,7 +1076,7 @@ void MainWindow::openFileFromUrl(const QUrl &url)
                 return;
             }
             m_document->openUrl(url);
-            m_document->setReadWrite(!isLoreKeeper);
+            m_document->setReadWrite(true);
         }
 
         qDebug() << "MainWindow: Showing editor splitter.";

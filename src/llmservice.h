@@ -179,8 +179,12 @@ private:
 
     // Builds and POSTs the request with the already-resolved model.
     // nonStreamCallback == nullptr → streaming path; non-null → non-streaming path.
+    // isRetry=true skips the per-request state reset and the requestStarted
+    // emission so the chat UI doesn't get spammed with fresh "AI is thinking"
+    // placeholders on every network retry. Also skips model revalidation.
     void dispatchRequest(const LLMRequest &request, const QString &model,
-                         std::function<void(const QString&)> nonStreamCallback);
+                         std::function<void(const QString&)> nonStreamCallback,
+                         bool isRetry = false);
 
     QNetworkAccessManager *m_networkManager;
     QNetworkReply *m_activeReply = nullptr;

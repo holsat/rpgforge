@@ -34,6 +34,7 @@
 #include <QPointer>
 #include <QUuid>
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 
 LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     : QObject(parent), m_llmService(llmService)
@@ -148,7 +149,9 @@ void LibrarianService::processQueue()
     m_pendingFiles.clear();
     
     QPointer<LibrarianService> weakThis(this);
-    QtConcurrent::run([weakThis, filesToProcess]() {
+    // Fire-and-forget: finalization happens via QueuedConnection back to
+    // the main thread at the end of the task, so we don't need the QFuture.
+    QThreadPool::globalInstance()->start([weakThis, filesToProcess]() {
         if (!weakThis) return;
 
         for (const QString &filePath : filesToProcess) {

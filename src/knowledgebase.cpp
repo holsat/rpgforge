@@ -33,6 +33,7 @@
 #include <QtMath>
 #include <QFileSystemWatcher>
 #include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
 #include <QUuid>
 #include <KLocalizedString>
 #include <QPointer>
@@ -273,12 +274,20 @@ void KnowledgeBase::resume()
 
 void KnowledgeBase::search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback)
 {
-    if (m_projectPath.isEmpty() || !callback) return;
+    if (!callback) return;
+    if (m_projectPath.isEmpty()) {
+        // Honour the callback contract even when the KB isn't initialised
+        // for a project — callers (notably LoreKeeperService::updateEntityLore)
+        // chain further async work on the callback and will stall forever
+        // if it never fires.
+        callback({});
+        return;
+    }
 
     // Get the list of active files from the project manager to ensure we only return relevant lore.
     QStringList activeFiles = ProjectManager::instance().getActiveFiles();
     if (activeFiles.isEmpty()) {
-        if (callback) callback({});
+        callback({});
         return;
     }
 
@@ -301,7 +310,11 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             return;
         }
 
-        QtConcurrent::run([weakThis, queryVector, topK, excludeFile, relativeActiveFiles, callback]() {
+        // Fire-and-forget: we don't hold the QFuture (callback is delivered
+        // via QueuedConnection from inside the task). QThreadPool::start
+        // expresses that intent directly and avoids the [[nodiscard]]
+        // warning from QtConcurrent::run.
+        QThreadPool::globalInstance()->start([weakThis, queryVector, topK, excludeFile, relativeActiveFiles, callback]() {
             if (!weakThis) return;
             
             QList<SearchResult> results;

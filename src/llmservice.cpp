@@ -277,11 +277,16 @@ void LLMService::retryWithModel(const QString &newModel)
 // Build and POST the request. nonStreamCallback==nullptr → streaming path.
 // ---------------------------------------------------------------------------
 void LLMService::dispatchRequest(const LLMRequest &request, const QString &model,
-                                  std::function<void(const QString&)> nonStreamCallback)
+                                  std::function<void(const QString&)> nonStreamCallback,
+                                  bool isRetry)
 {
     const bool streaming = (nonStreamCallback == nullptr);
 
-    if (streaming) {
+    if (streaming && !isRetry) {
+        // Fresh streaming request: reset retry counter, clear accumulated
+        // response / stream buffers, store the canonical request for any
+        // subsequent retries. A retry re-enters this function with isRetry
+        // set so these fields survive untouched.
         if (m_activeReply) cancelRequest();
         m_activeRequest = request;
         m_activeRequest.model = model;
@@ -385,8 +390,15 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
     if (streaming) {
         m_activeReply = reply;
-        m_currentStreamId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        Q_EMIT requestStarted(m_currentStreamId);
+        if (!isRetry) {
+            // Only announce a new stream on the first attempt. Emitting
+            // requestStarted on every retry caused the chat panel to
+            // append a new "AI is thinking" placeholder per retry — which,
+            // paired with the earlier retry-counter-reset bug, produced
+            // hundreds of stacked placeholders on recurrent 4xx errors.
+            m_currentStreamId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            Q_EMIT requestStarted(m_currentStreamId);
+        }
         connect(reply, &QNetworkReply::readyRead, this, &LLMService::handleReadyRead);
         connect(reply, &QNetworkReply::finished, this, &LLMService::handleFinished);
     } else {
@@ -462,20 +474,40 @@ void LLMService::handleFinished()
     if (!m_activeReply) return;
 
     if (m_activeReply->error() != QNetworkReply::NoError && m_activeReply->error() != QNetworkReply::OperationCanceledError) {
-        if (m_retryCount < 3) {
+        // Read the server-side response body once; both the retry log and
+        // the final error surface benefit from having the upstream's
+        // actual rejection message (4xx bodies from Anthropic/OpenAI
+        // contain the structured reason, e.g. "invalid model" or
+        // "max_tokens too large").
+        const QByteArray serverResponse = m_activeReply->readAll();
+        const int httpStatus = m_activeReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QString errorString = m_activeReply->errorString();
+
+        // Don't retry client errors (4xx) — those are not transient. A
+        // bad model name, malformed request, or invalid API key will fail
+        // identically on every retry and only serve to spam the UI. 5xx
+        // and connection errors still retry with the existing 3-attempt cap.
+        const bool isClientError = (httpStatus >= 400 && httpStatus < 500);
+
+        if (!isClientError && m_retryCount < 3) {
             m_retryCount++;
-            qWarning() << "LLM Request failed, retrying" << m_retryCount << "..." << m_activeReply->errorString();
+            qWarning().noquote() << "LLM Request failed, retrying" << m_retryCount << "... HTTP" << httpStatus
+                                 << errorString
+                                 << "- body:" << QString::fromUtf8(serverResponse).left(512);
             m_activeReply->deleteLater();
             m_activeReply = nullptr;
-            sendRequest(m_activeRequest);
+            // Call dispatchRequest directly with isRetry=true so the retry
+            // doesn't reset m_retryCount or re-emit requestStarted (which
+            // would spawn another chat placeholder).
+            dispatchRequest(m_activeRequest, m_activeRequest.model, nullptr, /*isRetry=*/true);
             return;
         }
 
-        QString errorMsg = m_activeReply->errorString();
-        QByteArray serverResponse = m_activeReply->readAll();
+        QString errorMsg = QStringLiteral("HTTP %1: %2").arg(httpStatus).arg(errorString);
         if (!serverResponse.isEmpty()) {
-            errorMsg += QStringLiteral(" - ") + QString::fromUtf8(serverResponse);
+            errorMsg += QStringLiteral("\n") + QString::fromUtf8(serverResponse);
         }
+        qWarning().noquote() << "LLM request terminal failure:" << errorMsg;
         handleError(errorMsg);
     } else if (m_activeReply->error() == QNetworkReply::NoError) {
         Q_EMIT responseFinished(m_currentStreamId, m_fullResponse);
