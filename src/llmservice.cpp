@@ -310,16 +310,106 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         messagesArray.append(m);
     }
 
-    if (request.provider == LLMProvider::OpenAI
+    if (request.provider == LLMProvider::Gemini) {
+        // Native Gemini API (v1beta). Distinct request/response shape
+        // from OpenAI — we used to go through Google's OpenAI-compat
+        // shim (/v1beta/openai/chat/completions) but it was picky about
+        // model naming and produced 404s for models the native API
+        // accepts. Native endpoint structure:
+        //
+        //   POST /v1beta/models/<model>:generateContent?key=<key>         (non-streaming)
+        //   POST /v1beta/models/<model>:streamGenerateContent?alt=sse&key=<key>  (streaming)
+        //
+        // Body:
+        //   {
+        //     "contents":          [ {"role": "user"|"model", "parts": [{"text": "..."}]} ],
+        //     "systemInstruction": {"parts": [{"text": "..."}]},          (optional; OpenAI "system" → this)
+        //     "generationConfig":  {"temperature": 0.7, "maxOutputTokens": 4096}
+        //   }
+        //
+        // Response (non-streaming):
+        //   { "candidates": [ {"content": {"parts": [{"text": "..."}]}} ] }
+        //
+        // Streaming: SSE, each "data: {...}" chunk is a partial
+        // candidates object. Parsed by processGeminiChunk().
+        const QString apiBase = settings.value(
+            QStringLiteral("llm/gemini/api_base"),
+            QStringLiteral("https://generativelanguage.googleapis.com/v1beta")).toString();
+
+        // Normalise model: Gemini's REST paths expect bare names. Strip
+        // the "models/" prefix if present; we re-add it in the URL.
+        QString bareModel = model;
+        if (bareModel.startsWith(QLatin1String("models/"))) {
+            bareModel = bareModel.mid(7);
+        }
+        if (bareModel.isEmpty()) {
+            qWarning() << "LLM Gemini: no model configured — aborting";
+            if (nonStreamCallback) nonStreamCallback(QString());
+            return;
+        }
+
+        const QString method = streaming
+            ? QStringLiteral("streamGenerateContent?alt=sse&key=")
+            : QStringLiteral("generateContent?key=");
+        url = QUrl(QStringLiteral("%1/models/%2:%3%4")
+                       .arg(apiBase, bareModel, method, key));
+
+        // Split messages into systemInstruction (the system role) plus
+        // contents (user/assistant turns). Gemini uses "model" for the
+        // assistant role; translate as we go.
+        QString systemText;
+        QJsonArray contents;
+        for (const auto &msg : request.messages) {
+            if (msg.role == QLatin1String("system")) {
+                if (!systemText.isEmpty()) systemText += QLatin1Char('\n');
+                systemText += msg.content;
+                continue;
+            }
+            const QString role = (msg.role == QLatin1String("assistant"))
+                ? QStringLiteral("model")
+                : QStringLiteral("user");
+            QJsonObject turn;
+            turn[QStringLiteral("role")] = role;
+            QJsonArray parts;
+            QJsonObject partObj;
+            partObj[QStringLiteral("text")] = msg.content;
+            parts.append(partObj);
+            turn[QStringLiteral("parts")] = parts;
+            contents.append(turn);
+        }
+
+        body[QStringLiteral("contents")] = contents;
+        if (!systemText.isEmpty()) {
+            QJsonObject sys;
+            QJsonArray sysParts;
+            QJsonObject sysPart;
+            sysPart[QStringLiteral("text")] = systemText;
+            sysParts.append(sysPart);
+            sys[QStringLiteral("parts")] = sysParts;
+            body[QStringLiteral("systemInstruction")] = sys;
+        }
+        QJsonObject genConfig;
+        genConfig[QStringLiteral("temperature")] = request.temperature;
+        genConfig[QStringLiteral("maxOutputTokens")] = request.maxTokens;
+        body[QStringLiteral("generationConfig")] = genConfig;
+
+        // Log URL with the key redacted so we can debug endpoint issues
+        // without leaking credentials into the debug log.
+        QString loggedUrl = url.toString();
+        static const QRegularExpression keyRe(QStringLiteral("([?&])key=[^&]+"));
+        loggedUrl.replace(keyRe, QStringLiteral("\\1key=REDACTED"));
+        qInfo().noquote() << "LLM chat dispatch: provider= 4 (Gemini-native)"
+                          << "model=" << bareModel
+                          << "service=" << request.serviceName
+                          << "endpoint=" << loggedUrl;
+    }
+    else if (request.provider == LLMProvider::OpenAI
         || request.provider == LLMProvider::Grok
-        || request.provider == LLMProvider::Gemini
         || request.provider == LLMProvider::LMStudio) {
         const QString sk = LLMService::providerSettingsKey(request.provider);
         const QString defaultEndpoint =
             (request.provider == LLMProvider::Grok)
                 ? QStringLiteral("https://api.x.ai/v1/chat/completions")
-            : (request.provider == LLMProvider::Gemini)
-                ? QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
             : (request.provider == LLMProvider::LMStudio)
                 ? QStringLiteral("http://localhost:1234/v1/chat/completions")
             : QStringLiteral("https://api.openai.com/v1/chat/completions");
@@ -327,19 +417,7 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         url = QUrl(settings.value(sk + QStringLiteral("/endpoint"), defaultEndpoint).toString());
         netRequest.setRawHeader("Authorization", "Bearer " + key.toUtf8());
 
-        // Gemini's OpenAI-compatible endpoint wants the bare model
-        // name (e.g. "gemini-2.5-pro") — not the "models/..." native
-        // Gemini prefix we get back from fetchModels(). Sending the
-        // prefixed form to /v1beta/openai/chat/completions returns a
-        // 404 "model not found". Strip the prefix here so the rest
-        // of the app can stay consistent with native naming.
-        QString sendModel = model;
-        if (request.provider == LLMProvider::Gemini
-            && sendModel.startsWith(QLatin1String("models/"))) {
-            sendModel = sendModel.mid(7);
-        }
-
-        body[QStringLiteral("model")] = sendModel;
+        body[QStringLiteral("model")] = model;
         body[QStringLiteral("messages")] = messagesArray;
         body[QStringLiteral("stream")] = streaming;
         body[QStringLiteral("temperature")] = request.temperature;
@@ -347,7 +425,7 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
         qInfo().noquote() << "LLM chat dispatch: provider="
                           << static_cast<int>(request.provider)
-                          << "model=" << sendModel
+                          << "model=" << model
                           << "service=" << request.serviceName
                           << "endpoint=" << url.toString();
     }
@@ -427,9 +505,23 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
             if (reply->error() == QNetworkReply::NoError) {
                 QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
                 if (!doc.isNull() && doc.isObject()) {
-                    if (provider == LLMProvider::OpenAI
+                    if (provider == LLMProvider::Gemini) {
+                        // Native Gemini shape: candidates[0].content.parts[0].text.
+                        // Multiple parts can exist on tool-calling responses; for
+                        // plain text generation there's just one.
+                        QJsonArray candidates = doc.object().value(QStringLiteral("candidates")).toArray();
+                        if (!candidates.isEmpty()) {
+                            QJsonArray parts = candidates.at(0).toObject()
+                                .value(QStringLiteral("content")).toObject()
+                                .value(QStringLiteral("parts")).toArray();
+                            QString combined;
+                            for (const QJsonValue &p : parts) {
+                                combined += p.toObject().value(QStringLiteral("text")).toString();
+                            }
+                            result = combined;
+                        }
+                    } else if (provider == LLMProvider::OpenAI
                         || provider == LLMProvider::Grok
-                        || provider == LLMProvider::Gemini
                         || provider == LLMProvider::LMStudio) {
                         QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
                         if (!choices.isEmpty())
@@ -481,10 +573,10 @@ void LLMService::handleReadyRead()
     switch (m_activeProvider) {
         case LLMProvider::OpenAI:
         case LLMProvider::Grok:
-        case LLMProvider::Gemini:
         case LLMProvider::LMStudio: processOpenAIChunk(m_streamBuffer); break;
         case LLMProvider::Anthropic: processAnthropicChunk(m_streamBuffer); break;
         case LLMProvider::Ollama: processOllamaChunk(m_streamBuffer); break;
+        case LLMProvider::Gemini: processGeminiChunk(m_streamBuffer); break;
     }
 }
 
@@ -593,6 +685,47 @@ void LLMService::processAnthropicChunk(QByteArray &buffer)
                 m_fullResponse += chunk;
                 Q_EMIT responseChunk(m_currentStreamId, chunk);
             }
+        }
+    }
+}
+
+void LLMService::processGeminiChunk(QByteArray &buffer)
+{
+    // Gemini SSE streaming: each event is a single "data: {...}" line
+    // followed by "\n\n". The JSON is a full candidates-list snapshot
+    // whose parts[].text contains the chunk we want to append.
+    //
+    // Sample event:
+    //   data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],
+    //          "role":"model"}}],"modelVersion":"gemini-2.5-pro"}
+    //
+    // (One-line in reality; wrapped here for readability.)
+    while (true) {
+        const int sep = buffer.indexOf("\n\n");
+        if (sep < 0) break;
+        QByteArray event = buffer.left(sep).trimmed();
+        buffer.remove(0, sep + 2);
+
+        const int dataIdx = event.indexOf("data: ");
+        if (dataIdx < 0) continue;
+        QByteArray jsonBytes = event.mid(dataIdx + 6).trimmed();
+
+        const QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
+        if (doc.isNull() || !doc.isObject()) continue;
+
+        const QJsonArray candidates = doc.object().value(QStringLiteral("candidates")).toArray();
+        if (candidates.isEmpty()) continue;
+        const QJsonArray parts = candidates.at(0).toObject()
+            .value(QStringLiteral("content")).toObject()
+            .value(QStringLiteral("parts")).toArray();
+
+        QString chunk;
+        for (const QJsonValue &p : parts) {
+            chunk += p.toObject().value(QStringLiteral("text")).toString();
+        }
+        if (!chunk.isEmpty()) {
+            m_fullResponse += chunk;
+            Q_EMIT responseChunk(m_currentStreamId, chunk);
         }
     }
 }
@@ -811,16 +944,21 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
     QNetworkRequest netRequest;
     QString key = apiKey(provider);
 
-    if (provider == LLMProvider::OpenAI
+    if (provider == LLMProvider::Gemini) {
+        // Native Gemini models endpoint: GET /v1beta/models?key=<key>.
+        // No Bearer header — auth is the query param, same as generation.
+        const QString apiBase = settings.value(
+            QStringLiteral("llm/gemini/api_base"),
+            QStringLiteral("https://generativelanguage.googleapis.com/v1beta")).toString();
+        url = QUrl(QStringLiteral("%1/models?key=%2").arg(apiBase, key));
+        // No netRequest.setRawHeader — Gemini wants the key in the URL only.
+    } else if (provider == LLMProvider::OpenAI
         || provider == LLMProvider::Grok
-        || provider == LLMProvider::Gemini
         || provider == LLMProvider::LMStudio) {
         QString settingsKey = (provider == LLMProvider::Grok) ? QStringLiteral("llm/grok")
-                            : (provider == LLMProvider::Gemini) ? QStringLiteral("llm/gemini")
                             : (provider == LLMProvider::LMStudio) ? QStringLiteral("llm/lmstudio")
                             : QStringLiteral("llm/openai");
         QString fallback = (provider == LLMProvider::Grok) ? QStringLiteral("https://api.x.ai/v1/chat/completions")
-                         : (provider == LLMProvider::Gemini) ? QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
                          : (provider == LLMProvider::LMStudio) ? QStringLiteral("http://localhost:1234/v1/chat/completions")
                          : QStringLiteral("https://api.openai.com/v1/chat/completions");
         QString endpoint = settings.value(settingsKey + QStringLiteral("/endpoint"), fallback).toString().trimmed();
@@ -861,8 +999,31 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
         if (reply->error() == QNetworkReply::NoError) {
             QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
             if (!doc.isNull() && doc.isObject()) {
-                if (provider == LLMProvider::OpenAI || provider == LLMProvider::Anthropic
-                    || provider == LLMProvider::Grok || provider == LLMProvider::Gemini
+                if (provider == LLMProvider::Gemini) {
+                    // Native Gemini /models response: {"models":[{"name":"models/gemini-...","supportedGenerationMethods":[...]}]}
+                    // We want IDs usable for generation. Filter to entries that
+                    // advertise generateContent and strip the "models/" prefix
+                    // so downstream code sees bare names consistently.
+                    QJsonArray ms = doc.object().value(QStringLiteral("models")).toArray();
+                    for (const QJsonValue &v : ms) {
+                        const QJsonObject m = v.toObject();
+                        const QJsonArray methods = m.value(
+                            QStringLiteral("supportedGenerationMethods")).toArray();
+                        bool supportsGenerate = false;
+                        for (const QJsonValue &mv : methods) {
+                            if (mv.toString() == QLatin1String("generateContent")) {
+                                supportsGenerate = true;
+                                break;
+                            }
+                        }
+                        if (!supportsGenerate) continue;
+                        QString name = m.value(QStringLiteral("name")).toString();
+                        if (name.startsWith(QLatin1String("models/"))) name = name.mid(7);
+                        if (!name.isEmpty()) models << name;
+                    }
+                } else if (provider == LLMProvider::OpenAI
+                    || provider == LLMProvider::Anthropic
+                    || provider == LLMProvider::Grok
                     || provider == LLMProvider::LMStudio) {
                     QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
                     for (const QJsonValue &v : data) {

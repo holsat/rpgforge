@@ -167,6 +167,11 @@ private:
     void processOpenAIChunk(QByteArray &buffer);
     void processAnthropicChunk(QByteArray &buffer);
     void processOllamaChunk(QByteArray &buffer);
+    /// Parse Gemini's native streamGenerateContent SSE format. Each
+    /// event is a single "data: {...}" line terminated by "\n\n"; the
+    /// JSON contains candidates[0].content.parts[].text with the chunk
+    /// to append.
+    void processGeminiChunk(QByteArray &buffer);
 
     // Resolves the model from request.model or settings (no hardcoded defaults).
     QString resolvedModel(const LLMRequest &request) const;
