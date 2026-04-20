@@ -55,6 +55,12 @@ struct LLMRequest {
     bool stream = true;
     double temperature = 0.7;
     int maxTokens = 1024;
+
+    // Optional ordered list of {provider, model} pairs to try if the primary
+    // {provider, model} above fails (cooldown / 429 / model-not-found). Only
+    // honoured by the non-streaming path today. If empty, LLMService composes
+    // a default chain from the user's configured providers.
+    QList<QPair<LLMProvider, QString>> fallbackChain;
 };
 
 /**
@@ -179,6 +185,30 @@ public:
      */
     void clearCooldown(LLMProvider provider, const QString &model);
 
+    /**
+     * @brief Returns true if the user has enough of the given provider's
+     * settings filled in for a request to have any chance of succeeding.
+     *
+     * - Cloud providers (OpenAI, Anthropic, Gemini, Grok): require both an
+     *   API key in KWallet AND a non-empty default model.
+     * - Local providers (Ollama, LMStudio): require an endpoint AND a
+     *   non-empty default model. API key is optional.
+     *
+     * Used by the fallback-chain logic to skip unconfigured entries so we
+     * don't attempt requests that would just 401/404 on the first byte.
+     */
+    bool isProviderConfigured(LLMProvider provider) const;
+
+    /**
+     * @brief Composes a default fallback chain for the given primary
+     * provider by iterating every configured provider (other than the
+     * primary) in a fixed preference order. Each entry uses the provider's
+     * configured default model from settings. Returned list is empty if
+     * the user hasn't configured any other providers — callers then
+     * surface the primary failure as-is.
+     */
+    QList<QPair<LLMProvider, QString>> composeDefaultFallbackChain(LLMProvider primary) const;
+
 Q_SIGNALS:
     /// Emitted when a new streaming request begins. requestId is a UUID that
     /// callers can store and use to filter responseChunk/responseFinished.
@@ -233,6 +263,17 @@ private:
     void dispatchRequest(const LLMRequest &request, const QString &model,
                          NonStreamCallback nonStreamCallback,
                          bool isRetry = false);
+
+    // If the non-streaming request has a (user-supplied or auto-composed)
+    // fallback chain, try the next usable entry (skipping unconfigured
+    // providers and currently-cooled-down {provider, model} pairs) and
+    // re-dispatch. Returns true if a fallback was dispatched (caller's
+    // callback is now owned by the fallback dispatch), false if the chain
+    // had nothing to try — in that case the caller's callback is untouched
+    // and the caller must surface the error. Streaming mode is not yet
+    // plumbed through here.
+    bool tryFallback(const LLMRequest &request, const NonStreamCallback &nonStreamCallback,
+                     const QString &previousError);
 
     QNetworkAccessManager *m_networkManager;
     QNetworkReply *m_activeReply = nullptr;

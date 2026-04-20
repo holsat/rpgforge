@@ -50,6 +50,20 @@ public:
     void sendNonStreamingRequest(const LLMRequest &request,
                                   std::function<void(const QString&)> callback) override
     {
+        dispatch(request, [callback](const QString &response, const QString &) {
+            callback(response);
+        });
+    }
+
+    void sendNonStreamingRequestDetailed(const LLMRequest &request,
+                                          LLMService::NonStreamCallback callback) override
+    {
+        dispatch(request, std::move(callback));
+    }
+
+private:
+    void dispatch(const LLMRequest &request, LLMService::NonStreamCallback callback)
+    {
         requests.append({request.serviceName, request.messages, request.maxTokens, request.stream});
 
         QString response = nextResponse;
@@ -62,7 +76,9 @@ public:
         // Fire the callback asynchronously via queued connection — matches
         // real LLMService behavior (request is fired, callback comes back
         // on the event loop).
-        QTimer::singleShot(0, [callback, response]() { callback(response); });
+        QTimer::singleShot(0, [callback = std::move(callback), response]() {
+            callback(response, QString());
+        });
     }
 };
 

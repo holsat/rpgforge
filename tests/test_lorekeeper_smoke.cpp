@@ -17,15 +17,27 @@ public:
     QString lastUserPrompt;
 
     void sendNonStreamingRequest(const LLMRequest &request, std::function<void(const QString&)> callback) override {
+        dispatch(request, [callback](const QString &response, const QString &) {
+            callback(response);
+        });
+    }
+
+    void sendNonStreamingRequestDetailed(const LLMRequest &request,
+                                          LLMService::NonStreamCallback callback) override {
+        dispatch(request, std::move(callback));
+    }
+
+private:
+    void dispatch(const LLMRequest &request, LLMService::NonStreamCallback callback) {
         if (!request.messages.isEmpty()) {
             lastSystemPrompt = request.messages.first().content;
             lastUserPrompt = request.messages.last().content;
         }
-        
+
         if (request.serviceName.contains(QStringLiteral("Discovery"))) {
-            callback(QStringLiteral("[\"OmoWale\"]"));
+            callback(QStringLiteral("[\"OmoWale\"]"), QString());
         } else {
-            callback(QStringLiteral("# OmoWale\nOmoWale is a character from the test."));
+            callback(QStringLiteral("# OmoWale\nOmoWale is a character from the test."), QString());
         }
     }
 };

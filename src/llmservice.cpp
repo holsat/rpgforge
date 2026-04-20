@@ -273,6 +273,106 @@ int LLMService::extractRetryDelaySecondsFromErrorBody(const QByteArray &body)
 }
 
 // ---------------------------------------------------------------------------
+// Is the user's configuration complete enough for requests to this provider
+// to have a chance of succeeding? Cloud providers need API key + model;
+// local providers need endpoint + model (API key is optional).
+// ---------------------------------------------------------------------------
+bool LLMService::isProviderConfigured(LLMProvider provider) const
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    const QString prefix = providerSettingsKey(provider);
+    const QString model = settings.value(prefix + QStringLiteral("/model")).toString().trimmed();
+    if (model.isEmpty()) return false;
+
+    switch (provider) {
+        case LLMProvider::OpenAI:
+        case LLMProvider::Anthropic:
+        case LLMProvider::Grok:
+        case LLMProvider::Gemini:
+            // Cloud providers: require a stored API key.
+            return !apiKey(provider).isEmpty();
+        case LLMProvider::Ollama:
+        case LLMProvider::LMStudio:
+            // Local providers: require an endpoint (defaults exist, but the
+            // user may have blanked them intentionally). API key optional.
+            return !settings.value(prefix + QStringLiteral("/endpoint")).toString().trimmed().isEmpty();
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Compose a default fallback chain: every other configured provider, in a
+// fixed preference order, using each provider's stored default model. The
+// primary is excluded so the caller doesn't loop on the exhausted entry.
+// ---------------------------------------------------------------------------
+QList<QPair<LLMProvider, QString>> LLMService::composeDefaultFallbackChain(LLMProvider primary) const
+{
+    // Ordering picks quality-tier cloud providers first, then local as a
+    // last resort. Can be tightened once users have per-agent preferences.
+    static const LLMProvider preferenceOrder[] = {
+        LLMProvider::Gemini, LLMProvider::Anthropic, LLMProvider::OpenAI,
+        LLMProvider::Grok, LLMProvider::Ollama, LLMProvider::LMStudio,
+    };
+
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QList<QPair<LLMProvider, QString>> chain;
+    for (LLMProvider p : preferenceOrder) {
+        if (p == primary) continue;
+        if (!isProviderConfigured(p)) continue;
+        const QString model = settings.value(
+            providerSettingsKey(p) + QStringLiteral("/model")).toString().trimmed();
+        if (model.isEmpty()) continue;
+        chain.append(qMakePair(p, model));
+    }
+    return chain;
+}
+
+// ---------------------------------------------------------------------------
+// Try the next usable entry in the fallback chain (user-supplied or
+// auto-composed). "Usable" = provider is configured AND the {provider, model}
+// pair is not currently in a cooldown window. Re-dispatches the request with
+// the swapped {provider, model} and a trimmed chain so the fallback can
+// itself cascade. Streaming is not plumbed here; only non-streaming consumers
+// (LoreKeeper dossiers, Analyzer, Synopsis) benefit today.
+// ---------------------------------------------------------------------------
+bool LLMService::tryFallback(const LLMRequest &request, const NonStreamCallback &nonStreamCallback,
+                              const QString &previousError)
+{
+    if (!nonStreamCallback) return false; // streaming fallback: future work
+
+    // Use the caller-supplied chain if any, else auto-compose from configured
+    // providers (excluding the primary).
+    QList<QPair<LLMProvider, QString>> chain = request.fallbackChain;
+    if (chain.isEmpty()) {
+        chain = composeDefaultFallbackChain(request.provider);
+    }
+    if (chain.isEmpty()) return false;
+
+    // Find the first entry that is both configured and not cooled down.
+    while (!chain.isEmpty()) {
+        const auto next = chain.takeFirst();
+        if (next.second.isEmpty()) continue;                  // no model → skip
+        if (!isProviderConfigured(next.first)) continue;      // user hasn't set it up
+        if (isCooledDown(next.first, next.second)) continue;  // still rate-limited
+
+        LLMRequest retried = request;
+        retried.provider = next.first;
+        retried.model = next.second;
+        retried.fallbackChain = chain; // remainder, so we keep cascading
+        const QString serviceLabel = retried.serviceName.isEmpty()
+            ? providerName(retried.provider)
+            : retried.serviceName;
+        qWarning().noquote()
+            << "LLM fallback: switching" << serviceLabel
+            << "to" << providerName(retried.provider) << "/" << retried.model
+            << "(previous error:" << previousError.left(160) << ")";
+        validateModelThenDispatch(retried, nonStreamCallback);
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Resolve the model: prefer request.model, else read settings (no fallback).
 // ---------------------------------------------------------------------------
 QString LLMService::resolvedModel(const LLMRequest &request) const
@@ -332,6 +432,14 @@ void LLMService::validateModelThenDispatch(const LLMRequest &request,
                 providerLabel, model, when, remainingSec,
                 reason.isEmpty() ? i18n("rate-limited by provider") : reason);
             qWarning().noquote() << "LLM cooldown short-circuit:" << msg;
+
+            // Try fallback before notifying the caller. If a configured
+            // alternative provider exists and isn't also cooled down, we
+            // swap to it silently; the user sees an uninterrupted result.
+            if (nonStreamCallback && tryFallback(request, nonStreamCallback, msg)) {
+                return;
+            }
+
             if (nonStreamCallback) {
                 QPointer<LLMService> weakThis(this);
                 QMetaObject::invokeMethod(this, [weakThis, msg, nonStreamCallback]() {
@@ -634,7 +742,11 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
         connect(reply, &QNetworkReply::finished, this, &LLMService::handleFinished);
     } else {
         QPointer<LLMService> weakThis(this);
-        connect(reply, &QNetworkReply::finished, this, [weakThis, reply, nonStreamCallback, provider = request.provider, model = model, serviceName = request.serviceName]() {
+        // Capture the full request so the error branch can attempt a
+        // fallback-chain retry with a configured alternative provider.
+        connect(reply, &QNetworkReply::finished, this, [weakThis, reply, nonStreamCallback, originalRequest = request, model = model]() {
+            const LLMProvider provider = originalRequest.provider;
+            const QString serviceName = originalRequest.serviceName;
             QString result;
             QString errorMessage;
             if (reply->error() == QNetworkReply::NoError) {
@@ -716,6 +828,17 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
                         ? QStringLiteral("HTTP 429 (rate-limited)")
                         : bodyMsg.left(240);
                     weakThis->recordCooldown(provider, model, seconds, reasonText);
+                }
+
+                // Attempt to fall back to a configured alternative provider
+                // (auto-composed if the request didn't bring its own chain).
+                // If a fallback dispatches, our callback is forwarded to it
+                // and we must NOT also invoke it here with the error.
+                if (weakThis && nonStreamCallback
+                    && weakThis->tryFallback(originalRequest, nonStreamCallback, errorMessage))
+                {
+                    reply->deleteLater();
+                    return;
                 }
 
                 if (weakThis) {
