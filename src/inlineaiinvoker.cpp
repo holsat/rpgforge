@@ -49,29 +49,32 @@ InlineAIInvoker::InlineAIInvoker(KTextEditor::View *view, QObject *parent)
 {
     Q_ASSERT(m_view);
 
-    // Ctrl+Return triggers an @-command on the current line. We register
-    // the trigger as a QAction with an explicit shortcut and add it to
-    // the view widget — Qt's shortcut-event dispatch favours actions on
-    // the focused widget and walk upward, so the action fires even when
-    // Kate's internal editing widget has focus. (Plain QShortcut inside
-    // a KTextEditor::View doesn't reliably fire; Kate's own action
-    // collection intercepts key events before they reach child
-    // QShortcuts.)
+    // Ctrl+Shift+Return triggers an @-command on the current line.
     //
-    // Event-loop order of operations: Qt routes the KeyPress as a
-    // ShortcutOverride event first, the focused widget either accepts
-    // (overrides the shortcut) or ignores. If nobody overrides, the
-    // QAction fires. Kate doesn't override Ctrl+Return by default, so
-    // this path wins.
+    // Initially bound to plain Ctrl+Return, but Kate reserves that
+    // combination for its own action (inserts a newline in some
+    // contexts) and Qt's QAction-level ambiguity detection popped a
+    // "multiple actions bound" dialog. Ctrl+Shift+Return is unbound in
+    // Kate and matches Cursor/Copilot's "submit AI prompt" convention,
+    // so it's the safer default.
+    //
+    // We register as a QAction on the view because plain QShortcut
+    // inside a KTextEditor::View doesn't reliably fire — Kate's
+    // KActionCollection intercepts KeyPress before child QShortcuts
+    // see it. QAction with Qt::WidgetWithChildrenShortcut context
+    // goes through Qt's shortcut-override dispatch and fires
+    // regardless of which Kate sub-widget has focus.
     auto addAction = [this](Qt::Key keycode) {
         auto *a = new QAction(this);
-        a->setShortcut(QKeySequence(Qt::CTRL | keycode));
+        a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | keycode));
         a->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         connect(a, &QAction::triggered, this, [this]() {
             tryDispatchOnCurrentLine();
         });
         m_view->addAction(a);
     };
+    // Main-row Return + numpad Enter — some keyboards report them
+    // differently. Bind both for robustness.
     addAction(Qt::Key_Return);
     addAction(Qt::Key_Enter);
 

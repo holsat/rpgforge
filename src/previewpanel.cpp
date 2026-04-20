@@ -109,6 +109,9 @@ void PreviewPanel::setBaseUrl(const QUrl &url)
         baseUrl = url;
     }
 
+    qInfo().noquote() << "PreviewPanel::setBaseUrl input=" << url.toString()
+                      << "resolved=" << baseUrl.toString();
+
     if (m_baseUrl != baseUrl) {
         m_baseUrl = baseUrl;
         m_needsFullReload = true;

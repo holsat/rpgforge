@@ -129,25 +129,6 @@ int main(int argc, char *argv[])
     QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);
     QWebEngineProfile::defaultProfile()->clearHttpCache();
 
-    // Preview panel loads HTML via setHtml(html, baseUrl) where baseUrl
-    // is a file:// pointing at the active document's directory. Images,
-    // SVGs, and other referenced assets live on the local filesystem
-    // next to the document. By default, Chromium treats setHtml-content
-    // as opaque-origin and refuses cross-origin file loads — which
-    // manifests as PNG loads silently working (WebEngine has a permissive
-    // path for raster images from file://) but SVG <img> loads failing
-    // (SVG goes through the stricter XML fetch path and hits CORS).
-    //
-    // Enabling LocalContentCanAccessFileUrls + LocalContentCanAccessRemoteUrls
-    // on the default profile's settings lets setHtml-rendered pages
-    // load local file assets (and cross-origin ones like the KaTeX CDN).
-    // Low risk here because the preview only ever renders user-owned
-    // markdown from the project directory.
-    QWebEngineProfile::defaultProfile()->settings()->setAttribute(
-        QWebEngineSettings::LocalContentCanAccessFileUrls, true);
-    QWebEngineProfile::defaultProfile()->settings()->setAttribute(
-        QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
-
     QCoreApplication::setApplicationName(QStringLiteral("rpgforge"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("kde.org"));
 
