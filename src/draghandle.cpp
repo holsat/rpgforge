@@ -40,6 +40,8 @@ void DragHandle::mousePressEvent(QMouseEvent *event)
     m_sourceIndex = findMyIndex();
     m_pendingTargetIndex = m_sourceIndex;
     setCursor(Qt::ClosedHandCursor);
+    Q_EMIT dragStarted();
+    Q_EMIT targetIndexChanged(m_pendingTargetIndex);
     event->accept();
 }
 
@@ -55,7 +57,10 @@ void DragHandle::mouseMoveEvent(QMouseEvent *event)
     // mouse event can destroy the widget hierarchy the handler is still
     // unwinding through.
     const int idx = indexUnderGlobalPos(event->globalPosition().toPoint());
-    if (idx >= 0) m_pendingTargetIndex = idx;
+    if (idx >= 0 && idx != m_pendingTargetIndex) {
+        m_pendingTargetIndex = idx;
+        Q_EMIT targetIndexChanged(idx);
+    }
     event->accept();
 }
 
@@ -72,6 +77,7 @@ void DragHandle::mouseReleaseEvent(QMouseEvent *event)
     m_sourceIndex = -1;
     m_pendingTargetIndex = -1;
     setCursor(Qt::OpenHandCursor);
+    Q_EMIT dragReleased();
     event->accept();
 
     if (!m_layout || src < 0 || tgt < 0 || src == tgt) return;

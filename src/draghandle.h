@@ -47,6 +47,18 @@ class DragHandle : public QLabel
 public:
     DragHandle(QBoxLayout *layout, QWidget *parent = nullptr);
 
+Q_SIGNALS:
+    /// Fired on mousePress when a drag begins. Listener (e.g. the parent
+    /// settings dialog) can show a drop-indicator overlay.
+    void dragStarted();
+    /// Fired from mouseMove whenever the layout index the cursor is over
+    /// changes. @p targetIndex is the layout index at which the source
+    /// row would be inserted if the user released right now.
+    void targetIndexChanged(int targetIndex);
+    /// Fired on mouseRelease (regardless of whether the row actually
+    /// moved). Listener should hide any indicator overlay.
+    void dragReleased();
+
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;

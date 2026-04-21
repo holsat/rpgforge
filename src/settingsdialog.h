@@ -78,6 +78,14 @@ private:
     QHash<LLMProvider, class ToggleSwitch*> m_providerToggles;
     void saveProviderOrderList();
 
+    // Thin red bar shown between rows during a drag to indicate where the
+    // dragged row will be inserted on release. Lives as a child of the
+    // providers container so its geometry is naturally in the container's
+    // coordinate space. Hidden when not dragging.
+    class QFrame *m_providerDropIndicator = nullptr;
+    void showDropIndicatorAtIndex(int targetIndex);
+    void hideDropIndicator();
+
     // LLM settings
     // m_activeProviderCombo retired — the "active provider" concept is now
     // the top entry of the draggable fallback list. save() computes

@@ -107,6 +107,47 @@ void SettingsDialog::saveProviderOrderList()
     settings.setValue(QStringLiteral("llm/provider_order"), orderKeys);
 }
 
+// ---------------------------------------------------------------------------
+// Drop-indicator helpers. During a provider-row drag, DragHandle emits
+// targetIndexChanged with the layout index where the row will be inserted
+// on release. We translate that to a y-coordinate in the container's
+// coordinate space and position the thin red bar there.
+// ---------------------------------------------------------------------------
+void SettingsDialog::showDropIndicatorAtIndex(int targetIndex)
+{
+    if (!m_providerDropIndicator || !m_providerRowsLayout) return;
+    QWidget *container = m_providerDropIndicator->parentWidget();
+    if (!container) return;
+
+    const int rowCount = m_providerRowsLayout->count();
+    if (rowCount == 0) return;
+
+    const int spacing = m_providerRowsLayout->spacing();
+    int y = 0;
+    if (targetIndex <= 0) {
+        QWidget *first = m_providerRowsLayout->itemAt(0)->widget();
+        if (first) y = first->y() - qMax(1, spacing / 2);
+    } else if (targetIndex >= rowCount) {
+        QWidget *last = m_providerRowsLayout->itemAt(rowCount - 1)->widget();
+        if (last) y = last->y() + last->height() + qMax(1, spacing / 2)
+                         - m_providerDropIndicator->height();
+    } else {
+        QWidget *before = m_providerRowsLayout->itemAt(targetIndex - 1)->widget();
+        if (before) y = before->y() + before->height() + spacing / 2
+                           - m_providerDropIndicator->height() / 2;
+    }
+
+    m_providerDropIndicator->setGeometry(
+        0, y, container->width(), m_providerDropIndicator->height());
+    m_providerDropIndicator->raise();
+    m_providerDropIndicator->show();
+}
+
+void SettingsDialog::hideDropIndicator()
+{
+    if (m_providerDropIndicator) m_providerDropIndicator->hide();
+}
+
 QWidget* SettingsDialog::createLLMTab()
 {
     auto *tab = new QWidget(this);
@@ -130,6 +171,17 @@ QWidget* SettingsDialog::createLLMTab()
     m_providerRowsLayout->setSpacing(6);
     providersScroll->setWidget(providersContainer);
     layout->addWidget(providersScroll, /*stretch=*/1);
+
+    // Drop-indicator overlay: a thin red bar that shows where the dragged
+    // row will land on release. Child of providersContainer so its y-
+    // coordinate is the same space as the row widgets' geometries.
+    // raise() on show keeps it visible above siblings.
+    m_providerDropIndicator = new QFrame(providersContainer);
+    m_providerDropIndicator->setFrameShape(QFrame::NoFrame);
+    m_providerDropIndicator->setStyleSheet(
+        QStringLiteral("background-color: #e74c3c; border-radius: 1px;"));
+    m_providerDropIndicator->setFixedHeight(3);
+    m_providerDropIndicator->hide();
 
     auto *orderHint = new QLabel(
         i18n("Drag the ≡ handle to reorder providers. Toggle the switch to "
@@ -230,6 +282,20 @@ QWidget* SettingsDialog::createLLMTab()
         grip->setFixedWidth(20);
         grip->setAlignment(Qt::AlignCenter);
         rowLayout->addWidget(grip, 0, Qt::AlignTop);
+
+        // Live drop-position feedback. The indicator is owned by the
+        // providers container (created in this same function before the
+        // first buildProviderGroup call), so we can just toggle and
+        // reposition it from the drag signals.
+        connect(grip, &DragHandle::dragStarted, this, [this]() {
+            if (m_providerDropIndicator) {
+                showDropIndicatorAtIndex(0); // position will be updated immediately
+            }
+        });
+        connect(grip, &DragHandle::targetIndexChanged, this,
+                [this](int idx) { showDropIndicatorAtIndex(idx); });
+        connect(grip, &DragHandle::dragReleased, this,
+                [this]() { hideDropIndicator(); });
         rowLayout->addWidget(group, 1);
 
         auto *toggle = new ToggleSwitch(rowWidget);
