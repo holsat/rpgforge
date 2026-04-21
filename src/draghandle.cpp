@@ -20,6 +20,8 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMouseEvent>
+#include <QPointer>
+#include <QMetaObject>
 
 DragHandle::DragHandle(QListWidget *list, QWidget *parent)
     : QLabel(parent), m_list(list)
@@ -35,6 +37,7 @@ void DragHandle::mousePressEvent(QMouseEvent *event)
     }
     m_pressed = true;
     m_sourceRow = findMyRow();
+    m_pendingTargetRow = m_sourceRow;
     setCursor(Qt::ClosedHandCursor);
     event->accept();
 }
@@ -46,26 +49,16 @@ void DragHandle::mouseMoveEvent(QMouseEvent *event)
         return;
     }
 
-    // Compute the row under the cursor in the host list's viewport.
+    // Only track which row the cursor is over; do NOT mutate the list
+    // here. Calling takeItem / insertItem mid-event would reparent (or
+    // destroy) the row widget this handle lives in, dangling `this`
+    // before the handler returns. The real move is deferred to
+    // mouseRelease via a queued invocation — see below.
     const QPoint viewportPos = m_list->viewport()->mapFromGlobal(
         event->globalPosition().toPoint());
-    QListWidgetItem *target = m_list->itemAt(viewportPos);
-    if (!target) return;
-
-    const int targetRow = m_list->row(target);
-    if (targetRow < 0 || targetRow == m_sourceRow) return;
-
-    // Move our item. takeItem only unlinks; we still own the pointer.
-    // setItemWidget binds a widget to an item — the binding is on the
-    // list, so after takeItem the widget is not shown. We re-apply it
-    // after insertItem to restore the composite row contents.
-    QListWidgetItem *srcItem = m_list->item(m_sourceRow);
-    QWidget *srcWidget = m_list->itemWidget(srcItem);
-    m_list->takeItem(m_sourceRow);
-    m_list->insertItem(targetRow, srcItem);
-    if (srcWidget) m_list->setItemWidget(srcItem, srcWidget);
-
-    m_sourceRow = targetRow;
+    if (QListWidgetItem *target = m_list->itemAt(viewportPos)) {
+        m_pendingTargetRow = m_list->row(target);
+    }
     event->accept();
 }
 
@@ -75,10 +68,45 @@ void DragHandle::mouseReleaseEvent(QMouseEvent *event)
         QLabel::mouseReleaseEvent(event);
         return;
     }
+
+    const int src = m_sourceRow;
+    const int tgt = m_pendingTargetRow;
     m_pressed = false;
     m_sourceRow = -1;
+    m_pendingTargetRow = -1;
     setCursor(Qt::OpenHandCursor);
     event->accept();
+
+    if (!m_list || src < 0 || tgt < 0 || src == tgt) return;
+
+    // Defer the actual move to the event loop. Running takeItem +
+    // insertItem + setItemWidget from inside mouseRelease can still
+    // destroy the widget hierarchy the release is propagating through,
+    // which has been observed to crash on certain Qt builds. The
+    // queued invocation runs after this handler has fully returned and
+    // the event stack has unwound.
+    QPointer<QListWidget> list(m_list);
+    QMetaObject::invokeMethod(m_list, [list, src, tgt]() {
+        if (!list) return;
+        if (src >= list->count()) return;
+
+        QListWidgetItem *item = list->item(src);
+        if (!item) return;
+        QWidget *rowWidget = list->itemWidget(item);
+
+        // Detach the row widget from the list before the model mutation
+        // so Qt's internal persistent-index cleanup doesn't schedule it
+        // for deletion when the row disappears. We'll reparent it back
+        // when we re-bind with setItemWidget after the insert.
+        if (rowWidget) rowWidget->setParent(nullptr);
+
+        list->takeItem(src);
+        // Clamp tgt in case a row count change slipped in between the
+        // release and the queued callback.
+        const int safeTgt = qBound(0, tgt, list->count());
+        list->insertItem(safeTgt, item);
+        if (rowWidget) list->setItemWidget(item, rowWidget);
+    }, Qt::QueuedConnection);
 }
 
 int DragHandle::findMyRow() const

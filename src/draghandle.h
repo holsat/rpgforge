@@ -59,6 +59,12 @@ private:
     QListWidget *m_list;
     bool m_pressed = false;
     int  m_sourceRow = -1;
+    /// Row the cursor is currently over. Updated during mouseMove; the
+    /// actual list mutation is deferred to mouseRelease (via a queued
+    /// invocation) so we never rearrange while the event handler is
+    /// still running — mid-move reordering would destroy the row widget
+    /// this handle lives in and crash on the next mouse event.
+    int  m_pendingTargetRow = -1;
 };
 
 #endif // DRAGHANDLE_H
