@@ -1299,7 +1299,8 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
 
     QNetworkReply *reply = m_networkManager->post(netRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [reply, callback, provider]() {
+    QPointer<LLMService> weakThis(this);
+    connect(reply, &QNetworkReply::finished, this, [weakThis, reply, callback, provider, model]() {
         QVector<float> embedding;
         const QByteArray body = reply->readAll();
         if (reply->error() == QNetworkReply::NoError) {
@@ -1344,6 +1345,24 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
                                   << "HTTP" << httpStatus
                                   << err
                                   << "- body:" << QString::fromUtf8(body).left(512);
+
+            // Record a cooldown on 429 so KnowledgeBase::generateEmbeddingWithFallback
+            // skips this {provider, model} pair until the retry window passes,
+            // the same contract the chat paths use.
+            if (weakThis && httpStatus == 429 && !model.isEmpty()) {
+                int seconds = extractRetryDelaySecondsFromErrorBody(body);
+                if (seconds <= 0) seconds = 60;
+                QString reasonText;
+                QJsonDocument edoc = QJsonDocument::fromJson(body);
+                if (edoc.isObject()) {
+                    reasonText = edoc.object().value(QStringLiteral("error"))
+                                     .toObject().value(QStringLiteral("message"))
+                                     .toString().left(240);
+                }
+                if (reasonText.isEmpty())
+                    reasonText = QStringLiteral("HTTP 429 (embedding rate-limited)");
+                weakThis->recordCooldown(provider, model, seconds, reasonText);
+            }
         }
         if (callback) {
             callback(embedding);

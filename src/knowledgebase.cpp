@@ -68,99 +68,112 @@ namespace {
 //   3. llm/provider            + llm/<provider>/model       (inherit both)
 // If the resolved provider is Anthropic (no embeddings API) we return a
 // failure sentinel; callers must treat this as "embeddings disabled"
-// and emit a diagnostic the user can see.
-struct EmbeddingConfig {
-    LLMProvider provider;
-    QString     model;
-    bool        supportsEmbeddings;
-    QString     reason;  // human-readable when supportsEmbeddings == false
-};
-
-EmbeddingConfig resolveEmbeddingConfig()
+// ---------------------------------------------------------------------------
+// Build the user-ordered embedding chain. Walks llm/provider_order in order,
+// skipping disabled / unconfigured providers and entries that have no
+// embedding-model setting. Anthropic is always skipped — no embeddings API.
+// Returned pairs are {provider, embedding-model}.
+// ---------------------------------------------------------------------------
+QList<QPair<LLMProvider, QString>> resolveEmbeddingChain()
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    EmbeddingConfig out;
-
-    // Precedence:
-    //   1. llm/embedding_provider  (explicit)
-    //   2. llm/chat_provider       (if set and not Anthropic — matches
-    //                               whatever provider the user just picked
-    //                               in the Writing Assistant combo)
-    //   3. llm/provider            (global default)
-    //   4. Gemini                  (Anthropic-can't-do-embeddings fallback;
-    //                               explicit user request — most authors
-    //                               configuring Anthropic for chat usually
-    //                               also have Gemini available)
-    auto pick = [&](const QString &key, bool rejectAnthropic) -> std::optional<LLMProvider> {
-        if (!settings.contains(key)) return std::nullopt;
-        auto p = static_cast<LLMProvider>(settings.value(key).toInt());
-        if (rejectAnthropic && p == LLMProvider::Anthropic) return std::nullopt;
-        return p;
-    };
-
-    if (auto p = pick(QStringLiteral("llm/embedding_provider"), false)) {
-        out.provider = *p;
-    } else if (auto p = pick(QStringLiteral("llm/chat_provider"), true)) {
-        out.provider = *p;
-    } else if (auto p = pick(QStringLiteral("llm/provider"), true)) {
-        out.provider = *p;
-    } else {
-        // Anthropic-or-unset fallback: Gemini.
-        out.provider = LLMProvider::Gemini;
-        qWarning().noquote()
-            << "KnowledgeBase: primary provider does not support embeddings; "
-               "falling back to Gemini for RAG. Set llm/embedding_provider "
-               "to override.";
+    QList<QPair<LLMProvider, QString>> chain;
+    for (LLMProvider p : LLMService::readProviderOrderFromSettings()) {
+        if (p == LLMProvider::Anthropic) continue;       // no embeddings endpoint
+        if (!LLMService::isProviderEnabled(p)) continue; // user turned it off
+        if (!LLMService::instance().isProviderConfigured(p)) continue;
+        const QString model = settings.value(
+            LLMService::providerSettingsKey(p)
+            + QStringLiteral("/embedding_model")).toString().trimmed();
+        if (model.isEmpty()) continue;
+        chain.append(qMakePair(p, model));
     }
+    return chain;
+}
 
-    out.model = settings.value(QStringLiteral("llm/embedding_model")).toString();
-    if (out.model.isEmpty()) {
-        // Try a provider-specific embedding-model setting, then the
-        // provider's chat-model as a last resort (works for Ollama/LMStudio
-        // whose chat models double as embedding models on many setups;
-        // will just fail cleanly with a log line if the model doesn't
-        // support embeddings).
-        const QString sk = LLMService::providerSettingsKey(out.provider);
-        out.model = settings.value(sk + QStringLiteral("/embedding_model")).toString();
-        if (out.model.isEmpty()) {
-            out.model = settings.value(sk + QStringLiteral("/model")).toString();
-        }
+// Helper for log output — joins chain into a short human-readable string.
+QString describeChain(const QList<QPair<LLMProvider, QString>> &chain)
+{
+    if (chain.isEmpty()) return QStringLiteral("<empty>");
+    QStringList parts;
+    for (const auto &e : chain) {
+        parts.append(QStringLiteral("%1/%2")
+                         .arg(LLMService::providerName(e.first), e.second));
     }
-
-    // Anthropic still short-circuits — even if the user explicitly set
-    // llm/embedding_provider to Anthropic, there's no endpoint to hit.
-    if (out.provider == LLMProvider::Anthropic) {
-        out.supportsEmbeddings = false;
-        out.reason = QStringLiteral(
-            "Anthropic does not provide an embeddings API. Configure "
-            "llm/embedding_provider to Gemini, LMStudio, Ollama, or OpenAI.");
-        return out;
-    }
-    if (out.model.isEmpty()) {
-        out.supportsEmbeddings = false;
-        out.reason = QStringLiteral(
-            "No embedding model configured. Set llm/embedding_model or "
-            "the provider-specific <provider>/embedding_model in settings.");
-        return out;
-    }
-
-    out.supportsEmbeddings = true;
-    return out;
+    return parts.join(QStringLiteral(", "));
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// KnowledgeBase::generateEmbeddingWithFallback
+// Walks the user-configured embedding chain. For each candidate: skip if
+// currently cooled down (from a previous 429), otherwise call
+// LLMService::generateEmbedding. On empty vector (request failed),
+// recurse to the next candidate. Invokes the user's callback with an
+// empty vector only if the full chain is exhausted.
+// ---------------------------------------------------------------------------
+void KnowledgeBase::generateEmbeddingWithFallback(
+    const QString &text, std::function<void(const QVector<float>&)> callback)
+{
+    auto chainPtr = std::make_shared<QList<QPair<LLMProvider, QString>>>(
+        resolveEmbeddingChain());
+    if (chainPtr->isEmpty()) {
+        qWarning().noquote()
+            << "KnowledgeBase: embedding chain is empty — no provider has an "
+               "embedding model configured. RAG request skipped.";
+        if (callback) callback({});
+        return;
+    }
+
+    // Recursive self-referential lambda; shared_ptr keeps the function
+    // alive across async hops through LLMService callbacks.
+    auto tryOne = std::make_shared<std::function<void(int)>>();
+    QPointer<KnowledgeBase> weakThis(this);
+    *tryOne = [weakThis, chainPtr, text, callback, tryOne](int idx) {
+        if (!weakThis || idx >= chainPtr->size()) {
+            if (callback) callback({});
+            return;
+        }
+        const auto &p = (*chainPtr)[idx];
+        // Skip cooled-down pairs without network traffic.
+        if (LLMService::instance().isCooledDown(p.first, p.second)) {
+            qWarning().noquote()
+                << "KnowledgeBase: embedding candidate"
+                << LLMService::providerName(p.first) << "/" << p.second
+                << "is cooling down; trying next.";
+            (*tryOne)(idx + 1);
+            return;
+        }
+        LLMService::instance().generateEmbedding(
+            p.first, p.second, text,
+            [tryOne, callback, idx, provider = p.first, model = p.second](const QVector<float> &vec) {
+                if (!vec.isEmpty()) {
+                    if (callback) callback(vec);
+                    return;
+                }
+                qWarning().noquote()
+                    << "KnowledgeBase: embedding failed on"
+                    << LLMService::providerName(provider) << "/" << model
+                    << "— falling back to next candidate.";
+                (*tryOne)(idx + 1);
+            });
+    };
+    (*tryOne)(0);
+}
 
 void KnowledgeBase::initForProject(const QString &projectPath)
 {
     if (projectPath.isEmpty()) return;
 
-    const EmbeddingConfig emb = resolveEmbeddingConfig();
+    const auto chain = resolveEmbeddingChain();
     qWarning().noquote() << "KnowledgeBase::initForProject:" << projectPath;
-    qWarning().noquote() << "KnowledgeBase: embedding provider=" << static_cast<int>(emb.provider)
-                         << "model=" << emb.model
-                         << "supportsEmbeddings=" << emb.supportsEmbeddings;
-    if (!emb.supportsEmbeddings) {
-        qWarning().noquote() << "KnowledgeBase: RAG is DISABLED — reason:" << emb.reason;
+    qWarning().noquote() << "KnowledgeBase: embedding chain:" << describeChain(chain);
+    if (chain.isEmpty()) {
+        qWarning().noquote()
+            << "KnowledgeBase: RAG is DISABLED — no provider has an embedding "
+               "model configured. Open Settings → LLM and set an embedding "
+               "model for at least one enabled provider.";
     }
 
     QMutexLocker locker(&m_dbMutex);
@@ -296,19 +309,19 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
 
     QStringList rawChunks = content.split(QRegularExpression(QStringLiteral("(?=\\n##? )")));
 
-    const EmbeddingConfig emb = resolveEmbeddingConfig();
-    if (!emb.supportsEmbeddings) {
+    // Chain is resolved per-chunk via generateEmbeddingWithFallback, but we
+    // do a quick pre-check here so we can log a single DISABLED warning
+    // instead of one per chunk when nothing is configured.
+    if (resolveEmbeddingChain().isEmpty()) {
         static bool warned = false;
         if (!warned) {
             qWarning().noquote()
-                << "KnowledgeBase: RAG indexing is DISABLED —" << emb.reason
-                << "— the Writing Assistant will have no project context.";
+                << "KnowledgeBase: RAG indexing is DISABLED — no provider has "
+                   "an embedding model configured. Open Settings → LLM.";
             warned = true;
         }
         return;
     }
-    const LLMProvider provider = emb.provider;
-    const QString model = emb.model;
 
     {
         QSqlDatabase db = database();
@@ -333,7 +346,7 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         m_pendingEmbeddings++;
         Q_EMIT indexingProgress(0, m_pendingEmbeddings);
 
-        LLMService::instance().generateEmbedding(provider, model, trimmed, [weakThis, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
+        generateEmbeddingWithFallback(trimmed, [weakThis, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
             if (!weakThis) return;
             if (!embedding.isEmpty()) {
                 weakThis->storeChunk(filePath, heading, trimmed, embedding, currentHash);
@@ -413,23 +426,21 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
         relativeActiveFiles.append(QDir(m_projectPath).relativeFilePath(abs));
     }
 
-    const EmbeddingConfig emb = resolveEmbeddingConfig();
-    if (!emb.supportsEmbeddings) {
+    if (resolveEmbeddingChain().isEmpty()) {
         static bool warned = false;
         if (!warned) {
             qWarning().noquote()
-                << "KnowledgeBase::search: RAG retrieval is DISABLED —" << emb.reason
-                << "— returning empty result list.";
+                << "KnowledgeBase::search: RAG retrieval is DISABLED — no "
+                   "provider has an embedding model configured. Returning "
+                   "empty result list.";
             warned = true;
         }
         callback({});
         return;
     }
-    const LLMProvider provider = emb.provider;
-    const QString model = emb.model;
 
     QPointer<KnowledgeBase> weakThis(this);
-    LLMService::instance().generateEmbedding(provider, model, queryText, [weakThis, topK, excludeFile, relativeActiveFiles, callback](const QVector<float> &queryVector) {
+    generateEmbeddingWithFallback(queryText, [weakThis, topK, excludeFile, relativeActiveFiles, callback](const QVector<float> &queryVector) {
         if (!weakThis || queryVector.isEmpty()) {
             if (callback) callback({});
             return;
@@ -508,13 +519,13 @@ void KnowledgeBase::reindexProject()
         return;
     }
 
-    const EmbeddingConfig emb = resolveEmbeddingConfig();
+    const auto chain = resolveEmbeddingChain();
     qWarning().noquote() << "KnowledgeBase::reindexProject: starting";
-    qWarning().noquote() << "  embedding provider=" << static_cast<int>(emb.provider)
-                          << "model=" << emb.model
-                          << "supportsEmbeddings=" << emb.supportsEmbeddings;
-    if (!emb.supportsEmbeddings) {
-        qWarning().noquote() << "  ABORTING: embeddings disabled —" << emb.reason;
+    qWarning().noquote() << "  embedding chain:" << describeChain(chain);
+    if (chain.isEmpty()) {
+        qWarning().noquote()
+            << "  ABORTING: no provider has an embedding model configured. "
+               "Open Settings → LLM.";
         return;
     }
 

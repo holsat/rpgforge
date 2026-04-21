@@ -56,6 +56,17 @@ public:
     void pause();
     void resume();
 
+    /**
+     * @brief Dispatches an embedding request through the user's ordered
+     * provider fallback chain (llm/provider_order + per-provider
+     * embedding_model). On failure or cooldown, tries the next enabled +
+     * configured provider until one succeeds or the chain is exhausted.
+     * The callback receives the embedding vector on success, or an empty
+     * vector if every candidate in the chain failed.
+     */
+    void generateEmbeddingWithFallback(const QString &text,
+                                       std::function<void(const QVector<float>&)> callback);
+
 Q_SIGNALS:
     void indexingProgress(int current, int total);
     void indexingFinished();
