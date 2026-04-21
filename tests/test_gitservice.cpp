@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     Integration tests for GitService against a real temporary libgit2 repo.
 */

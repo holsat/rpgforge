@@ -1,0 +1,48 @@
+Bugs
+
+It seems that the RAG/Query service refactoring broke things. It doesn't return any information if you have a file open and are asking about information that is not in that file.
+
+When it returns information from the current file, it adds a lot of file referenes that should be output as links to a project file, such that clicking that link would open the approrpriate file.
+
+Moral Stance: He despises barbaric slavers, referring to them as "human refuse" (/home/sheldonl/Documents/Kabal RPG Project/manuscript/Prologue/Prologue.md). While he is not overtly arrogant, he considers himself superior to the slavers accompanying their expedition (/home/sheldonl/Documents/Kabal RPG Project/manuscript/Prologue/Prologue.md).
+
+please give me a synopsys of the basic rolling dice mechanics for the Kabal RPG.
+
+I currently do not have any source files or documentation for the Kabal RPG uploaded to this session.
+
+To provide a synthesis of the rolling dice mechanics with the required inline citations (path/to/file.md), please upload the relevant manuscript chapters, rulebooks, or research notes. Once provided, I will be able to outline the mechanics using only your established text.
+
+Insert at Cursor
+Not true, you have the source for called Kabal v0.18 - Part 1 - Intro to Flaws
+
+I apologize for the confusion. However, looking at my current active session, there are no files attached or uploaded. If you uploaded "Kabal v0.18 - Part 1 - Intro to Flaws" in a previous chat or separate window, I do not have access to it here, as each session starts with a fresh context.
+
+Please upload the file(s) to this specific conversation. Once you do, I will be able to synthesize the dice mechanics and provide the exact inline citations (path/to/file.md) as requested.
+
+* Variable autocomplete is broken
+* Varialbe autocreation doesn't work
+
+Some critial editor functionality has broken. WHen I'm typing in a file and I type {arakasha the app used to, previously show an autocomplete based
+  on the defined custom variables configured for the project (which right now is arakasha.hitpoint. If I type arakasha the normal Kate autocomplete
+  for the word Arakasha works, but autocomplete for variables does now. Also, the lore keeper service was also intended to automatically
+  create/extract variables from the text but I've never seen it do that successfully. For example, the difficulty level table that follows in markdown
+    **Difficulty** | **Name** | **Target \#** | **Description** |
+  |:--:|----|:--:|----|
+  | 0 | Routine | 0 | No brainer, people do this every day |
+  | 1 | Simple | 4 | Almost everyone can do this, most of the time |
+  | 2 | Standard | 8 | Requires some concentration but most people can usually do this |
+  | 3 | Taxing | 12 | Requires full concentration, most people have a 50% chance of success |
+  | 4 | Challenging | 16 | Trained individuals have a 50% chance of success, untrained usually fail |
+  | 5 | Difficult | 20 | Impossible without serious skill and great effort. Minimum difficulty for *aptitude checks.* |
+  | 6 | Strenuous | 24 | Difficult even for the Masters |
+  | 7 | Arduous | 28 | Even Masters rarely succeed |
+  | 8 | Extreme | 32 | A feat a bard could write a song about |
+  | 9 | Imposing | 36 | A mythic feat attributed to the Gods |
+  | 10 | Awful | 40 | Impossible, a Hail Mary, attempting this should fill you with dread. You are almost certain to fail. | should produce the
+  following variables and sub variables difficulty.0.name = routine difficulty.0.target = 0 difficulty.description = No brainer, people do this every
+  day. difficulty.1.name = Simple, difficulty.1.target = 4, difficulty.1.description = Almost everyone can do this, most of the time. And so forth up to difficutly.10.name - Awful, etc. you get the point.
+
+  Document syncronization scrolling with the preview window is broken.
+
+
+Collapse the Folder FileSystem tree view at the bottom of the project explorer sidebar by default. Have a button that can show/hide it and instead put the document outline window there.

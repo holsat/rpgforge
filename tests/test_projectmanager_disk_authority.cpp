@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     Phase 6 disk-authority tests — the tree is derived from walking the
     project directory on disk; the legacy `tree` JSON is migrated once on
