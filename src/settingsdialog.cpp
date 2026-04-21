@@ -112,13 +112,6 @@ QWidget* SettingsDialog::createLLMTab()
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
 
-    m_activeProviderCombo = new QComboBox(this);
-    m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok (xAI)"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
-
-    auto *providerLayout = new QFormLayout();
-    providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
-    layout->addLayout(providerLayout);
-
     // --- Provider stack ---
     // Each provider's credential/model block lives in a composite row
     // (grip icon | group box | toggle switch) added to a plain
@@ -668,7 +661,6 @@ void SettingsDialog::load()
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     m_typewriterScrollingCheck->setChecked(settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool());
 
-    m_activeProviderCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     // Model fields: no hardcoded defaults — empty means "not configured yet"
     // Placeholder text in the widget gives the user a hint without seeding QSettings.
 
@@ -861,7 +853,20 @@ void SettingsDialog::save()
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     settings.setValue(QStringLiteral("editor/typewriterScrolling"), m_typewriterScrollingCheck->isChecked());
 
-    settings.setValue(QStringLiteral("llm/provider"), m_activeProviderCombo->currentIndex());
+    // Derive the "active provider" (legacy llm/provider key, still read as
+    // a fallback by many agents) from the top row of the draggable
+    // provider list. That row is, by user-evident construction, the
+    // preferred primary.
+    if (m_providerRowsLayout && m_providerRowsLayout->count() > 0) {
+        if (QLayoutItem *first = m_providerRowsLayout->itemAt(0)) {
+            if (QWidget *row = first->widget()) {
+                const QVariant tag = row->property("llmProvider");
+                if (tag.isValid()) {
+                    settings.setValue(QStringLiteral("llm/provider"), tag.toInt());
+                }
+            }
+        }
+    }
 
     // Per-provider embedding model (replaces the single global field).
     for (auto it = m_providerEmbeddingCombos.constBegin();

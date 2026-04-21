@@ -79,7 +79,11 @@ private:
     void saveProviderOrderList();
 
     // LLM settings
-    QComboBox *m_activeProviderCombo;
+    // m_activeProviderCombo retired — the "active provider" concept is now
+    // the top entry of the draggable fallback list. save() computes
+    // llm/provider from that row's LLMProvider property so existing
+    // callers that still read llm/provider (fallback for agents without
+    // an explicit provider set) keep seeing a sensible value.
     QLineEdit *m_openaiKeyEdit;
     QComboBox *m_openaiModelCombo;
     QLineEdit *m_openaiEndpointEdit;
