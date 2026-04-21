@@ -212,6 +212,8 @@ add_executable(rpgforge
     src/simulationcomparedialog.h
     src/settingsdialog.cpp
     src/settingsdialog.h
+    src/toggleswitch.cpp
+    src/toggleswitch.h
     src/prompteditordialog.cpp
     src/prompteditordialog.h
     src/diagnosticdetaildialog.cpp

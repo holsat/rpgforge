@@ -68,12 +68,13 @@ private:
     // Editor settings
     QCheckBox *m_typewriterScrollingCheck = nullptr;
 
-    // Provider fallback order: draggable list of providers with per-row
-    // enable checkbox. Row order persists to QSettings llm/provider_order
-    // and check state to llm/{provider}/enabled. Used by LLMService's
-    // composeDefaultFallbackChain.
-    QListWidget *m_providerOrderList = nullptr;
-    void buildProviderOrderList();
+    // Each provider's settings block is wrapped in a composite row widget
+    // (grip icon | group box | toggle switch) and inserted as an item in
+    // this QListWidget. Drag-to-reorder is native via InternalMove, and
+    // the toggle switch on each row controls llm/{provider}/enabled.
+    // Persists to llm/provider_order + per-provider /enabled on save.
+    QListWidget *m_providerListWidget = nullptr;
+    QHash<LLMProvider, class ToggleSwitch*> m_providerToggles;
     void saveProviderOrderList();
 
     // LLM settings
