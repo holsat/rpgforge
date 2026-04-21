@@ -19,6 +19,8 @@
 
 #include "settingsdialog.h"
 #include "prompteditordialog.h"
+#include "toggleswitch.h"
+#include "draghandle.h"
 #include <KLocalizedString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -79,104 +81,307 @@ void SettingsDialog::setupUi()
     setMinimumSize(600, 650);
 }
 
+// ---------------------------------------------------------------------------
+// Persist the user's reordered provider list + per-provider enabled flag.
+// Order comes from the live row order in the QListWidget (moved around by
+// drag-reorder); enabled state comes from each row's ToggleSwitch.
+// ---------------------------------------------------------------------------
+void SettingsDialog::saveProviderOrderList()
+{
+    if (!m_providerRowsLayout) return;
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QStringList orderKeys;
+    for (int i = 0; i < m_providerRowsLayout->count(); ++i) {
+        QLayoutItem *item = m_providerRowsLayout->itemAt(i);
+        QWidget *w = item ? item->widget() : nullptr;
+        if (!w) continue;
+        const QVariant tag = w->property("llmProvider");
+        if (!tag.isValid()) continue;
+        const auto p = static_cast<LLMProvider>(tag.toInt());
+        orderKeys.append(LLMService::providerKey(p));
+        if (ToggleSwitch *sw = m_providerToggles.value(p, nullptr)) {
+            settings.setValue(LLMService::providerSettingsKey(p) + QStringLiteral("/enabled"),
+                              sw->isChecked());
+        }
+    }
+    settings.setValue(QStringLiteral("llm/provider_order"), orderKeys);
+}
+
+// ---------------------------------------------------------------------------
+// Drop-indicator helpers. During a provider-row drag, DragHandle emits
+// targetIndexChanged with the layout index where the row will be inserted
+// on release. We translate that to a y-coordinate in the container's
+// coordinate space and position the thin red bar there.
+// ---------------------------------------------------------------------------
+void SettingsDialog::showDropIndicatorAtIndex(int targetIndex)
+{
+    if (!m_providerDropIndicator || !m_providerRowsLayout) return;
+    QWidget *container = m_providerDropIndicator->parentWidget();
+    if (!container) return;
+
+    const int rowCount = m_providerRowsLayout->count();
+    if (rowCount == 0) return;
+
+    const int spacing = m_providerRowsLayout->spacing();
+    int y = 0;
+    if (targetIndex <= 0) {
+        QWidget *first = m_providerRowsLayout->itemAt(0)->widget();
+        if (first) y = first->y() - qMax(1, spacing / 2);
+    } else if (targetIndex >= rowCount) {
+        QWidget *last = m_providerRowsLayout->itemAt(rowCount - 1)->widget();
+        if (last) y = last->y() + last->height() + qMax(1, spacing / 2)
+                         - m_providerDropIndicator->height();
+    } else {
+        QWidget *before = m_providerRowsLayout->itemAt(targetIndex - 1)->widget();
+        if (before) y = before->y() + before->height() + spacing / 2
+                           - m_providerDropIndicator->height() / 2;
+    }
+
+    m_providerDropIndicator->setGeometry(
+        0, y, container->width(), m_providerDropIndicator->height());
+    m_providerDropIndicator->raise();
+    m_providerDropIndicator->show();
+}
+
+void SettingsDialog::hideDropIndicator()
+{
+    if (m_providerDropIndicator) m_providerDropIndicator->hide();
+}
+
 QWidget* SettingsDialog::createLLMTab()
 {
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
 
-    m_activeProviderCombo = new QComboBox(this);
-    m_activeProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok (xAI)"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
-    
-    auto *providerLayout = new QFormLayout();
-    providerLayout->addRow(i18n("Active Provider:"), m_activeProviderCombo);
-    // Provider agnostic
-    m_embeddingModelEdit = new QLineEdit(this);
-    m_embeddingModelEdit->setPlaceholderText(i18n("Select via provider model list"));
-    providerLayout->addRow(i18n("Embedding Model:"), m_embeddingModelEdit);
-    layout->addLayout(providerLayout);
+    // --- Provider stack ---
+    // Each provider's credential/model block lives in a composite row
+    // (grip icon | group box | toggle switch) added to a plain
+    // QVBoxLayout inside a QScrollArea. DragHandle reorders by
+    // removeWidget/insertWidget on this layout — no QListWidget,
+    // no setItemWidget persistent-editor fragility. Row order persists
+    // to llm/provider_order; the toggle state persists to
+    // llm/{provider}/enabled and drives the fallback chain in
+    // LLMService::composeDefaultFallbackChain.
+    auto *providersScroll = new QScrollArea(this);
+    providersScroll->setWidgetResizable(true);
+    providersScroll->setFrameShape(QFrame::NoFrame);
+    auto *providersContainer = new QWidget(providersScroll);
+    m_providerRowsLayout = new QVBoxLayout(providersContainer);
+    m_providerRowsLayout->setContentsMargins(0, 0, 0, 0);
+    m_providerRowsLayout->setSpacing(6);
+    providersScroll->setWidget(providersContainer);
+    layout->addWidget(providersScroll, /*stretch=*/1);
 
-    // OpenAI Group
-    auto *openaiGroup = new QGroupBox(i18n("OpenAI"), this);
-    auto *openaiLayout = new QFormLayout(openaiGroup);
-    m_openaiKeyEdit = new QLineEdit(this);
-    m_openaiKeyEdit->setEchoMode(QLineEdit::Password);
-    openaiLayout->addRow(i18n("API Key:"), m_openaiKeyEdit);
-    m_openaiModelEdit = new QLineEdit(this);
-    m_openaiModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    openaiLayout->addRow(i18n("Default Model:"), m_openaiModelEdit);
-    m_openaiEndpointEdit = new QLineEdit(this);
-    m_openaiEndpointEdit->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
-    openaiLayout->addRow(i18n("Endpoint:"), m_openaiEndpointEdit);
-    layout->addWidget(openaiGroup);
+    // Drop-indicator overlay: a thin red bar that shows where the dragged
+    // row will land on release. Child of providersContainer so its y-
+    // coordinate is the same space as the row widgets' geometries.
+    // raise() on show keeps it visible above siblings.
+    m_providerDropIndicator = new QFrame(providersContainer);
+    m_providerDropIndicator->setFrameShape(QFrame::NoFrame);
+    m_providerDropIndicator->setStyleSheet(
+        QStringLiteral("background-color: #e74c3c; border-radius: 1px;"));
+    m_providerDropIndicator->setFixedHeight(3);
+    m_providerDropIndicator->hide();
 
-    // Anthropic Group
-    auto *anthropicGroup = new QGroupBox(i18n("Anthropic"), this);
-    auto *anthropicLayout = new QFormLayout(anthropicGroup);
-    m_anthropicKeyEdit = new QLineEdit(this);
-    m_anthropicKeyEdit->setEchoMode(QLineEdit::Password);
-    anthropicLayout->addRow(i18n("API Key:"), m_anthropicKeyEdit);
-    m_anthropicModelEdit = new QLineEdit(this);
-    m_anthropicModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    anthropicLayout->addRow(i18n("Default Model:"), m_anthropicModelEdit);
-    m_anthropicEndpointEdit = new QLineEdit(this);
-    m_anthropicEndpointEdit->setPlaceholderText(QStringLiteral("https://api.anthropic.com/v1/messages"));
-    anthropicLayout->addRow(i18n("Endpoint:"), m_anthropicEndpointEdit);
-    layout->addWidget(anthropicGroup);
+    auto *orderHint = new QLabel(
+        i18n("Drag the ≡ handle to reorder providers. Toggle the switch to "
+             "pause a provider — paused providers don't participate in "
+             "fallback. Services pick their primary in the Agents tab."),
+        this);
+    orderHint->setWordWrap(true);
+    QFont hintFont = orderHint->font();
+    hintFont.setItalic(true);
+    orderHint->setFont(hintFont);
+    layout->addWidget(orderHint);
 
-    // Ollama Group
-    auto *ollamaGroup = new QGroupBox(i18n("Ollama"), this);
-    auto *ollamaLayout = new QFormLayout(ollamaGroup);
-    m_ollamaEndpointEdit = new QLineEdit(this);
-    m_ollamaEndpointEdit->setPlaceholderText(QStringLiteral("http://localhost:11434/api/chat"));
-    ollamaLayout->addRow(i18n("Local Endpoint:"), m_ollamaEndpointEdit);
-    m_ollamaModelEdit = new QLineEdit(this);
-    m_ollamaModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    ollamaLayout->addRow(i18n("Default Model:"), m_ollamaModelEdit);
-    layout->addWidget(ollamaGroup);
+    // Helper: build one provider's composite row (grip | group box | toggle)
+    // and append it as an item in m_providerListWidget. The group box holds
+    // API-key (optional), endpoint, default-model combo, embedding-model
+    // combo, and inline status label. Wires editingFinished on the key /
+    // endpoint fields to testProviderConnection so the combos auto-populate
+    // once the user has credentials.
+    auto buildProviderGroup = [this](LLMProvider provider,
+                                     const QString &title,
+                                     const QString &endpointPlaceholder,
+                                     bool hasKey,
+                                     bool keyOptional,
+                                     QLineEdit **keyOut,
+                                     QLineEdit **endpointOut,
+                                     QComboBox **modelComboOut,
+                                     const QString &endpointLabel = QString()) {
+        auto *group = new QGroupBox(title, this);
+        auto *form = new QFormLayout(group);
 
-    // Grok Group
-    auto *grokGroup = new QGroupBox(i18n("Grok (xAI)"), this);
-    auto *grokLayout = new QFormLayout(grokGroup);
-    m_grokKeyEdit = new QLineEdit(this);
-    m_grokKeyEdit->setEchoMode(QLineEdit::Password);
-    grokLayout->addRow(i18n("API Key:"), m_grokKeyEdit);
-    m_grokModelEdit = new QLineEdit(this);
-    m_grokModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    grokLayout->addRow(i18n("Default Model:"), m_grokModelEdit);
-    m_grokEndpointEdit = new QLineEdit(this);
-    m_grokEndpointEdit->setPlaceholderText(QStringLiteral("https://api.x.ai/v1/chat/completions"));
-    grokLayout->addRow(i18n("Endpoint:"), m_grokEndpointEdit);
-    layout->addWidget(grokGroup);
+        QLineEdit *keyEdit = nullptr;
+        if (hasKey) {
+            keyEdit = new QLineEdit(this);
+            keyEdit->setEchoMode(QLineEdit::Password);
+            form->addRow(keyOptional ? i18n("API Key (Optional):")
+                                     : i18n("API Key:"),
+                         keyEdit);
+        }
 
-    // Google Group
-    auto *geminiGroup = new QGroupBox(i18n("Google"), this);
-    auto *geminiLayout = new QFormLayout(geminiGroup);
-    m_geminiKeyEdit = new QLineEdit(this);
-    m_geminiKeyEdit->setEchoMode(QLineEdit::Password);
-    geminiLayout->addRow(i18n("API Key:"), m_geminiKeyEdit);
-    m_geminiModelEdit = new QLineEdit(this);
-    m_geminiModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    geminiLayout->addRow(i18n("Default Model:"), m_geminiModelEdit);
-    m_geminiEndpointEdit = new QLineEdit(this);
-    m_geminiEndpointEdit->setPlaceholderText(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"));
-    geminiLayout->addRow(i18n("Endpoint:"), m_geminiEndpointEdit);
-    layout->addWidget(geminiGroup);
+        auto *endpointEdit = new QLineEdit(this);
+        endpointEdit->setPlaceholderText(endpointPlaceholder);
+        form->addRow(endpointLabel.isEmpty() ? i18n("Endpoint:")
+                                             : endpointLabel,
+                     endpointEdit);
 
-    // LM Studio Group
-    auto *lmstudioGroup = new QGroupBox(i18n("LM Studio"), this);
-    auto *lmstudioLayout = new QFormLayout(lmstudioGroup);
-    m_lmstudioKeyEdit = new QLineEdit(this);
-    m_lmstudioKeyEdit->setEchoMode(QLineEdit::Password);
-    lmstudioLayout->addRow(i18n("API Key (Optional):"), m_lmstudioKeyEdit);
-    m_lmstudioModelEdit = new QLineEdit(this);
-    m_lmstudioModelEdit->setPlaceholderText(i18n("Enter or fetch model name"));
-    lmstudioLayout->addRow(i18n("Default Model:"), m_lmstudioModelEdit);
-    m_lmstudioEndpointEdit = new QLineEdit(this);
-    m_lmstudioEndpointEdit->setPlaceholderText(QStringLiteral("http://localhost:1234/v1/chat/completions"));
-    lmstudioLayout->addRow(i18n("Endpoint:"), m_lmstudioEndpointEdit);
-    layout->addWidget(lmstudioGroup);
+        auto *modelCombo = new QComboBox(this);
+        modelCombo->setEditable(true);
+        modelCombo->setMinimumWidth(350);
+        modelCombo->lineEdit()->setPlaceholderText(
+            i18n("Enter API key above to auto-populate"));
+        form->addRow(i18n("Default Model:"), modelCombo);
 
-    layout->addStretch();
+        // Per-provider embedding model combo. Populated by the same fetch;
+        // filterEmbeddingModels returns only embedding-capable entries. If
+        // the filter yields nothing (Anthropic/Grok don't publish
+        // embedding endpoints) the combo stays disabled with a "Not
+        // supported" placeholder — KnowledgeBase's chain walk will skip
+        // this provider for embedding requests.
+        auto *embeddingCombo = new QComboBox(this);
+        embeddingCombo->setEditable(true);
+        embeddingCombo->setMinimumWidth(350);
+        embeddingCombo->lineEdit()->setPlaceholderText(
+            i18n("Populates after key/endpoint is set"));
+        form->addRow(i18n("Embedding Model:"), embeddingCombo);
+
+        auto *statusLabel = new QLabel(QString(), this);
+        statusLabel->setWordWrap(true);
+        QFont sf = statusLabel->font();
+        sf.setItalic(true);
+        statusLabel->setFont(sf);
+        form->addRow(QString(), statusLabel);
+
+        // Compose row: [grip handle | provider group box | enable toggle].
+        // The grip is a visual drag-affordance; the whole row is draggable
+        // via the QListWidget's InternalMove. The toggle flips this
+        // provider's participation in the fallback chain.
+        auto *rowWidget = new QWidget(this);
+        auto *rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(4, 2, 4, 2);
+        rowLayout->setSpacing(8);
+
+        // Draggable grip: DragHandle reorders rows in
+        // m_providerRowsLayout on mouseRelease. See draghandle.cpp.
+        auto *grip = new DragHandle(m_providerRowsLayout, rowWidget);
+        const QIcon gripIcon = QIcon::fromTheme(
+            QStringLiteral("application-menu"),
+            QIcon::fromTheme(QStringLiteral("open-menu-symbolic")));
+        if (!gripIcon.isNull()) {
+            grip->setPixmap(gripIcon.pixmap(16, 16));
+        } else {
+            // Fallback glyph when the theme has no hamburger icon.
+            grip->setText(QStringLiteral("\u2630"));
+            QFont gf = grip->font();
+            gf.setPointSize(gf.pointSize() + 2);
+            grip->setFont(gf);
+        }
+        grip->setToolTip(i18n("Drag to reorder fallback position"));
+        grip->setFixedWidth(20);
+        grip->setAlignment(Qt::AlignCenter);
+        rowLayout->addWidget(grip, 0, Qt::AlignTop);
+
+        // Live drop-position feedback. The indicator is owned by the
+        // providers container (created in this same function before the
+        // first buildProviderGroup call), so we can just toggle and
+        // reposition it from the drag signals.
+        connect(grip, &DragHandle::dragStarted, this, [this]() {
+            if (m_providerDropIndicator) {
+                showDropIndicatorAtIndex(0); // position will be updated immediately
+            }
+        });
+        connect(grip, &DragHandle::targetIndexChanged, this,
+                [this](int idx) { showDropIndicatorAtIndex(idx); });
+        connect(grip, &DragHandle::dragReleased, this,
+                [this]() { hideDropIndicator(); });
+        rowLayout->addWidget(group, 1);
+
+        auto *toggle = new ToggleSwitch(rowWidget);
+        toggle->setToolTip(i18n(
+            "Enable or disable %1 in the fallback chain. Disabled "
+            "providers are skipped when a primary request fails.",
+            title));
+        m_providerToggles.insert(provider, toggle);
+        rowLayout->addWidget(toggle, 0, Qt::AlignTop);
+
+        // Tag the row widget with its provider so save-time iteration
+        // can recover the identity by walking the QVBoxLayout children.
+        rowWidget->setProperty("llmProvider", static_cast<int>(provider));
+        m_providerRowsLayout->addWidget(rowWidget);
+
+        m_providerModelCombos.insert(provider, modelCombo);
+        m_providerEmbeddingCombos.insert(provider, embeddingCombo);
+        m_providerStatusLabels.insert(provider, statusLabel);
+
+        // Trigger the API-key-test + model-fetch when the user finishes
+        // editing either credential-bearing field. KWallet write happens
+        // inside testProviderConnection so the fetch uses the fresh key.
+        if (keyEdit) {
+            connect(keyEdit, &QLineEdit::editingFinished, this, [this, provider]() {
+                testProviderConnection(provider);
+            });
+        }
+        connect(endpointEdit, &QLineEdit::editingFinished, this, [this, provider]() {
+            testProviderConnection(provider);
+        });
+
+        if (keyOut) *keyOut = keyEdit;
+        if (endpointOut) *endpointOut = endpointEdit;
+        if (modelComboOut) *modelComboOut = modelCombo;
+    };
+
+    // Invoke buildProviderGroup in the user's stored fallback order so the
+    // rendered row order already matches QSettings on first show. Any
+    // providers missing from the stored order (e.g. new enum values) fall
+    // in at the tail — readProviderOrderFromSettings handles that.
+    auto buildByProvider = [&](LLMProvider p) {
+        switch (p) {
+        case LLMProvider::OpenAI:
+            buildProviderGroup(LLMProvider::OpenAI, i18n("OpenAI"),
+                QStringLiteral("https://api.openai.com/v1/chat/completions"),
+                /*hasKey=*/true, /*keyOptional=*/false,
+                &m_openaiKeyEdit, &m_openaiEndpointEdit, &m_openaiModelCombo);
+            break;
+        case LLMProvider::Anthropic:
+            buildProviderGroup(LLMProvider::Anthropic, i18n("Anthropic"),
+                QStringLiteral("https://api.anthropic.com/v1/messages"),
+                /*hasKey=*/true, /*keyOptional=*/false,
+                &m_anthropicKeyEdit, &m_anthropicEndpointEdit, &m_anthropicModelCombo);
+            break;
+        case LLMProvider::Ollama:
+            buildProviderGroup(LLMProvider::Ollama, i18n("Ollama"),
+                QStringLiteral("http://localhost:11434/api/chat"),
+                /*hasKey=*/false, /*keyOptional=*/false,
+                /*keyOut=*/nullptr, &m_ollamaEndpointEdit, &m_ollamaModelCombo,
+                i18n("Local Endpoint:"));
+            break;
+        case LLMProvider::Grok:
+            buildProviderGroup(LLMProvider::Grok, i18n("Grok (xAI)"),
+                QStringLiteral("https://api.x.ai/v1/chat/completions"),
+                /*hasKey=*/true, /*keyOptional=*/false,
+                &m_grokKeyEdit, &m_grokEndpointEdit, &m_grokModelCombo);
+            break;
+        case LLMProvider::Gemini:
+            buildProviderGroup(LLMProvider::Gemini, i18n("Google"),
+                QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
+                /*hasKey=*/true, /*keyOptional=*/false,
+                &m_geminiKeyEdit, &m_geminiEndpointEdit, &m_geminiModelCombo);
+            break;
+        case LLMProvider::LMStudio:
+            buildProviderGroup(LLMProvider::LMStudio, i18n("LM Studio"),
+                QStringLiteral("http://localhost:1234/v1/chat/completions"),
+                /*hasKey=*/true, /*keyOptional=*/true,
+                &m_lmstudioKeyEdit, &m_lmstudioEndpointEdit, &m_lmstudioModelCombo);
+            break;
+        }
+    };
+
+    for (LLMProvider p : LLMService::readProviderOrderFromSettings()) {
+        buildByProvider(p);
+    }
+
     return tab;
 }
 
@@ -276,6 +481,7 @@ QWidget* SettingsDialog::createAgentsTab()
 void SettingsDialog::updateModelCombos(LLMProvider provider)
 {
     if (m_modelCache.contains(provider)) {
+        // Agents tab rows whose primary is this provider.
         for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
             auto &config = it.value();
             if (static_cast<LLMProvider>(config.providerCombo->currentIndex()) == provider) {
@@ -285,13 +491,39 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
                 config.modelCombo->setEditText(current);
             }
         }
-        
-        // Handle Analyzer Model Combo
+
+        // Analyzer tab.
         if (static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()) == provider) {
             QString current = m_analyzerModelCombo->currentText();
             m_analyzerModelCombo->clear();
             m_analyzerModelCombo->addItems(m_modelCache[provider]);
             m_analyzerModelCombo->setEditText(current);
+        }
+
+        // LLM tab — the per-provider default-model combo.
+        if (QComboBox *combo = m_providerModelCombos.value(provider, nullptr)) {
+            const QString current = combo->currentText();
+            combo->clear();
+            combo->addItems(m_modelCache[provider]);
+            combo->setEditText(current);
+        }
+
+        // LLM tab — the per-provider embedding-model combo. Filter the
+        // fetched list for embedding-capable entries; if none found, the
+        // combo is disabled with placeholder text so the user knows this
+        // provider won't participate in embedding requests.
+        if (QComboBox *eCombo = m_providerEmbeddingCombos.value(provider, nullptr)) {
+            const QStringList embeds = LLMService::filterEmbeddingModels(
+                provider, m_modelCache[provider]);
+            const QString current = eCombo->currentText();
+            eCombo->clear();
+            eCombo->addItems(embeds);
+            eCombo->setEditText(current);
+            eCombo->setEnabled(!embeds.isEmpty() || !current.isEmpty());
+            eCombo->lineEdit()->setPlaceholderText(
+                embeds.isEmpty()
+                    ? i18n("Not supported by this provider")
+                    : i18n("Choose embedding model"));
         }
         return;
     }
@@ -299,6 +531,80 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
     LLMService::instance().fetchModels(provider, [this, provider](const QStringList &models) {
         m_modelCache[provider] = models;
         updateModelCombos(provider);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// testProviderConnection: on API-key / endpoint edit, write the new key to
+// KWallet (cloud providers only) and kick off a live fetchModels call. On
+// success, populate the provider's model combo and show a green "Connected
+// — N models" status. On failure (empty list), show an italic warning so
+// the user knows to recheck credentials.
+// ---------------------------------------------------------------------------
+void SettingsDialog::testProviderConnection(LLMProvider provider)
+{
+    QLabel *status = m_providerStatusLabels.value(provider, nullptr);
+
+    // Persist the freshly-typed key to KWallet so fetchModels picks it up.
+    // Local providers (Ollama, optional-key LMStudio) may not have a key
+    // edit widget; skip the write in those cases.
+    QLineEdit *keyEdit = nullptr;
+    switch (provider) {
+        case LLMProvider::OpenAI:    keyEdit = m_openaiKeyEdit; break;
+        case LLMProvider::Anthropic: keyEdit = m_anthropicKeyEdit; break;
+        case LLMProvider::Grok:      keyEdit = m_grokKeyEdit; break;
+        case LLMProvider::Gemini:    keyEdit = m_geminiKeyEdit; break;
+        case LLMProvider::LMStudio:  keyEdit = m_lmstudioKeyEdit; break;
+        case LLMProvider::Ollama:    break; // no key
+    }
+    if (keyEdit && !keyEdit->text().isEmpty()) {
+        LLMService::instance().setApiKey(provider, keyEdit->text());
+    }
+
+    // Also persist the endpoint so fetchModels (which reads from QSettings)
+    // uses the user's freshly-typed value. Without this the test would run
+    // against the stale endpoint from last save, which is exactly what we
+    // don't want when the user is actively configuring.
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QLineEdit *endpointEdit = nullptr;
+    switch (provider) {
+        case LLMProvider::OpenAI:    endpointEdit = m_openaiEndpointEdit; break;
+        case LLMProvider::Anthropic: endpointEdit = m_anthropicEndpointEdit; break;
+        case LLMProvider::Ollama:    endpointEdit = m_ollamaEndpointEdit; break;
+        case LLMProvider::Grok:      endpointEdit = m_grokEndpointEdit; break;
+        case LLMProvider::Gemini:    endpointEdit = m_geminiEndpointEdit; break;
+        case LLMProvider::LMStudio:  endpointEdit = m_lmstudioEndpointEdit; break;
+    }
+    if (endpointEdit) {
+        settings.setValue(LLMService::providerSettingsKey(provider) + QStringLiteral("/endpoint"),
+                          endpointEdit->text());
+    }
+
+    // Invalidate the session model cache for this provider so the fetch
+    // below goes to the network with the user's new credentials rather
+    // than returning the stale previous list.
+    m_modelCache.remove(provider);
+
+    if (status) {
+        status->setText(i18n("Testing…"));
+        status->setStyleSheet(QString());
+    }
+
+    QPointer<SettingsDialog> weakThis(this);
+    LLMService::instance().fetchModels(provider, [weakThis, provider](const QStringList &models) {
+        if (!weakThis) return;
+        weakThis->m_modelCache[provider] = models;
+        weakThis->updateModelCombos(provider);
+
+        QLabel *status = weakThis->m_providerStatusLabels.value(provider, nullptr);
+        if (!status) return;
+        if (models.isEmpty()) {
+            status->setText(i18n("Could not fetch models. Check your API key and endpoint."));
+            status->setStyleSheet(QStringLiteral("color: #c0392b;")); // red
+        } else {
+            status->setText(i18n("Connected — %1 models available", models.size()));
+            status->setStyleSheet(QStringLiteral("color: #27ae60;")); // green
+        }
     });
 }
 
@@ -421,33 +727,74 @@ void SettingsDialog::load()
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     m_typewriterScrollingCheck->setChecked(settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool());
 
-    m_activeProviderCombo->setCurrentIndex(settings.value(QStringLiteral("llm/provider"), 0).toInt());
     // Model fields: no hardcoded defaults — empty means "not configured yet"
     // Placeholder text in the widget gives the user a hint without seeding QSettings.
-    m_embeddingModelEdit->setText(settings.value(QStringLiteral("llm/embedding_model")).toString());
 
-    m_openaiModelEdit->setText(settings.value(QStringLiteral("llm/openai/model")).toString());
+    // Legacy migration: if the old global llm/embedding_model is set but no
+    // per-provider slot is yet, copy it into the active provider's slot so
+    // the user doesn't silently lose their configured model on first open.
+    const QString legacyEmbedding = settings.value(QStringLiteral("llm/embedding_model")).toString();
+    if (!legacyEmbedding.isEmpty()) {
+        const LLMProvider active = static_cast<LLMProvider>(
+            settings.value(QStringLiteral("llm/provider"), 0).toInt());
+        const QString activeKey = LLMService::providerSettingsKey(active)
+                                  + QStringLiteral("/embedding_model");
+        if (settings.value(activeKey).toString().isEmpty()) {
+            settings.setValue(activeKey, legacyEmbedding);
+        }
+        settings.remove(QStringLiteral("llm/embedding_model"));
+    }
+
+    // Load per-provider embedding models into each combo.
+    for (auto it = m_providerEmbeddingCombos.constBegin();
+         it != m_providerEmbeddingCombos.constEnd(); ++it) {
+        const QString stored = settings.value(
+            LLMService::providerSettingsKey(it.key())
+            + QStringLiteral("/embedding_model")).toString();
+        it.value()->setEditText(stored);
+    }
+
+    // Sync each provider's enable-toggle with the stored llm/{p}/enabled.
+    for (auto it = m_providerToggles.constBegin();
+         it != m_providerToggles.constEnd(); ++it) {
+        it.value()->setChecked(LLMService::isProviderEnabled(it.key()));
+    }
+
+    m_openaiModelCombo->setEditText(settings.value(QStringLiteral("llm/openai/model")).toString());
     m_openaiEndpointEdit->setText(settings.value(QStringLiteral("llm/openai/endpoint"), QStringLiteral("https://api.openai.com/v1/chat/completions")).toString());
     m_openaiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::OpenAI));
 
-    m_anthropicModelEdit->setText(settings.value(QStringLiteral("llm/anthropic/model")).toString());
+    m_anthropicModelCombo->setEditText(settings.value(QStringLiteral("llm/anthropic/model")).toString());
     m_anthropicEndpointEdit->setText(settings.value(QStringLiteral("llm/anthropic/endpoint"), QStringLiteral("https://api.anthropic.com/v1/messages")).toString());
     m_anthropicKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Anthropic));
 
-    m_ollamaModelEdit->setText(settings.value(QStringLiteral("llm/ollama/model")).toString());
+    m_ollamaModelCombo->setEditText(settings.value(QStringLiteral("llm/ollama/model")).toString());
     m_ollamaEndpointEdit->setText(settings.value(QStringLiteral("llm/ollama/endpoint"), QStringLiteral("http://localhost:11434/api/chat")).toString());
 
-    m_grokModelEdit->setText(settings.value(QStringLiteral("llm/grok/model"), QString()).toString());
+    m_grokModelCombo->setEditText(settings.value(QStringLiteral("llm/grok/model"), QString()).toString());
     m_grokEndpointEdit->setText(settings.value(QStringLiteral("llm/grok/endpoint"), QStringLiteral("https://api.x.ai/v1/chat/completions")).toString());
     m_grokKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Grok));
 
-    m_geminiModelEdit->setText(settings.value(QStringLiteral("llm/gemini/model"), QString()).toString());
+    m_geminiModelCombo->setEditText(settings.value(QStringLiteral("llm/gemini/model"), QString()).toString());
     m_geminiEndpointEdit->setText(settings.value(QStringLiteral("llm/gemini/endpoint"), QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")).toString());
     m_geminiKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::Gemini));
 
-    m_lmstudioModelEdit->setText(settings.value(QStringLiteral("llm/lmstudio/model"), QString()).toString());
+    m_lmstudioModelCombo->setEditText(settings.value(QStringLiteral("llm/lmstudio/model"), QString()).toString());
     m_lmstudioEndpointEdit->setText(settings.value(QStringLiteral("llm/lmstudio/endpoint"), QStringLiteral("http://localhost:1234/v1/chat/completions")).toString());
     m_lmstudioKeyEdit->setText(LLMService::instance().apiKey(LLMProvider::LMStudio));
+
+    // For any provider that already has credentials configured, trigger a
+    // silent model-list fetch so the combos populate on dialog open. We
+    // don't block on this — the combos already carry the stored default,
+    // so the user can work without waiting. The status labels update when
+    // each fetch completes.
+    for (LLMProvider p : {LLMProvider::OpenAI, LLMProvider::Anthropic,
+                           LLMProvider::Ollama, LLMProvider::Grok,
+                           LLMProvider::Gemini, LLMProvider::LMStudio}) {
+        if (LLMService::instance().isProviderConfigured(p)) {
+            testProviderConnection(p);
+        }
+    }
 
     m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
     m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/analyzer_provider"), 0).toInt());
@@ -572,29 +919,58 @@ void SettingsDialog::save()
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     settings.setValue(QStringLiteral("editor/typewriterScrolling"), m_typewriterScrollingCheck->isChecked());
 
-    settings.setValue(QStringLiteral("llm/provider"), m_activeProviderCombo->currentIndex());
-    settings.setValue(QStringLiteral("llm/embedding_model"), m_embeddingModelEdit->text());
+    // Derive the "active provider" (legacy llm/provider key, still read as
+    // a fallback by many agents) from the top row of the draggable
+    // provider list. That row is, by user-evident construction, the
+    // preferred primary.
+    if (m_providerRowsLayout && m_providerRowsLayout->count() > 0) {
+        if (QLayoutItem *first = m_providerRowsLayout->itemAt(0)) {
+            if (QWidget *row = first->widget()) {
+                const QVariant tag = row->property("llmProvider");
+                if (tag.isValid()) {
+                    settings.setValue(QStringLiteral("llm/provider"), tag.toInt());
+                }
+            }
+        }
+    }
 
-    settings.setValue(QStringLiteral("llm/openai/model"), m_openaiModelEdit->text());
+    // Per-provider embedding model (replaces the single global field).
+    for (auto it = m_providerEmbeddingCombos.constBegin();
+         it != m_providerEmbeddingCombos.constEnd(); ++it) {
+        settings.setValue(
+            LLMService::providerSettingsKey(it.key())
+            + QStringLiteral("/embedding_model"),
+            it.value()->currentText().trimmed());
+    }
+    // Retire the legacy global key — any value gets migrated into the
+    // active provider's slot in load(); on subsequent saves it should not
+    // come back.
+    settings.remove(QStringLiteral("llm/embedding_model"));
+
+    // Persist provider fallback order + per-provider enable flags from
+    // the draggable list at the top of the LLM tab.
+    saveProviderOrderList();
+
+    settings.setValue(QStringLiteral("llm/openai/model"), m_openaiModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/openai/endpoint"), m_openaiEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::OpenAI, m_openaiKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/anthropic/model"), m_anthropicModelEdit->text());
+    settings.setValue(QStringLiteral("llm/anthropic/model"), m_anthropicModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/anthropic/endpoint"), m_anthropicEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Anthropic, m_anthropicKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelEdit->text());
+    settings.setValue(QStringLiteral("llm/ollama/model"), m_ollamaModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/ollama/endpoint"), m_ollamaEndpointEdit->text());
 
-    settings.setValue(QStringLiteral("llm/grok/model"), m_grokModelEdit->text());
+    settings.setValue(QStringLiteral("llm/grok/model"), m_grokModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/grok/endpoint"), m_grokEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Grok, m_grokKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/gemini/model"), m_geminiModelEdit->text());
+    settings.setValue(QStringLiteral("llm/gemini/model"), m_geminiModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/gemini/endpoint"), m_geminiEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::Gemini, m_geminiKeyEdit->text());
 
-    settings.setValue(QStringLiteral("llm/lmstudio/model"), m_lmstudioModelEdit->text());
+    settings.setValue(QStringLiteral("llm/lmstudio/model"), m_lmstudioModelCombo->currentText());
     settings.setValue(QStringLiteral("llm/lmstudio/endpoint"), m_lmstudioEndpointEdit->text());
     LLMService::instance().setApiKey(LLMProvider::LMStudio, m_lmstudioKeyEdit->text());
 

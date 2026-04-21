@@ -28,7 +28,9 @@
 #include <QDebug>
 #include <QRegularExpression>
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QSettings>
+#include <optional>
 #include <QDataStream>
 #include <QtMath>
 #include <QFileSystemWatcher>
@@ -57,11 +59,123 @@ KnowledgeBase::~KnowledgeBase()
     close();
 }
 
+namespace {
+
+// Resolve the LLM provider/model pair KnowledgeBase should use for
+// embeddings. Order of precedence:
+//   1. llm/embedding_provider  + llm/embedding_model        (explicit)
+//   2. llm/provider            + llm/embedding_model        (inherit provider)
+//   3. llm/provider            + llm/<provider>/model       (inherit both)
+// If the resolved provider is Anthropic (no embeddings API) we return a
+// failure sentinel; callers must treat this as "embeddings disabled"
+// ---------------------------------------------------------------------------
+// Build the user-ordered embedding chain. Walks llm/provider_order in order,
+// skipping disabled / unconfigured providers and entries that have no
+// embedding-model setting. Anthropic is always skipped — no embeddings API.
+// Returned pairs are {provider, embedding-model}.
+// ---------------------------------------------------------------------------
+QList<QPair<LLMProvider, QString>> resolveEmbeddingChain()
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    QList<QPair<LLMProvider, QString>> chain;
+    for (LLMProvider p : LLMService::readProviderOrderFromSettings()) {
+        if (p == LLMProvider::Anthropic) continue;       // no embeddings endpoint
+        if (!LLMService::isProviderEnabled(p)) continue; // user turned it off
+        if (!LLMService::instance().isProviderConfigured(p)) continue;
+        const QString model = settings.value(
+            LLMService::providerSettingsKey(p)
+            + QStringLiteral("/embedding_model")).toString().trimmed();
+        if (model.isEmpty()) continue;
+        chain.append(qMakePair(p, model));
+    }
+    return chain;
+}
+
+// Helper for log output — joins chain into a short human-readable string.
+QString describeChain(const QList<QPair<LLMProvider, QString>> &chain)
+{
+    if (chain.isEmpty()) return QStringLiteral("<empty>");
+    QStringList parts;
+    for (const auto &e : chain) {
+        parts.append(QStringLiteral("%1/%2")
+                         .arg(LLMService::providerName(e.first), e.second));
+    }
+    return parts.join(QStringLiteral(", "));
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// KnowledgeBase::generateEmbeddingWithFallback
+// Walks the user-configured embedding chain. For each candidate: skip if
+// currently cooled down (from a previous 429), otherwise call
+// LLMService::generateEmbedding. On empty vector (request failed),
+// recurse to the next candidate. Invokes the user's callback with an
+// empty vector only if the full chain is exhausted.
+// ---------------------------------------------------------------------------
+void KnowledgeBase::generateEmbeddingWithFallback(
+    const QString &text, std::function<void(const QVector<float>&)> callback)
+{
+    auto chainPtr = std::make_shared<QList<QPair<LLMProvider, QString>>>(
+        resolveEmbeddingChain());
+    if (chainPtr->isEmpty()) {
+        qWarning().noquote()
+            << "KnowledgeBase: embedding chain is empty — no provider has an "
+               "embedding model configured. RAG request skipped.";
+        if (callback) callback({});
+        return;
+    }
+
+    // Recursive self-referential lambda; shared_ptr keeps the function
+    // alive across async hops through LLMService callbacks.
+    auto tryOne = std::make_shared<std::function<void(int)>>();
+    QPointer<KnowledgeBase> weakThis(this);
+    *tryOne = [weakThis, chainPtr, text, callback, tryOne](int idx) {
+        if (!weakThis || idx >= chainPtr->size()) {
+            if (callback) callback({});
+            return;
+        }
+        const auto &p = (*chainPtr)[idx];
+        // Skip cooled-down pairs without network traffic.
+        if (LLMService::instance().isCooledDown(p.first, p.second)) {
+            qWarning().noquote()
+                << "KnowledgeBase: embedding candidate"
+                << LLMService::providerName(p.first) << "/" << p.second
+                << "is cooling down; trying next.";
+            (*tryOne)(idx + 1);
+            return;
+        }
+        LLMService::instance().generateEmbedding(
+            p.first, p.second, text,
+            [tryOne, callback, idx, provider = p.first, model = p.second](const QVector<float> &vec) {
+                if (!vec.isEmpty()) {
+                    if (callback) callback(vec);
+                    return;
+                }
+                qWarning().noquote()
+                    << "KnowledgeBase: embedding failed on"
+                    << LLMService::providerName(provider) << "/" << model
+                    << "— falling back to next candidate.";
+                (*tryOne)(idx + 1);
+            });
+    };
+    (*tryOne)(0);
+}
+
 void KnowledgeBase::initForProject(const QString &projectPath)
 {
     if (projectPath.isEmpty()) return;
-    qDebug() << "KnowledgeBase: Initializing for project:" << projectPath;
-    
+
+    const auto chain = resolveEmbeddingChain();
+    qWarning().noquote() << "KnowledgeBase::initForProject:" << projectPath;
+    qWarning().noquote() << "KnowledgeBase: embedding chain:" << describeChain(chain);
+    if (chain.isEmpty()) {
+        qWarning().noquote()
+            << "KnowledgeBase: RAG is DISABLED — no provider has an embedding "
+               "model configured. Open Settings → LLM and set an embedding "
+               "model for at least one enabled provider.";
+    }
+
     QMutexLocker locker(&m_dbMutex);
     close();
 
@@ -70,7 +184,9 @@ void KnowledgeBase::initForProject(const QString &projectPath)
     m_pendingFiles.clear();
 
     if (!setupDatabase()) {
-        qWarning() << "Failed to initialize vector database schema.";
+        qWarning() << "KnowledgeBase: Failed to initialize vector database schema.";
+    } else {
+        qWarning().noquote() << "KnowledgeBase: vector DB ready at" << m_dbPath;
     }
 }
 
@@ -112,10 +228,15 @@ bool KnowledgeBase::setupDatabase()
 
 QSqlDatabase KnowledgeBase::database() const
 {
+    // Shutdown-race guard: if QCoreApplication is gone the worker thread
+    // is racing program exit. QSqlDatabase::addDatabase() requires qApp
+    // and will emit "QSqlDatabase requires a QCoreApplication" otherwise.
+    // Return a disconnected handle — callers already check isOpen().
+    if (!QCoreApplication::instance()) return QSqlDatabase();
     if (m_dbPath.isEmpty()) return QSqlDatabase();
 
     QString connectionName = QStringLiteral("kb_thread_") + QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
-    
+
     QMutexLocker locker(&m_dbMutex);
 
     if (QSqlDatabase::contains(connectionName)) {
@@ -187,12 +308,20 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
     }
 
     QStringList rawChunks = content.split(QRegularExpression(QStringLiteral("(?=\\n##? )")));
-    
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    if (provider == LLMProvider::Anthropic) return;
-    
-    QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
+
+    // Chain is resolved per-chunk via generateEmbeddingWithFallback, but we
+    // do a quick pre-check here so we can log a single DISABLED warning
+    // instead of one per chunk when nothing is configured.
+    if (resolveEmbeddingChain().isEmpty()) {
+        static bool warned = false;
+        if (!warned) {
+            qWarning().noquote()
+                << "KnowledgeBase: RAG indexing is DISABLED — no provider has "
+                   "an embedding model configured. Open Settings → LLM.";
+            warned = true;
+        }
+        return;
+    }
 
     {
         QSqlDatabase db = database();
@@ -217,7 +346,7 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         m_pendingEmbeddings++;
         Q_EMIT indexingProgress(0, m_pendingEmbeddings);
 
-        LLMService::instance().generateEmbedding(provider, model, trimmed, [weakThis, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
+        generateEmbeddingWithFallback(trimmed, [weakThis, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
             if (!weakThis) return;
             if (!embedding.isEmpty()) {
                 weakThis->storeChunk(filePath, heading, trimmed, embedding, currentHash);
@@ -297,14 +426,21 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
         relativeActiveFiles.append(QDir(m_projectPath).relativeFilePath(abs));
     }
 
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("llm/provider"), 0).toInt());
-    if (provider == LLMProvider::Anthropic) { callback({}); return; }
-
-    QString model = settings.value(QStringLiteral("llm/embedding_model"), QString()).toString();
+    if (resolveEmbeddingChain().isEmpty()) {
+        static bool warned = false;
+        if (!warned) {
+            qWarning().noquote()
+                << "KnowledgeBase::search: RAG retrieval is DISABLED — no "
+                   "provider has an embedding model configured. Returning "
+                   "empty result list.";
+            warned = true;
+        }
+        callback({});
+        return;
+    }
 
     QPointer<KnowledgeBase> weakThis(this);
-    LLMService::instance().generateEmbedding(provider, model, queryText, [weakThis, topK, excludeFile, relativeActiveFiles, callback](const QVector<float> &queryVector) {
+    generateEmbeddingWithFallback(queryText, [weakThis, topK, excludeFile, relativeActiveFiles, callback](const QVector<float> &queryVector) {
         if (!weakThis || queryVector.isEmpty()) {
             if (callback) callback({});
             return;
@@ -318,19 +454,25 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
             if (!weakThis) return;
             
             QList<SearchResult> results;
+            int totalChunks = 0;
+            int filteredByActive = 0;
             {
                 QSqlDatabase db = weakThis->database();
                 if (db.isOpen()) {
                     QSqlQuery query(db);
                     // Filter chunks to only those belonging to files currently in the project manager's logical tree.
                     QString sql = QStringLiteral("SELECT file_path, heading, content, embedding FROM chunks WHERE file_path != ?");
-                    
+
                     query.prepare(sql);
                     query.addBindValue(excludeFile);
                     if (query.exec()) {
                         while (query.next()) {
+                            ++totalChunks;
                             QString chunkPath = query.value(0).toString();
-                            if (!relativeActiveFiles.contains(chunkPath)) continue;
+                            if (!relativeActiveFiles.contains(chunkPath)) {
+                                ++filteredByActive;
+                                continue;
+                            }
 
                             SearchResult res;
                             res.filePath = chunkPath;
@@ -344,9 +486,17 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
                             res.score = weakThis->cosineSimilarity(queryVector, emb);
                             results.append(res);
                         }
+                    } else {
+                        qWarning().noquote() << "KnowledgeBase::search: chunk query failed:"
+                                              << query.lastError().text();
                     }
+                } else {
+                    qWarning().noquote() << "KnowledgeBase::search: DB not open — no chunks to search";
                 }
             }
+            qWarning().noquote() << "KnowledgeBase::search: totalChunks=" << totalChunks
+                                  << "afterActiveFilter=" << (totalChunks - filteredByActive)
+                                  << "kept=" << results.size();
 
             std::sort(results.begin(), results.end(), [](const SearchResult &a, const SearchResult &b) {
                 return a.score > b.score;
@@ -364,15 +514,30 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
 
 void KnowledgeBase::reindexProject()
 {
-    if (m_projectPath.isEmpty()) return;
-    
-    qDebug() << "KnowledgeBase: Performing full project reindex...";
+    if (m_projectPath.isEmpty()) {
+        qWarning() << "KnowledgeBase::reindexProject: skipped — no project open";
+        return;
+    }
+
+    const auto chain = resolveEmbeddingChain();
+    qWarning().noquote() << "KnowledgeBase::reindexProject: starting";
+    qWarning().noquote() << "  embedding chain:" << describeChain(chain);
+    if (chain.isEmpty()) {
+        qWarning().noquote()
+            << "  ABORTING: no provider has an embedding model configured. "
+               "Open Settings → LLM.";
+        return;
+    }
+
     QStringList files = ProjectManager::instance().getActiveFiles();
-    
+    int mdFiles = 0;
     for (const QString &path : files) {
         QString suffix = QFileInfo(path).suffix().toLower();
         if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+            ++mdFiles;
             indexFile(path);
         }
     }
+    qWarning().noquote() << "KnowledgeBase::reindexProject: queued" << mdFiles
+                          << "markdown files for embedding";
 }

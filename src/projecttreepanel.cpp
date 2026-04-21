@@ -28,6 +28,9 @@
 #include "historydialog.h"
 #include "markdownparser.h"
 #include "synopsisservice.h"
+#include "lorekeeperservice.h"
+#include "librarianservice.h"
+#include "mainwindow.h"
 #include <QComboBox>
 #include <QLabel>
 
@@ -333,39 +336,11 @@ void ProjectTreePanel::syncProject()
         file.close();
     }
 
-    Q_EMIT syncProgress(50, i18n("Aligning hierarchy..."));
-
-    // 4. Hierarchy Alignment (Move files on disk to match logical tree)
-    // We do this by calculating the \"target\" path for every file in the tree
-    // Target path is based on the names of parent folders.
-    
-    std::function<QString(ProjectTreeItem*)> getLogicalPath = [&](ProjectTreeItem *item) -> QString {
-        if (!item || !item->parent || item->parent == m_model->itemFromIndex(QModelIndex())) {
-            return QStringLiteral(".");
-        }
-        QString parentPath = getLogicalPath(item->parent);
-        if (parentPath == QStringLiteral(".")) return item->name;
-        return parentPath + QDir::separator() + item->name;
-    };
-
-    for (auto *item : allItems) {
-        if (item->type == ProjectTreeItem::Folder) {
-            item->path = getLogicalPath(item);
-            continue;
-        }
-
-        QString logicalName = getLogicalPath(item->parent) + QDir::separator() + QFileInfo(item->path).fileName();
-        QString targetRelPath = logicalName;
-        QString oldAbsPath = QDir(projectPath).absoluteFilePath(item->path);
-        QString newAbsPath = QDir(projectPath).absoluteFilePath(targetRelPath);
-
-        if (oldAbsPath != newAbsPath && QFile::exists(oldAbsPath)) {
-            QDir().mkpath(QFileInfo(newAbsPath).absolutePath());
-            if (QFile::rename(oldAbsPath, newAbsPath)) {
-                item->path = targetRelPath;
-            }
-        }
-    }
+    // Hierarchy alignment (previously step 4) removed: the Phase-6
+    // refactor made the filesystem the authoritative source for tree
+    // structure, and ProjectManager::moveItem/renameItem keep disk and
+    // the live model in sync atomically. There is no longer a "logical
+    // tree" that can drift from disk, so no alignment pass is needed.
 
     Q_EMIT syncProgress(80, i18n("Saving changes..."));
 
@@ -764,12 +739,58 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
             }
         }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);
+
+        // "Rescan Document" — for files only, and only .md/.markdown
+        // where it makes sense. Runs the same heuristic + LLM-discovery
+        // pass the Variables-panel "Re-index" button triggers, but
+        // scoped to this single document. Useful after editing a file
+        // to update its extracted variables without waiting for the
+        // full-project rescan timer.
+        if (isFile) {
+            const QString suffix = QFileInfo(itemPath).suffix().toLower();
+            if (suffix == QStringLiteral("md") || suffix == QStringLiteral("markdown")) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("view-refresh")),
+                               i18n("Rescan Document"), this, [this, itemPath]() {
+                    rescanSingleDocument(itemPath);
+                });
+            }
+        }
+
         if (!isAuthoritative) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), i18n("Remove"), this, &ProjectTreePanel::removeItem);
         }
     }
 
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));
+}
+
+void ProjectTreePanel::rescanSingleDocument(const QString &relativePath)
+{
+    if (relativePath.isEmpty() || !ProjectManager::instance().isProjectOpen()) return;
+
+    const QString abs = QDir(ProjectManager::instance().projectPath())
+                           .absoluteFilePath(relativePath);
+
+    // Two-pass rescan:
+    //  1. LoreKeeperService::indexDocument — triggers LLM entity discovery
+    //     + dossier regeneration for whatever entities the file mentions.
+    //  2. LibrarianService::scanFile — re-runs the table/list variable
+    //     extractor on this file, replacing the prior extracted entries.
+    LoreKeeperService::instance().indexDocument(abs);
+
+    // LibrarianService's scanFile expects the absolute path (matches
+    // its scanAll output and its fs watcher behaviour).
+    if (auto *window = qobject_cast<MainWindow*>(this->window())) {
+        if (auto *lib = window->librarianService()) {
+            lib->scanFile(abs);
+        }
+    }
+
+    // Also request a synopsis refresh for the file. SynopsisService
+    // expects a project-relative path.
+    SynopsisService::instance().requestUpdate(relativePath, /*force=*/true);
+
+    qInfo().noquote() << "ProjectTreePanel: triggered rescan of" << abs;
 }
 
 void ProjectTreePanel::addFolder()

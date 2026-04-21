@@ -7,12 +7,10 @@
 #include <QTimer>
 #include <QRecursiveMutex>
 #include <QJsonObject>
-#include <QList>
 
 class LLMService;
 class LibrarianService;
 class ProjectTreeModel;
-struct SearchResult;
 
 /**
  * @brief The LoreKeeperService class automatically maintains world-building synopses
@@ -64,16 +62,6 @@ private:
     ~LoreKeeperService() override = default;
 
     void processPendingUpdates();
-
-    // Step 2 of updateEntityLore(): after RAG retrieval completes, assemble
-    // the full prompt (category system prompt + retrieved passages + raw
-    // discovery context + existing lore) and dispatch to the LLM. Split
-    // out from updateEntityLore() because KnowledgeBase::search is async
-    // and the generation must wait for its callback.
-    void dispatchLoreGeneration(const QString &categoryName,
-                                const QString &entityName,
-                                const QString &rawContext,
-                                const QList<SearchResult> &ragResults);
 
     LLMService *m_llm = nullptr;
     LibrarianService *m_librarian = nullptr;

@@ -1,4 +1,5 @@
 #include "librariandatabase.h"
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDateTime>
 #include <QUuid>
@@ -36,6 +37,13 @@ void LibrarianDatabase::close()
 
 QSqlDatabase LibrarianDatabase::database() const
 {
+    // Shutdown-race guard: QSqlDatabase::addDatabase() emits
+    // "QSqlDatabase requires a QCoreApplication" when called after qApp
+    // has been destroyed — which happens when a QThreadPool worker
+    // (e.g. LibrarianService::processQueue's background task) is still
+    // running during application exit. Return a disconnected handle;
+    // callers check isOpen() before touching it.
+    if (!QCoreApplication::instance()) return QSqlDatabase();
     if (m_dbPath.isEmpty()) return QSqlDatabase();
 
     QString threadId = QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));

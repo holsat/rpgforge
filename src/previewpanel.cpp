@@ -90,16 +90,27 @@ void PreviewPanel::setProjectMode(bool enabled)
 
 void PreviewPanel::setBaseUrl(const QUrl &url)
 {
-    // Use the project directory as base URL so relative image paths resolve correctly.
-    // If no project is open, fall back to the file's parent directory.
+    // Base URL controls how <img src="..."> and similar relative paths
+    // resolve. Standard markdown convention: paths are relative to the
+    // DOCUMENT's directory — not the project root. Using the project
+    // root breaks every "../../media/X.png" link in a file nested one
+    // or more directories deep, because the editor resolves it as
+    // "project-root/../../media" which is two levels above the project.
     QUrl baseUrl;
-    if (ProjectManager::instance().isProjectOpen()) {
-        baseUrl = QUrl::fromLocalFile(ProjectManager::instance().projectPath() + QDir::separator());
-    } else if (url.isLocalFile()) {
-        baseUrl = QUrl::fromLocalFile(QFileInfo(url.toLocalFile()).absolutePath() + QDir::separator());
+    if (url.isLocalFile()) {
+        baseUrl = QUrl::fromLocalFile(
+            QFileInfo(url.toLocalFile()).absolutePath() + QDir::separator());
+    } else if (ProjectManager::instance().isProjectOpen()) {
+        // No document URL — fall back to project root so at least
+        // project-relative paths resolve.
+        baseUrl = QUrl::fromLocalFile(
+            ProjectManager::instance().projectPath() + QDir::separator());
     } else {
         baseUrl = url;
     }
+
+    qInfo().noquote() << "PreviewPanel::setBaseUrl input=" << url.toString()
+                      << "resolved=" << baseUrl.toString();
 
     if (m_baseUrl != baseUrl) {
         m_baseUrl = baseUrl;
@@ -126,6 +137,88 @@ void PreviewPanel::onLoadFinished(bool ok)
     }
 }
 
+QString PreviewPanel::resolveRelativeImageUrlsInMarkdown(const QString &markdown) const
+{
+    // Rewrite every ![alt](relative/path) in the MARKDOWN so relative
+    // paths become absolute file:// URLs before cmark-gfm runs. The
+    // app's documents mix two conventions:
+    //   - Imported docs (Word importer, Scrivener) emit "./media/X.png"
+    //     assuming the base is the project root.
+    //   - Hand-authored / drag-dropped paths emit "../../media/X.png"
+    //     assuming the base is the document's directory.
+    //
+    // A single baseUrl can only accommodate one of these. We try both:
+    // doc-dir first (matches the CommonMark spec), then project-root.
+    // Whichever resolves to a file that exists on disk wins. Rewriting
+    // at the markdown level (rather than post-processing HTML) ensures
+    // the absolute URL survives the downstream JS-escape + innerHTML
+    // pipeline intact.
+    //
+    // URLs with a scheme (http://, https://, file://) and absolute
+    // paths are left alone.
+    if (markdown.isEmpty()) return markdown;
+    if (!m_baseUrl.isLocalFile() && !ProjectManager::instance().isProjectOpen()) {
+        return markdown;
+    }
+
+    const QString docDir = m_baseUrl.toLocalFile();
+    const QString projectRoot = ProjectManager::instance().isProjectOpen()
+        ? ProjectManager::instance().projectPath()
+        : QString();
+
+    auto resolve = [&](const QString &src) -> QString {
+        if (src.isEmpty()) return src;
+        static const QRegularExpression scheme(QStringLiteral("^[a-zA-Z][a-zA-Z0-9+.-]*:"));
+        if (scheme.match(src).hasMatch()) return src;
+        if (src.startsWith(QLatin1Char('/'))) return src;
+
+        auto tryBase = [&](const QString &base) -> QString {
+            if (base.isEmpty()) return QString();
+            const QString candidate = QDir(base).absoluteFilePath(src);
+            if (QFileInfo::exists(candidate)) {
+                return QUrl::fromLocalFile(candidate).toString();
+            }
+            return QString();
+        };
+
+        const QString fromDoc = tryBase(docDir);
+        if (!fromDoc.isEmpty()) return fromDoc;
+        const QString fromProject = tryBase(projectRoot);
+        if (!fromProject.isEmpty()) return fromProject;
+
+        qInfo().noquote() << "PreviewPanel: image path"
+                          << src << "could not be resolved against"
+                          << docDir << "or" << projectRoot;
+        return src;
+    };
+
+    // Matches ![alt](path) and ![alt](path "title"). Alt can contain
+    // anything except newlines and unmatched brackets; path has no
+    // whitespace (standard cmark rule without angle-bracket wrapping).
+    // Captures: (1) "![...]", (2) path, (3) optional " \"title\""
+    static const QRegularExpression imgRe(
+        QStringLiteral("(!\\[[^\\]\\n]*\\])\\(([^)\\s]+)((?:\\s+\"[^\"]*\")?)\\)"));
+
+    QString out = markdown;
+    int offset = 0;
+    auto it = imgRe.globalMatch(markdown);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const QString altPart = m.captured(1);
+        const QString src = m.captured(2);
+        const QString titlePart = m.captured(3);
+        const QString resolved = resolve(src);
+        if (resolved == src) continue;
+
+        const QString replacement = altPart + QLatin1Char('(') + resolved + titlePart + QLatin1Char(')');
+        const int start = m.capturedStart() + offset;
+        const int len = m.capturedLength();
+        out.replace(start, len, replacement);
+        offset += replacement.length() - len;
+    }
+    return out;
+}
+
 void PreviewPanel::updatePreview()
 {
     if (m_needsFullReload || !m_isLoaded) {
@@ -140,6 +233,13 @@ void PreviewPanel::updatePreview()
 
     // Replace variables before rendering markdown to HTML
     QString processedMarkdown = VariableManager::instance().processMarkdown(contentOnly);
+    // Rewrite ![alt](relative/path) AT THE MARKDOWN LEVEL before cmark
+    // renders. HTML post-processing was unreliable because the rendered
+    // HTML goes through a JS-escape + innerHTML assignment that mangled
+    // file:// URLs in edge cases. Rewriting the source markdown
+    // produces a ready-to-render absolute URL that survives every
+    // downstream step intact.
+    processedMarkdown = resolveRelativeImageUrlsInMarkdown(processedMarkdown);
     QString htmlBody = m_parser.renderHtml(processedMarkdown);
     
     // Escape for JavaScript string

@@ -72,6 +72,12 @@ add_library(rpgforge_core STATIC
     src/projectmetadata.h
     src/reconciliationtypes.h
     src/debuglog.h
+    src/ragassistservice.cpp
+    src/ragassistservice.h
+    src/inlineaiinvoker.cpp
+    src/inlineaiinvoker.h
+    src/inlineaicompletionmodel.cpp
+    src/inlineaicompletionmodel.h
     src/treenodesnapshot.cpp
     src/treenodesnapshot.h
     src/projecttreemodel.cpp
@@ -206,6 +212,10 @@ add_executable(rpgforge
     src/simulationcomparedialog.h
     src/settingsdialog.cpp
     src/settingsdialog.h
+    src/toggleswitch.cpp
+    src/toggleswitch.h
+    src/draghandle.cpp
+    src/draghandle.h
     src/prompteditordialog.cpp
     src/prompteditordialog.h
     src/diagnosticdetaildialog.cpp
@@ -292,6 +302,10 @@ add_test(NAME tree_snapshot_test COMMAND test_treesnapshot)
 add_executable(test_lorekeeper_smoke tests/test_lorekeeper_smoke.cpp)
 target_link_libraries(test_lorekeeper_smoke rpgforge_core Qt6::Test)
 add_test(NAME lorekeeper_smoke_test COMMAND test_lorekeeper_smoke)
+
+add_executable(test_ragassistservice tests/test_ragassistservice.cpp)
+target_link_libraries(test_ragassistservice rpgforge_core Qt6::Test)
+add_test(NAME rag_assist_service_test COMMAND test_ragassistservice)
 
 add_executable(test_projecttreemodel tests/test_projecttreemodel.cpp)
 target_link_libraries(test_projecttreemodel rpgforge_core Qt6::Test)

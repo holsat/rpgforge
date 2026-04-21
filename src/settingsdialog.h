@@ -68,26 +68,66 @@ private:
     // Editor settings
     QCheckBox *m_typewriterScrollingCheck = nullptr;
 
+    // Each provider's settings block is wrapped in a composite row widget
+    // (grip icon | group box | toggle switch) and added to a plain
+    // QVBoxLayout inside a scrollable container. DragHandle moves rows
+    // within that layout via removeWidget/insertWidget. The row widget
+    // carries its LLMProvider as a dynamic property for save-time
+    // iteration. Persists to llm/provider_order + per-provider /enabled.
+    class QVBoxLayout *m_providerRowsLayout = nullptr;
+    QHash<LLMProvider, class ToggleSwitch*> m_providerToggles;
+    void saveProviderOrderList();
+
+    // Thin red bar shown between rows during a drag to indicate where the
+    // dragged row will be inserted on release. Lives as a child of the
+    // providers container so its geometry is naturally in the container's
+    // coordinate space. Hidden when not dragging.
+    class QFrame *m_providerDropIndicator = nullptr;
+    void showDropIndicatorAtIndex(int targetIndex);
+    void hideDropIndicator();
+
     // LLM settings
-    QComboBox *m_activeProviderCombo;
+    // m_activeProviderCombo retired — the "active provider" concept is now
+    // the top entry of the draggable fallback list. save() computes
+    // llm/provider from that row's LLMProvider property so existing
+    // callers that still read llm/provider (fallback for agents without
+    // an explicit provider set) keep seeing a sensible value.
     QLineEdit *m_openaiKeyEdit;
-    QLineEdit *m_openaiModelEdit;
+    QComboBox *m_openaiModelCombo;
     QLineEdit *m_openaiEndpointEdit;
     QLineEdit *m_anthropicKeyEdit;
-    QLineEdit *m_anthropicModelEdit;
+    QComboBox *m_anthropicModelCombo;
     QLineEdit *m_anthropicEndpointEdit;
-    QLineEdit *m_ollamaModelEdit;
+    QComboBox *m_ollamaModelCombo;
     QLineEdit *m_ollamaEndpointEdit;
     QLineEdit *m_grokKeyEdit;
-    QLineEdit *m_grokModelEdit;
+    QComboBox *m_grokModelCombo;
     QLineEdit *m_grokEndpointEdit;
     QLineEdit *m_geminiKeyEdit;
-    QLineEdit *m_geminiModelEdit;
+    QComboBox *m_geminiModelCombo;
     QLineEdit *m_geminiEndpointEdit;
     QLineEdit *m_lmstudioKeyEdit;
-    QLineEdit *m_lmstudioModelEdit;
+    QComboBox *m_lmstudioModelCombo;
     QLineEdit *m_lmstudioEndpointEdit;
-    QLineEdit *m_embeddingModelEdit;
+
+    // Per-provider inline status label under the API key / endpoint row.
+    // Updated by the API-key-test flow to show "Connected — N models" on
+    // success or the HTTP error on failure. Null keys are skipped.
+    QHash<LLMProvider, QLabel*> m_providerStatusLabels;
+
+    // Map LLMProvider -> its default-model combo in the LLM tab, used by
+    // updateModelCombos so one function populates both tabs' combos.
+    QHash<LLMProvider, QComboBox*> m_providerModelCombos;
+
+    // Per-provider embedding-model combos. Populated by
+    // LLMService::filterEmbeddingModels applied to the fetchModels result.
+    // Empty filter result -> combo is disabled with "Not supported".
+    QHash<LLMProvider, QComboBox*> m_providerEmbeddingCombos;
+
+    // Trigger an API-key-test + model-fetch for the given provider. Called
+    // when the user finishes editing the key/endpoint field, and during
+    // load() to pre-populate combos on dialog open.
+    void testProviderConnection(LLMProvider provider);
 
     // Prompts
     QListWidget *m_promptsList;

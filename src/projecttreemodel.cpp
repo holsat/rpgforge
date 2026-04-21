@@ -1040,16 +1040,57 @@ QMimeData *ProjectTreeModel::mimeData(const QModelIndexList &indexes) const
     QByteArray encoded;
     QDataStream stream(&encoded, QIODevice::WriteOnly);
 
+    // Accumulators for the Kate-friendly MIME types. text/plain gets a
+    // markdown-link rendering of each dragged file so dropping into the
+    // editor inserts something immediately useful; text/uri-list gives
+    // Kate + any other app the absolute file path so it can open the
+    // target if it wants to.
+    QStringList plainLines;
+    QList<QUrl> urls;
+
+    const QString projectRoot = ProjectManager::instance().projectPath();
+
     for (const QModelIndex &index : indexes) {
         if (!index.isValid()) continue;
         ProjectTreeItem *item = itemFromIndex(index);
-        if (item) {
-            // Serialize name + path as a unique identifier (safe across model resets)
-            stream << item->name << item->path;
+        if (!item) continue;
+
+        // Serialize for our custom same-model DnD (move within tree).
+        stream << item->name << item->path;
+
+        // Build external-facing representations only for File items —
+        // dragging a folder into the editor shouldn't paste the folder
+        // path as a link.
+        if (item->type != ProjectTreeItem::File) continue;
+        if (projectRoot.isEmpty() || item->path.isEmpty()) continue;
+
+        const QString abs = QDir(projectRoot).absoluteFilePath(item->path);
+        urls.append(QUrl::fromLocalFile(abs));
+
+        // Images render as embed-syntax image links; everything else
+        // renders as a plain link. The relative path is project-root-
+        // relative so the editor's markdown preview resolves it
+        // correctly regardless of which file the author drops into.
+        static const QStringList imageSuffixes = {
+            QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+            QStringLiteral("gif"), QStringLiteral("webp"), QStringLiteral("svg")
+        };
+        const QString suffix = QFileInfo(item->path).suffix().toLower();
+        const QString label = item->name;
+        if (imageSuffixes.contains(suffix)) {
+            plainLines << QStringLiteral("![%1](%2)").arg(label, item->path);
+        } else {
+            plainLines << QStringLiteral("[%1](%2)").arg(label, item->path);
         }
     }
 
     mimeData->setData(QStringLiteral("application/x-rpgforge-treeitem"), encoded);
+    if (!plainLines.isEmpty()) {
+        mimeData->setText(plainLines.join(QLatin1Char('\n')));
+    }
+    if (!urls.isEmpty()) {
+        mimeData->setUrls(urls);
+    }
     return mimeData;
 }
 

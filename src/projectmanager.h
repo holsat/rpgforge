@@ -473,6 +473,17 @@ private:
     // UI-scale trees that we do a full rewrite rather than a diff.
     void updateWatcherPaths();
 
+    /**
+     * Rewrite relative markdown links (images + file refs) inside every
+     * .md/.markdown file in a just-moved subtree so they stay pointing
+     * at the same on-disk targets after the move. Called at the end of
+     * moveItem() for cross-parent moves. Skips absolute paths, URLs
+     * with a scheme, anchor-only references, and links that don't
+     * actually need to change.
+     */
+    void rewriteRelativeLinksAfterMove(const QString &oldAbsPath,
+                                         const QString &newAbsPath);
+
     struct TreeUpdateRequest {
         QString category;
         QString entityName;

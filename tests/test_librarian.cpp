@@ -100,8 +100,10 @@ private Q_SLOTS:
             vars.insert(it.key(), it.value().toString());
         }
         
-        QVERIFY(vars.contains(QStringLiteral("difficulty.1.target#")));
-        QCOMPARE(vars.value(QStringLiteral("difficulty.1.target#")), QStringLiteral("4"));
+        // Attribute keys are now normalised via identifierFromMarkdown:
+        // "**Target \#**" → "target" (no bold markers, no "#", lowercase).
+        QVERIFY(vars.contains(QStringLiteral("difficulty.1.target")));
+        QCOMPARE(vars.value(QStringLiteral("difficulty.1.target")), QStringLiteral("4"));
         QVERIFY(vars.contains(QStringLiteral("property.GameRules.HealthPoints")));
         QCOMPARE(vars.value(QStringLiteral("property.GameRules.HealthPoints")), QStringLiteral("35"));
     }

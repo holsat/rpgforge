@@ -19,6 +19,12 @@
 #include "projectsettingsdialog.h"
 #include "projectmanager.h"
 #include "lorekeeperservice.h"
+#include "llmservice.h"
+
+#include <QMessageBox>
+#include <QPointer>
+#include <QPushButton>
+#include <QSettings>
 
 #include <KLocalizedString>
 #include <QFormLayout>
@@ -125,9 +131,22 @@ void ProjectSettingsDialog::setupUi()
     tableHLayout->addLayout(tableButtons);
     lkLayout->addLayout(tableHLayout);
 
-    lkLayout->addWidget(new QLabel(i18n("Lore Extraction Prompt:"), this));
+    auto *promptHeader = new QHBoxLayout();
+    promptHeader->addWidget(new QLabel(i18n("Lore Extraction Prompt:"), this));
+    promptHeader->addStretch();
+    m_lkEnhanceBtn = new QPushButton(
+        QIcon::fromTheme(QStringLiteral("tools-wizard")),
+        i18n("Enhance Prompt"), this);
+    m_lkEnhanceBtn->setToolTip(i18n(
+        "Use the configured LoreKeeper LLM to rewrite and strengthen the "
+        "current prompt following best-practice prompt-engineering guidelines."));
+    promptHeader->addWidget(m_lkEnhanceBtn);
+    lkLayout->addLayout(promptHeader);
+
     m_lkPromptEdit = new QPlainTextEdit(this);
     lkLayout->addWidget(m_lkPromptEdit);
+
+    connect(m_lkEnhanceBtn, &QPushButton::clicked, this, &ProjectSettingsDialog::enhanceCurrentPrompt);
 
     // Table Logic
     connect(addBtn, &QPushButton::clicked, this, [this]() {
@@ -203,6 +222,95 @@ void ProjectSettingsDialog::load()
     }
 }
 
+void ProjectSettingsDialog::enhanceCurrentPrompt()
+{
+    // Ask the configured LoreKeeper LLM to rewrite the current prompt
+    // following prompt-engineering best practices, then replace the
+    // textarea content with the result. Preserves the user's intent
+    // while strengthening structure, specificity, and output-format
+    // instructions.
+    const QString current = m_lkPromptEdit->toPlainText().trimmed();
+    if (current.isEmpty()) {
+        QMessageBox::information(this, i18n("Enhance Prompt"),
+            i18n("The prompt is empty. Type a rough description of what you "
+                 "want LoreKeeper to extract, then click Enhance Prompt again."));
+        return;
+    }
+
+    const QString categoryName = m_lkTable->currentItem()
+        ? m_lkTable->currentItem()->text()
+        : QStringLiteral("Unknown");
+
+    // Use the same provider/model settings LoreKeeper uses for its
+    // generation pass — that way the enhanced prompt style matches
+    // what will actually run.
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    LLMRequest req;
+    req.provider = static_cast<LLMProvider>(
+        settings.value(QStringLiteral("lorekeeper/lorekeeper_provider"),
+                       settings.value(QStringLiteral("llm/provider"), 0)).toInt());
+    req.model = settings.value(QStringLiteral("lorekeeper/lorekeeper_model")).toString();
+    if (req.model.isEmpty()) {
+        const QString sk = LLMService::providerSettingsKey(req.provider);
+        req.model = settings.value(sk + QStringLiteral("/model")).toString();
+    }
+    req.serviceName = i18n("LoreKeeper Prompt Enhancement");
+    req.settingsKey = QStringLiteral("lorekeeper/lorekeeper_model");
+    req.temperature = 0.4;
+    req.maxTokens = 2048;
+    req.stream = false;
+
+    req.messages << LLMMessage{QStringLiteral("system"), QStringLiteral(
+        "You are a prompt-engineering assistant. The user provides a rough "
+        "extraction prompt that a world-building AI will use to synthesize "
+        "a dossier for a single entity from a larger RPG writing project. "
+        "Rewrite the prompt to be clearer, more specific, and more "
+        "actionable following best-practice guidelines:\n\n"
+        "  - State the role (\"You are an expert world-builder...\").\n"
+        "  - Describe the target document type (e.g. a structured Markdown "
+        "    dossier) and the sections it should contain.\n"
+        "  - Specify how to handle missing information (infer vs. leave "
+        "    blank vs. mark TBD).\n"
+        "  - Instruct the model to preserve the author's established voice "
+        "    and to cite source files inline using the exact paths provided.\n"
+        "  - Keep the output under 400 words of prompt text.\n\n"
+        "Return ONLY the rewritten prompt. No preamble, no explanations, "
+        "no code fences, no meta-commentary.")};
+    req.messages << LLMMessage{QStringLiteral("user"), i18n(
+        "Category: %1\n\nCurrent extraction prompt to enhance:\n\n%2",
+        categoryName, current)};
+
+    m_lkEnhanceBtn->setEnabled(false);
+    m_lkEnhanceBtn->setText(i18n("Enhancing..."));
+
+    // Use the detailed callback: response is the enhanced prompt on success;
+    // error is populated with the provider's actual error (quota, auth, etc.)
+    // when the request fails, letting us surface a useful dialog instead of
+    // the generic "empty response" placeholder.
+    QPointer<ProjectSettingsDialog> weakThis(this);
+    LLMService::instance().sendNonStreamingRequestDetailed(req,
+        [weakThis](const QString &response, const QString &error) {
+            if (!weakThis) return;
+            weakThis->m_lkEnhanceBtn->setEnabled(true);
+            weakThis->m_lkEnhanceBtn->setText(i18n("Enhance Prompt"));
+
+            if (!error.isEmpty()) {
+                QMessageBox::warning(weakThis, i18n("Enhance Prompt failed"),
+                    i18n("The LLM provider returned an error:\n\n%1", error));
+                return;
+            }
+            const QString cleaned = response.trimmed();
+            if (cleaned.isEmpty()) {
+                QMessageBox::warning(weakThis, i18n("Enhance Prompt"),
+                    i18n("The LLM returned an empty response. Check that "
+                         "your API key, provider, and model are configured "
+                         "correctly, then try again."));
+                return;
+            }
+            weakThis->m_lkPromptEdit->setPlainText(cleaned);
+        });
+}
+
 void ProjectSettingsDialog::save()
 {
     auto &pm = ProjectManager::instance();
@@ -215,7 +323,18 @@ void ProjectSettingsDialog::save()
     pm.setMarginBottom(m_marginBottomSpin->value());
     pm.setShowPageNumbers(m_showPageNumbersCheck->isChecked());
     pm.setStylesheetPath(m_stylesheetEdit->text());
-    
+
+    // Commit any in-progress table-cell edit back to the item model.
+    // QTableWidget's inline editor does not auto-commit when the user
+    // clicks OK without first tabbing away from the cell — without
+    // this call, a freshly typed category name (or a rename of an
+    // existing one) silently reverts to the previous value.
+    if (auto *editor = m_lkTable->indexWidget(m_lkTable->currentIndex())) {
+        m_lkTable->closePersistentEditor(m_lkTable->currentItem());
+        Q_UNUSED(editor);
+    }
+    m_lkTable->setCurrentCell(m_lkTable->currentRow(), m_lkTable->currentColumn());  // nudge commit
+
     // Save LoreKeeper Config
     if (auto *current = m_lkTable->currentItem()) {
         current->setData(Qt::UserRole, m_lkPromptEdit->toPlainText());
@@ -224,16 +343,27 @@ void ProjectSettingsDialog::save()
     QJsonObject lkConfig;
     QJsonArray categories;
     for (int i = 0; i < m_lkTable->rowCount(); ++i) {
+        auto *cell = m_lkTable->item(i, 0);
+        if (!cell) {
+            qWarning() << "ProjectSettings: LoreKeeper row" << i
+                        << "has no cell item — skipping (would have been dropped)";
+            continue;
+        }
         QJsonObject cat;
-        cat[QStringLiteral("name")] = m_lkTable->item(i, 0)->text();
-        cat[QStringLiteral("prompt")] = m_lkTable->item(i, 0)->data(Qt::UserRole).toString();
+        cat[QStringLiteral("name")] = cell->text();
+        cat[QStringLiteral("prompt")] = cell->data(Qt::UserRole).toString();
         categories.append(cat);
     }
     lkConfig[QStringLiteral("categories")] = categories;
+
+    qInfo().noquote() << "ProjectSettings::save: writing"
+                      << categories.size() << "LoreKeeper categor(ies):"
+                      << QJsonDocument(categories).toJson(QJsonDocument::Compact);
+
     pm.setLoreKeeperConfig(lkConfig);
-    
+
     pm.saveProject();
-    
+
     // Notify LoreKeeper Service
     LoreKeeperService::instance().updateConfig(lkConfig);
 }

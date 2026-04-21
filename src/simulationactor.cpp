@@ -99,9 +99,13 @@ void SimulationActor::think(const QJsonObject &worldState, const QJsonArray &rec
     req.stream = false;
 
     QPointer<SimulationActor> weakThis(this);
-    LLMService::instance().sendNonStreamingRequest(req, [weakThis](const QString &response) {
+    LLMService::instance().sendNonStreamingRequestDetailed(req, [weakThis](const QString &response, const QString &llmError) {
         if (!weakThis) return;
-        
+
+        if (!llmError.isEmpty()) {
+            Q_EMIT weakThis->errorOccurred(QStringLiteral("Actor %1: %2").arg(weakThis->m_name, llmError));
+            return;
+        }
         if (response.isEmpty()) {
             Q_EMIT weakThis->errorOccurred(QStringLiteral("Empty response from LLM actor %1").arg(weakThis->m_name));
             return;

@@ -66,8 +66,6 @@ public Q_SLOTS:
 
 private Q_SLOTS:
     void sendMessage();
-    void onResponseChunk(const QString &requestId, const QString &chunk);
-    void onResponseFinished(const QString &requestId, const QString &fullText);
     void onError(const QString &message);
     void clearChat();
     void updateModelList();
