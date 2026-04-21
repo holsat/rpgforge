@@ -214,6 +214,8 @@ add_executable(rpgforge
     src/settingsdialog.h
     src/toggleswitch.cpp
     src/toggleswitch.h
+    src/draghandle.cpp
+    src/draghandle.h
     src/prompteditordialog.cpp
     src/prompteditordialog.h
     src/diagnosticdetaildialog.cpp

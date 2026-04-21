@@ -20,6 +20,7 @@
 #include "settingsdialog.h"
 #include "prompteditordialog.h"
 #include "toggleswitch.h"
+#include "draghandle.h"
 #include <KLocalizedString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -121,8 +122,10 @@ QWidget* SettingsDialog::createLLMTab()
     // the toggle state persists to llm/{provider}/enabled and drives the
     // fallback chain in LLMService::composeDefaultFallbackChain.
     m_providerListWidget = new QListWidget(this);
-    m_providerListWidget->setDragDropMode(QAbstractItemView::InternalMove);
-    m_providerListWidget->setDefaultDropAction(Qt::MoveAction);
+    // Drag-reorder is handled manually by DragHandle widgets embedded in
+    // each row — Qt's InternalMove doesn't fire when rows hold composite
+    // widgets via setItemWidget (child controls absorb the press/move
+    // events before the viewport sees them).
     m_providerListWidget->setSelectionMode(QAbstractItemView::NoSelection);
     m_providerListWidget->setFocusPolicy(Qt::NoFocus);
     m_providerListWidget->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -215,7 +218,10 @@ QWidget* SettingsDialog::createLLMTab()
         rowLayout->setContentsMargins(4, 2, 4, 2);
         rowLayout->setSpacing(8);
 
-        auto *grip = new QLabel(rowWidget);
+        // Draggable grip: DragHandle swaps rows in m_providerListWidget
+        // as the user drags (manual reorder — see draghandle.cpp for why
+        // we bypass Qt's InternalMove in this layout).
+        auto *grip = new DragHandle(m_providerListWidget, rowWidget);
         const QIcon gripIcon = QIcon::fromTheme(
             QStringLiteral("application-menu"),
             QIcon::fromTheme(QStringLiteral("open-menu-symbolic")));
@@ -228,7 +234,6 @@ QWidget* SettingsDialog::createLLMTab()
             gf.setPointSize(gf.pointSize() + 2);
             grip->setFont(gf);
         }
-        grip->setCursor(Qt::OpenHandCursor);
         grip->setToolTip(i18n("Drag to reorder fallback position"));
         grip->setFixedWidth(20);
         grip->setAlignment(Qt::AlignCenter);
