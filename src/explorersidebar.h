@@ -22,6 +22,7 @@
 #include <QWidget>
 
 class QSplitter;
+class QToolButton;
 class ProjectTreePanel;
 class FileExplorer;
 
@@ -33,12 +34,19 @@ public:
     explicit ExplorerSidebar(ProjectTreePanel *projectTree, FileExplorer *fileExplorer, QWidget *parent = nullptr);
     ~ExplorerSidebar() override;
 
+private Q_SLOTS:
+    /// Show or hide the FileExplorer pane and persist the choice to
+    /// QSettings "ui/filesystem_browser_visible" so the state sticks
+    /// across restarts.
+    void setFileExplorerVisible(bool visible);
+
 private:
     void setupUi();
 
     ProjectTreePanel *m_projectTree;
     FileExplorer *m_fileExplorer;
     QSplitter *m_splitter;
+    QToolButton *m_toggleBtn = nullptr;
 };
 
 #endif // EXPLORERSIDEBAR_H
