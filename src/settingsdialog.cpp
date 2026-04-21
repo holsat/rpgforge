@@ -492,14 +492,6 @@ void SettingsDialog::updateModelCombos(LLMProvider provider)
             }
         }
 
-        // Analyzer tab.
-        if (static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()) == provider) {
-            QString current = m_analyzerModelCombo->currentText();
-            m_analyzerModelCombo->clear();
-            m_analyzerModelCombo->addItems(m_modelCache[provider]);
-            m_analyzerModelCombo->setEditText(current);
-        }
-
         // LLM tab — the per-provider default-model combo.
         if (QComboBox *combo = m_providerModelCombos.value(provider, nullptr)) {
             const QString current = combo->currentText();
@@ -694,18 +686,20 @@ QWidget* SettingsDialog::createAnalyzerTab()
     m_analyzerRunModeCombo->addItems({i18n("Continuous (On Save)"), i18n("On-Demand"), i18n("Paused")});
     layout->addRow(i18n("Run Mode:"), m_analyzerRunModeCombo);
 
-    m_analyzerProviderCombo = new QComboBox(this);
-    m_analyzerProviderCombo->addItems({QStringLiteral("OpenAI"), QStringLiteral("Anthropic"), QStringLiteral("Ollama"), QStringLiteral("Grok"), QStringLiteral("Google"), QStringLiteral("LM Studio")});
-    layout->addRow(i18n("Analyzer Provider:"), m_analyzerProviderCombo);
+    // Provider + model for the analyzer live in the AI Agents tab
+    // alongside every other agent. They used to be duplicated here and
+    // both fields wrote to the same QSettings keys, so edits in either
+    // place mirrored the other — visually confusing. Removed to give a
+    // single source of truth.
 
-    m_analyzerModelCombo = new QComboBox(this);
-    m_analyzerModelCombo->setEditable(true);
-    m_analyzerModelCombo->setMinimumWidth(350);
-    layout->addRow(i18n("Analyzer Model:"), m_analyzerModelCombo);
-
-    connect(m_analyzerProviderCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
-        updateModelCombos(static_cast<LLMProvider>(index));
-    });
+    auto *hint = new QLabel(i18n(
+        "Provider and model for the Game Analyzer are configured on the "
+        "AI Agents tab."), tab);
+    hint->setWordWrap(true);
+    QFont hintFont = hint->font();
+    hintFont.setItalic(true);
+    hint->setFont(hintFont);
+    layout->addRow(QString(), hint);
 
     return tab;
 }
@@ -797,9 +791,6 @@ void SettingsDialog::load()
     }
 
     m_analyzerRunModeCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/run_mode"), 2).toInt());
-    m_analyzerProviderCombo->setCurrentIndex(settings.value(QStringLiteral("analyzer/analyzer_provider"), 0).toInt());
-    m_analyzerModelCombo->setEditText(settings.value(QStringLiteral("analyzer/analyzer_model")).toString());
-    updateModelCombos(static_cast<LLMProvider>(m_analyzerProviderCombo->currentIndex()));
 
     // Load Agent Configurations
     for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {
@@ -975,8 +966,8 @@ void SettingsDialog::save()
     LLMService::instance().setApiKey(LLMProvider::LMStudio, m_lmstudioKeyEdit->text());
 
     settings.setValue(QStringLiteral("analyzer/run_mode"), m_analyzerRunModeCombo->currentIndex());
-    settings.setValue(QStringLiteral("analyzer/analyzer_provider"), m_analyzerProviderCombo->currentIndex());
-    settings.setValue(QStringLiteral("analyzer/analyzer_model"), m_analyzerModelCombo->currentText());
+    // Analyzer provider/model are written by the AI Agents tab loop
+    // below (createAgentRow "analyzer") — no duplicate write needed.
 
     // Save Agent Configurations
     for (auto it = m_agentConfigs.begin(); it != m_agentConfigs.end(); ++it) {

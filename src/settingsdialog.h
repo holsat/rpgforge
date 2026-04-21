@@ -143,8 +143,9 @@ private:
 
     // Analyzer
     QComboBox *m_analyzerRunModeCombo;
-    QComboBox *m_analyzerProviderCombo;
-    QComboBox *m_analyzerModelCombo; // Changed from QLineEdit
+    // Analyzer provider/model are configured on the AI Agents tab —
+    // the old dedicated combos here were duplicates writing to the
+    // same QSettings keys. Kept only the analyzer-specific run-mode.
 };
 
 #endif // SETTINGSDIALOG_H
