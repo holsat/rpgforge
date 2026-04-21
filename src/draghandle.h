@@ -21,29 +21,31 @@
 
 #include <QLabel>
 
-class QListWidget;
+class QBoxLayout;
 class QMouseEvent;
 
 /**
- * @brief Grip-style drag handle for reordering rows in a QListWidget whose
- * items use setItemWidget() for their content. Qt's built-in
- * InternalMove drag doesn't fire in that configuration because child
- * widgets (line edits, combos, toggles) absorb the mouse events before
- * the list viewport can detect the press-and-move.
+ * @brief Grip-style drag handle for reordering sibling widgets inside a
+ * QBoxLayout (typically QVBoxLayout). Earlier versions of this class
+ * targeted QListWidget + setItemWidget, but that combination proved
+ * unstable: Qt's internal "persistent editor" machinery racing with
+ * model mutations produced use-after-free crashes during paint.
  *
- * This handle bypasses the drag-drop framework entirely: on mousePress
- * it records the source row; on each mouseMove it computes the row
- * under the cursor and, if different from the current row, does a
- * takeItem+insertItem on the host list, re-setting the item widget so
- * the composite row contents survive the move. Release clears the
- * tracking. Callers that care about the new order read it from the
- * list's current row sequence; no signal needed.
+ * The current implementation works entirely on the layout:
+ * on mousePress it records the source widget's layout index; on
+ * mouseRelease it takes the index under the cursor and, via a queued
+ * invocation, removes the source widget from the layout and
+ * re-inserts it at the target position. No model, no persistent
+ * editors, no viewport to reparent from.
+ *
+ * Callers that care about the final order iterate the layout's
+ * children in order; no signal is emitted (caller reads on save).
  */
 class DragHandle : public QLabel
 {
     Q_OBJECT
 public:
-    DragHandle(QListWidget *list, QWidget *parent = nullptr);
+    DragHandle(QBoxLayout *layout, QWidget *parent = nullptr);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -51,20 +53,19 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
-    /// Look up the row this handle belongs to by searching the list for
-    /// the QListWidgetItem whose item-widget is this handle's parent.
-    /// Returns -1 if not found (shouldn't happen during normal use).
-    int findMyRow() const;
+    /// Return the layout index of our row widget (the handle's parent).
+    /// Returns -1 if the parent is no longer in the layout.
+    int findMyIndex() const;
 
-    QListWidget *m_list;
-    bool m_pressed = false;
-    int  m_sourceRow = -1;
-    /// Row the cursor is currently over. Updated during mouseMove; the
-    /// actual list mutation is deferred to mouseRelease (via a queued
-    /// invocation) so we never rearrange while the event handler is
-    /// still running — mid-move reordering would destroy the row widget
-    /// this handle lives in and crash on the next mouse event.
-    int  m_pendingTargetRow = -1;
+    /// Given a global mouse position, return the layout index whose
+    /// corresponding row widget contains (or is closest to) that point.
+    /// Returns -1 if no row matches.
+    int indexUnderGlobalPos(const QPoint &globalPos) const;
+
+    QBoxLayout *m_layout;
+    bool        m_pressed = false;
+    int         m_sourceIndex = -1;
+    int         m_pendingTargetIndex = -1;
 };
 
 #endif // DRAGHANDLE_H

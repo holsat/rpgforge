@@ -88,12 +88,16 @@ void SettingsDialog::setupUi()
 // ---------------------------------------------------------------------------
 void SettingsDialog::saveProviderOrderList()
 {
-    if (!m_providerListWidget) return;
+    if (!m_providerRowsLayout) return;
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     QStringList orderKeys;
-    for (int row = 0; row < m_providerListWidget->count(); ++row) {
-        QListWidgetItem *item = m_providerListWidget->item(row);
-        const auto p = static_cast<LLMProvider>(item->data(Qt::UserRole).toInt());
+    for (int i = 0; i < m_providerRowsLayout->count(); ++i) {
+        QLayoutItem *item = m_providerRowsLayout->itemAt(i);
+        QWidget *w = item ? item->widget() : nullptr;
+        if (!w) continue;
+        const QVariant tag = w->property("llmProvider");
+        if (!tag.isValid()) continue;
+        const auto p = static_cast<LLMProvider>(tag.toInt());
         orderKeys.append(LLMService::providerKey(p));
         if (ToggleSwitch *sw = m_providerToggles.value(p, nullptr)) {
             settings.setValue(LLMService::providerSettingsKey(p) + QStringLiteral("/enabled"),
@@ -116,27 +120,23 @@ QWidget* SettingsDialog::createLLMTab()
     layout->addLayout(providerLayout);
 
     // --- Provider stack ---
-    // Each provider's credential/model block lives inside a QListWidget row
-    // so the whole row (grip icon | group box | toggle switch) can be
-    // drag-reordered natively. Row order persists to llm/provider_order;
-    // the toggle state persists to llm/{provider}/enabled and drives the
-    // fallback chain in LLMService::composeDefaultFallbackChain.
-    m_providerListWidget = new QListWidget(this);
-    // Drag-reorder is handled manually by DragHandle widgets embedded in
-    // each row — Qt's InternalMove doesn't fire when rows hold composite
-    // widgets via setItemWidget (child controls absorb the press/move
-    // events before the viewport sees them).
-    m_providerListWidget->setSelectionMode(QAbstractItemView::NoSelection);
-    m_providerListWidget->setFocusPolicy(Qt::NoFocus);
-    m_providerListWidget->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    m_providerListWidget->setSpacing(4);
-    // A visible frame around the whole list would compete with the group
-    // boxes' own frames; drop it so the rows look like standalone panels.
-    m_providerListWidget->setFrameShape(QFrame::NoFrame);
-    m_providerListWidget->setStyleSheet(
-        QStringLiteral("QListWidget::item { background: transparent; }"
-                       "QListWidget::item:selected { background: transparent; }"));
-    layout->addWidget(m_providerListWidget, /*stretch=*/1);
+    // Each provider's credential/model block lives in a composite row
+    // (grip icon | group box | toggle switch) added to a plain
+    // QVBoxLayout inside a QScrollArea. DragHandle reorders by
+    // removeWidget/insertWidget on this layout — no QListWidget,
+    // no setItemWidget persistent-editor fragility. Row order persists
+    // to llm/provider_order; the toggle state persists to
+    // llm/{provider}/enabled and drives the fallback chain in
+    // LLMService::composeDefaultFallbackChain.
+    auto *providersScroll = new QScrollArea(this);
+    providersScroll->setWidgetResizable(true);
+    providersScroll->setFrameShape(QFrame::NoFrame);
+    auto *providersContainer = new QWidget(providersScroll);
+    m_providerRowsLayout = new QVBoxLayout(providersContainer);
+    m_providerRowsLayout->setContentsMargins(0, 0, 0, 0);
+    m_providerRowsLayout->setSpacing(6);
+    providersScroll->setWidget(providersContainer);
+    layout->addWidget(providersScroll, /*stretch=*/1);
 
     auto *orderHint = new QLabel(
         i18n("Drag the ≡ handle to reorder providers. Toggle the switch to "
@@ -218,10 +218,9 @@ QWidget* SettingsDialog::createLLMTab()
         rowLayout->setContentsMargins(4, 2, 4, 2);
         rowLayout->setSpacing(8);
 
-        // Draggable grip: DragHandle swaps rows in m_providerListWidget
-        // as the user drags (manual reorder — see draghandle.cpp for why
-        // we bypass Qt's InternalMove in this layout).
-        auto *grip = new DragHandle(m_providerListWidget, rowWidget);
+        // Draggable grip: DragHandle reorders rows in
+        // m_providerRowsLayout on mouseRelease. See draghandle.cpp.
+        auto *grip = new DragHandle(m_providerRowsLayout, rowWidget);
         const QIcon gripIcon = QIcon::fromTheme(
             QStringLiteral("application-menu"),
             QIcon::fromTheme(QStringLiteral("open-menu-symbolic")));
@@ -248,13 +247,10 @@ QWidget* SettingsDialog::createLLMTab()
         m_providerToggles.insert(provider, toggle);
         rowLayout->addWidget(toggle, 0, Qt::AlignTop);
 
-        auto *item = new QListWidgetItem(m_providerListWidget);
-        item->setData(Qt::UserRole, static_cast<int>(provider));
-        // Disable per-item selection/focus styling — the rich widget
-        // should render without any list-chrome overlay.
-        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsDragEnabled);
-        item->setSizeHint(rowWidget->sizeHint());
-        m_providerListWidget->setItemWidget(item, rowWidget);
+        // Tag the row widget with its provider so save-time iteration
+        // can recover the identity by walking the QVBoxLayout children.
+        rowWidget->setProperty("llmProvider", static_cast<int>(provider));
+        m_providerRowsLayout->addWidget(rowWidget);
 
         m_providerModelCombos.insert(provider, modelCombo);
         m_providerEmbeddingCombos.insert(provider, embeddingCombo);

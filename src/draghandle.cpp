@@ -17,48 +17,45 @@
 */
 
 #include "draghandle.h"
-#include <QListWidget>
-#include <QListWidgetItem>
+#include <QApplication>
+#include <QBoxLayout>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPointer>
-#include <QMetaObject>
+#include <QWidget>
 
-DragHandle::DragHandle(QListWidget *list, QWidget *parent)
-    : QLabel(parent), m_list(list)
+DragHandle::DragHandle(QBoxLayout *layout, QWidget *parent)
+    : QLabel(parent), m_layout(layout)
 {
     setCursor(Qt::OpenHandCursor);
 }
 
 void DragHandle::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() != Qt::LeftButton || !m_list) {
+    if (event->button() != Qt::LeftButton || !m_layout) {
         QLabel::mousePressEvent(event);
         return;
     }
     m_pressed = true;
-    m_sourceRow = findMyRow();
-    m_pendingTargetRow = m_sourceRow;
+    m_sourceIndex = findMyIndex();
+    m_pendingTargetIndex = m_sourceIndex;
     setCursor(Qt::ClosedHandCursor);
     event->accept();
 }
 
 void DragHandle::mouseMoveEvent(QMouseEvent *event)
 {
-    if (!m_pressed || !m_list || m_sourceRow < 0) {
+    if (!m_pressed || !m_layout || m_sourceIndex < 0) {
         QLabel::mouseMoveEvent(event);
         return;
     }
 
-    // Only track which row the cursor is over; do NOT mutate the list
-    // here. Calling takeItem / insertItem mid-event would reparent (or
-    // destroy) the row widget this handle lives in, dangling `this`
-    // before the handler returns. The real move is deferred to
-    // mouseRelease via a queued invocation — see below.
-    const QPoint viewportPos = m_list->viewport()->mapFromGlobal(
-        event->globalPosition().toPoint());
-    if (QListWidgetItem *target = m_list->itemAt(viewportPos)) {
-        m_pendingTargetRow = m_list->row(target);
-    }
+    // Track only; the actual reorder is deferred to mouseRelease via a
+    // queued invocation. Reordering layout children during an active
+    // mouse event can destroy the widget hierarchy the handler is still
+    // unwinding through.
+    const int idx = indexUnderGlobalPos(event->globalPosition().toPoint());
+    if (idx >= 0) m_pendingTargetIndex = idx;
     event->accept();
 }
 
@@ -69,54 +66,72 @@ void DragHandle::mouseReleaseEvent(QMouseEvent *event)
         return;
     }
 
-    const int src = m_sourceRow;
-    const int tgt = m_pendingTargetRow;
+    const int src = m_sourceIndex;
+    const int tgt = m_pendingTargetIndex;
     m_pressed = false;
-    m_sourceRow = -1;
-    m_pendingTargetRow = -1;
+    m_sourceIndex = -1;
+    m_pendingTargetIndex = -1;
     setCursor(Qt::OpenHandCursor);
     event->accept();
 
-    if (!m_list || src < 0 || tgt < 0 || src == tgt) return;
+    if (!m_layout || src < 0 || tgt < 0 || src == tgt) return;
 
-    // Defer the actual move to the event loop. Running takeItem +
-    // insertItem + setItemWidget from inside mouseRelease can still
-    // destroy the widget hierarchy the release is propagating through,
-    // which has been observed to crash on certain Qt builds. The
-    // queued invocation runs after this handler has fully returned and
-    // the event stack has unwound.
-    QPointer<QListWidget> list(m_list);
-    QMetaObject::invokeMethod(m_list, [list, src, tgt]() {
-        if (!list) return;
-        if (src >= list->count()) return;
+    // Defer the actual layout mutation to the event loop. Posting via
+    // QueuedConnection guarantees the mouseRelease handler has fully
+    // returned (and any paint/layout events queued during that return
+    // have been flushed) before we touch the layout. removeWidget +
+    // insertWidget on a plain QBoxLayout doesn't involve Qt's
+    // model/view editor bookkeeping, so no persistent-index state can
+    // go stale — the widget is simply relocated.
+    QPointer<QBoxLayout> layout(m_layout);
+    QMetaObject::invokeMethod(qApp, [layout, src, tgt]() {
+        if (!layout) return;
+        if (src < 0 || src >= layout->count()) return;
 
-        QListWidgetItem *item = list->item(src);
+        QLayoutItem *item = layout->itemAt(src);
         if (!item) return;
-        QWidget *rowWidget = list->itemWidget(item);
+        QWidget *w = item->widget();
+        if (!w) return;
 
-        // Detach the row widget from the list before the model mutation
-        // so Qt's internal persistent-index cleanup doesn't schedule it
-        // for deletion when the row disappears. We'll reparent it back
-        // when we re-bind with setItemWidget after the insert.
-        if (rowWidget) rowWidget->setParent(nullptr);
-
-        list->takeItem(src);
-        // Clamp tgt in case a row count change slipped in between the
-        // release and the queued callback.
-        const int safeTgt = qBound(0, tgt, list->count());
-        list->insertItem(safeTgt, item);
-        if (rowWidget) list->setItemWidget(item, rowWidget);
+        layout->removeWidget(w);
+        // After removeWidget, layout->count() has dropped by one.
+        const int safeTgt = qBound(0, tgt, layout->count());
+        layout->insertWidget(safeTgt, w);
     }, Qt::QueuedConnection);
 }
 
-int DragHandle::findMyRow() const
+int DragHandle::findMyIndex() const
 {
-    if (!m_list) return -1;
-    // The handle sits inside a composite row widget (grip | group box |
-    // toggle). The list's itemWidget for our item is our parent widget.
+    if (!m_layout) return -1;
     const QWidget *myRow = parentWidget();
-    for (int r = 0; r < m_list->count(); ++r) {
-        if (m_list->itemWidget(m_list->item(r)) == myRow) return r;
+    for (int i = 0; i < m_layout->count(); ++i) {
+        if (m_layout->itemAt(i) && m_layout->itemAt(i)->widget() == myRow) {
+            return i;
+        }
     }
     return -1;
+}
+
+int DragHandle::indexUnderGlobalPos(const QPoint &globalPos) const
+{
+    if (!m_layout) return -1;
+    // Walk the layout's widgets and pick the one whose frame contains
+    // the mouse vertically. If the mouse is past the last row, return
+    // the last index; if above the first, return 0.
+    int bestIdx = -1;
+    int bestDist = std::numeric_limits<int>::max();
+    for (int i = 0; i < m_layout->count(); ++i) {
+        QLayoutItem *it = m_layout->itemAt(i);
+        QWidget *w = it ? it->widget() : nullptr;
+        if (!w) continue;
+        const QRect globalRect(w->mapToGlobal(QPoint(0, 0)), w->size());
+        if (globalRect.contains(globalPos)) return i;
+        const int centerY = globalRect.center().y();
+        const int dist = std::abs(centerY - globalPos.y());
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+        }
+    }
+    return bestIdx;
 }

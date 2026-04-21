@@ -69,11 +69,12 @@ private:
     QCheckBox *m_typewriterScrollingCheck = nullptr;
 
     // Each provider's settings block is wrapped in a composite row widget
-    // (grip icon | group box | toggle switch) and inserted as an item in
-    // this QListWidget. Drag-to-reorder is native via InternalMove, and
-    // the toggle switch on each row controls llm/{provider}/enabled.
-    // Persists to llm/provider_order + per-provider /enabled on save.
-    QListWidget *m_providerListWidget = nullptr;
+    // (grip icon | group box | toggle switch) and added to a plain
+    // QVBoxLayout inside a scrollable container. DragHandle moves rows
+    // within that layout via removeWidget/insertWidget. The row widget
+    // carries its LLMProvider as a dynamic property for save-time
+    // iteration. Persists to llm/provider_order + per-provider /enabled.
+    class QVBoxLayout *m_providerRowsLayout = nullptr;
     QHash<LLMProvider, class ToggleSwitch*> m_providerToggles;
     void saveProviderOrderList();
 
