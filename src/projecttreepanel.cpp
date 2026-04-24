@@ -34,6 +34,7 @@
 #include "mainwindow.h"
 #include <QDir>
 #include <QPainter>
+#include <QSettings>
 #include <QStyledItemDelegate>
 #include <QApplication>
 #include <QComboBox>
@@ -125,6 +126,15 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     });
 
     m_gitStatus = new GitStatusModel(this);
+
+    // Load persisted expansion state (set of folder paths) so the tree
+    // opens with the same collapsed/expanded shape as the last session.
+    {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        const QStringList saved = s.value(
+            QStringLiteral("ui/projectTreeExpanded")).toStringList();
+        m_expandedPaths = QSet<QString>(saved.begin(), saved.end());
+    }
 
     setupUi();
     
@@ -233,6 +243,29 @@ void ProjectTreePanel::setupUi()
     // time instead of waiting for another click or scroll.
     connect(m_gitStatus, &GitStatusModel::statusChanged, m_treeView,
             QOverload<>::of(&QWidget::update));
+
+    // Track expansion state so refreshes (sync, save, treeChanged, status
+    // polling) don't fling collapsed folders open. Skip updates while we're
+    // restoring state ourselves — otherwise the restore would feed back and
+    // mark every path expanded.
+    connect(m_treeView, &QTreeView::expanded, this, [this](const QModelIndex &idx) {
+        if (m_restoringExpandState) return;
+        if (ProjectTreeItem *it = m_model->itemFromIndex(idx); it && !it->path.isEmpty()) {
+            m_expandedPaths.insert(it->path);
+            QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+            s.setValue(QStringLiteral("ui/projectTreeExpanded"),
+                QStringList(m_expandedPaths.constBegin(), m_expandedPaths.constEnd()));
+        }
+    });
+    connect(m_treeView, &QTreeView::collapsed, this, [this](const QModelIndex &idx) {
+        if (m_restoringExpandState) return;
+        if (ProjectTreeItem *it = m_model->itemFromIndex(idx); it && !it->path.isEmpty()) {
+            m_expandedPaths.remove(it->path);
+            QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+            s.setValue(QStringLiteral("ui/projectTreeExpanded"),
+                QStringList(m_expandedPaths.constBegin(), m_expandedPaths.constEnd()));
+        }
+    });
     m_treeView->setHeaderHidden(true);
     m_treeView->setAnimated(true);
     m_treeView->setDragEnabled(true);
@@ -290,6 +323,50 @@ void ProjectTreePanel::refreshGitStatus()
     if (m_gitStatus) m_gitStatus->refresh();
 }
 
+void ProjectTreePanel::captureExpansionState()
+{
+    if (!m_treeView || !m_model) return;
+    m_expandedPaths.clear();
+    std::function<void(const QModelIndex&)> walk = [&](const QModelIndex &idx) {
+        if (idx.isValid() && m_treeView->isExpanded(idx)) {
+            if (ProjectTreeItem *it = m_model->itemFromIndex(idx); it && !it->path.isEmpty()) {
+                m_expandedPaths.insert(it->path);
+            }
+        }
+        const int rows = m_model->rowCount(idx);
+        for (int r = 0; r < rows; ++r) walk(m_model->index(r, 0, idx));
+    };
+    walk(QModelIndex());
+}
+
+void ProjectTreePanel::restoreExpansionState()
+{
+    if (!m_treeView || !m_model) return;
+    // First-run / no saved state → default to fully expanded so new users
+    // see their project in full.
+    if (m_expandedPaths.isEmpty()) {
+        m_treeView->expandAll();
+        return;
+    }
+    // Re-entry guard: block the expanded/collapsed signal handlers from
+    // seeing our own programmatic expand calls as user intent.
+    m_restoringExpandState = true;
+    m_treeView->collapseAll();
+    std::function<void(const QModelIndex&)> walk = [&](const QModelIndex &idx) {
+        const int rows = m_model->rowCount(idx);
+        for (int r = 0; r < rows; ++r) {
+            const QModelIndex child = m_model->index(r, 0, idx);
+            ProjectTreeItem *it = m_model->itemFromIndex(child);
+            if (it && m_expandedPaths.contains(it->path)) {
+                m_treeView->expand(child);
+            }
+            walk(child);
+        }
+    };
+    walk(QModelIndex());
+    m_restoringExpandState = false;
+}
+
 void ProjectTreePanel::onProjectOpened()
 {
     qDebug() << "ProjectTreePanel: Handling project update/opened. Model root children:" << m_model->rowCount(QModelIndex());
@@ -311,7 +388,7 @@ void ProjectTreePanel::onProjectOpened()
         m_gitStatus->setRootPath(ProjectManager::instance().projectPath());
     }
 
-    m_treeView->expandAll();
+    restoreExpansionState();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
     m_syncBtn->setEnabled(true);
@@ -444,7 +521,7 @@ void ProjectTreePanel::syncProject()
     SynopsisService::instance().pause();
     m_model->setProjectData(m_model->projectData()); // Refresh view
     SynopsisService::instance().resume();
-    m_treeView->expandAll();
+    restoreExpansionState();
 
     // Check if there are any uncommitted changes before committing
     // This prevents duplicate \"Initial sync\" commits if Sync is hit twice.

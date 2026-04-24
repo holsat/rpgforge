@@ -136,9 +136,12 @@ void KnowledgeBase::generateEmbeddingWithFallback(
             return;
         }
         const auto &p = (*chainPtr)[idx];
-        // Skip cooled-down pairs without network traffic.
+        // Skip cooled-down pairs without network traffic. qDebug (not
+        // qWarning) because `recordCooldown` already logs a one-shot warning
+        // when the cooldown is set — a reminder per embedding request turns
+        // the log into a wall of spam during reindex (67 files × N chunks).
         if (LLMService::instance().isCooledDown(p.first, p.second)) {
-            qWarning().noquote()
+            qDebug().noquote()
                 << "KnowledgeBase: embedding candidate"
                 << LLMService::providerName(p.first) << "/" << p.second
                 << "is cooling down; trying next.";
@@ -149,6 +152,14 @@ void KnowledgeBase::generateEmbeddingWithFallback(
             p.first, p.second, text,
             [tryOne, callback, idx, provider = p.first, model = p.second](const QVector<float> &vec) {
                 if (!vec.isEmpty()) {
+                    if (idx > 0) {
+                        // Fallback worked — log once so the user knows which
+                        // candidate actually served the request when the
+                        // preferred one(s) were cooled down or broken.
+                        qInfo().noquote()
+                            << "KnowledgeBase: embedding served by fallback candidate"
+                            << LLMService::providerName(provider) << "/" << model;
+                    }
                     if (callback) callback(vec);
                     return;
                 }

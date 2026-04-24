@@ -22,6 +22,7 @@
 #include <QWidget>
 #include <QModelIndex>
 #include <QPersistentModelIndex>
+#include <QSet>
 
 class QTreeView;
 class ProjectTreeModel;
@@ -102,6 +103,16 @@ private:
     QToolButton *m_newExplorationBtn = nullptr;
     GitStatusModel *m_gitStatus = nullptr;
     bool m_isSaving = false;
+    /// Tracks which folder paths the user has currently expanded. Updated
+    /// live via QTreeView::expanded/collapsed signals; restored after any
+    /// onProjectOpened refresh so Sync / save / status-refresh don't fling
+    /// the user's collapsed tree back open. Persisted to QSettings
+    /// ("ui/projectTreeExpanded") so it survives restarts.
+    QSet<QString> m_expandedPaths;
+    bool m_restoringExpandState = false;
+
+    void captureExpansionState();
+    void restoreExpansionState();
 };
 
 #endif // PROJECTTREEPANEL_H

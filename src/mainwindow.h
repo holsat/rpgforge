@@ -273,6 +273,11 @@ private:
     /// the next togglePreview(true). Persists across app restarts via
     /// QSettings("preview/paneWidth"). 0 means "use the 30% default".
     int m_preferredPreviewWidth = 0;
+    /// Cached editor/typewriterScrolling setting — read from QSettings at
+    /// startup and refreshed when Settings is accepted. Prevents a per-
+    /// keystroke QSettings() construction + disk/registry read inside
+    /// onCursorPositionChanged().
+    bool m_typewriterScrolling = false;
 
     QTimer *m_cursorDebounce = nullptr;
     QTimer *m_textChangeDebounce = nullptr;
