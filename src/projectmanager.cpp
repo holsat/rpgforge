@@ -19,6 +19,8 @@
 #include "projectmanager.h"
 #include "projectkeys.h"
 #include "projecttreemodel.h"
+#include <KIO/Job>
+#include <KIO/DeleteOrTrashJob>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -648,7 +650,7 @@ bool ProjectManager::moveItem(const QString &sourcePath, const QString &targetPa
     return moveItem(sourcePath, targetParentPath, newParent->children.count());
 }
 
-bool ProjectManager::removeItem(const QString &path)
+bool ProjectManager::removeItem(const QString &path, bool moveToTrash)
 {
     if (!isProjectOpen()) return false;
     if (path.isEmpty()) return false;
@@ -677,22 +679,31 @@ bool ProjectManager::removeItem(const QString &path)
 
     const QString absPath = QDir(projectPath()).absoluteFilePath(path);
     const QFileInfo fi(absPath);
-    const bool isFolder = (item->type == ProjectTreeItem::Folder);
 
-    // Disk op first. If the on-disk entry is missing we still prune the tree
-    // (it was already out-of-sync); only a genuine failure to delete an
-    // existing entry is an error.
-    bool diskOk = true;
-    if (fi.exists()) {
-        if (isFolder) {
-            diskOk = QDir(absPath).removeRecursively();
-        } else {
-            diskOk = QFile::remove(absPath);
+    // Disk op first (only when moveToTrash is set). Missing-on-disk is
+    // tolerated — we still prune the tree because it was already out-of-
+    // sync; only a genuine failure to trash an existing entry is an error.
+    if (moveToTrash && fi.exists()) {
+        auto *job = new KIO::DeleteOrTrashJob(
+            {QUrl::fromLocalFile(absPath)},
+            KIO::AskUserActionInterface::Trash,
+            KIO::AskUserActionInterface::DefaultConfirmation,
+            this);
+        QEventLoop loop;
+        bool trashOk = false;
+        QString err;
+        QObject::connect(job, &KJob::result, &loop, [&](KJob *j) {
+            trashOk = (j->error() == KJob::NoError);
+            if (!trashOk) err = j->errorString();
+            loop.quit();
+        });
+        job->start();
+        loop.exec();
+        if (!trashOk) {
+            qWarning() << "ProjectManager::removeItem: KIO trash failed for" << absPath
+                       << ":" << err;
+            return false;
         }
-    }
-    if (!diskOk) {
-        qWarning() << "ProjectManager::removeItem: failed to delete on disk:" << absPath;
-        return false;
     }
 
     const QModelIndex idx = m_treeModel->indexForItem(item);

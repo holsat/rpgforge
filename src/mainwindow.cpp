@@ -367,12 +367,14 @@ void MainWindow::setupEditor()
 
 void MainWindow::setupSidebar()
 {
-    // Create the sidebar panels
+    // Create the sidebar panels. OutlinePanel is hosted inside the Project
+    // Explorer tab (alongside the project tree and filesystem browser) so
+    // users can see document structure and project structure simultaneously.
     m_fileExplorer = new FileExplorer(this);
     m_projectTree = new ProjectTreePanel(this);
-    auto *explorerStack = new ExplorerSidebar(m_projectTree, m_fileExplorer, this);
-    
     m_outlinePanel = new OutlinePanel(this);
+    auto *explorerStack = new ExplorerSidebar(m_projectTree, m_outlinePanel, m_fileExplorer, this);
+
     m_gitPanel = new GitPanel(this);
     m_explorationsPanel = new ExplorationsPanel(this);
     m_breadcrumbBar = new BreadcrumbBar(this);
@@ -387,10 +389,8 @@ void MainWindow::setupSidebar()
         QIcon::fromTheme(QStringLiteral("folder-symbolic")),
         i18n("Project Explorer"),
         explorerStack);
-    m_outlineId = m_sidebar->addPanel(
-        QIcon::fromTheme(QStringLiteral("view-list-tree-symbolic")),
-        QStringLiteral("Document Outline"),
-        m_outlinePanel);
+    // Outline now lives inside the Project Explorer tab (ExplorerSidebar);
+    // no longer a standalone tab.
     m_variablesId = m_sidebar->addPanel(
         QIcon::fromTheme(QStringLiteral("code-variable-symbolic")),
         QStringLiteral("Variables"),

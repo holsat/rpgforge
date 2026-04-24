@@ -105,9 +105,24 @@ void ProjectTreePanel::setupUi()
 
     m_addFileBtn = new QToolButton(this);
     m_addFileBtn->setIcon(QIcon::fromTheme(QStringLiteral("document-new")));
-    m_addFileBtn->setToolTip(i18n("Add File Link"));
+    m_addFileBtn->setToolTip(i18n("Add File"));
     connect(m_addFileBtn, &QToolButton::clicked, this, &ProjectTreePanel::addFile);
     toolbar->addWidget(m_addFileBtn);
+
+    toolbar->addSpacing(10);
+    auto *expandAllBtn = new QToolButton(this);
+    expandAllBtn->setIcon(QIcon::fromTheme(QStringLiteral("expand-symbolic"),
+        QIcon::fromTheme(QStringLiteral("view-list-tree"))));
+    expandAllBtn->setToolTip(i18n("Expand All"));
+    connect(expandAllBtn, &QToolButton::clicked, this, [this]() { m_treeView->expandAll(); });
+    toolbar->addWidget(expandAllBtn);
+
+    auto *collapseAllBtn = new QToolButton(this);
+    collapseAllBtn->setIcon(QIcon::fromTheme(QStringLiteral("collapse-symbolic"),
+        QIcon::fromTheme(QStringLiteral("view-list-details"))));
+    collapseAllBtn->setToolTip(i18n("Collapse All"));
+    connect(collapseAllBtn, &QToolButton::clicked, this, [this]() { m_treeView->collapseAll(); });
+    toolbar->addWidget(collapseAllBtn);
 
     toolbar->addSpacing(10);
     m_syncBtn = new QToolButton(this);
@@ -628,7 +643,7 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
     }
 
     menu.addAction(QIcon::fromTheme(QStringLiteral("folder-new")), i18n("Add Folder"), this, &ProjectTreePanel::addFolder);
-    menu.addAction(QIcon::fromTheme(QStringLiteral("document-new")), i18n("Add File Link"), this, &ProjectTreePanel::addFile);
+    menu.addAction(QIcon::fromTheme(QStringLiteral("document-new")), i18n("Add File"), this, &ProjectTreePanel::addFile);
     
     if (index.isValid()) {
         menu.addSeparator();
@@ -846,7 +861,7 @@ void ProjectTreePanel::addFile()
             ? projectDir
             : QDir(projectDir).absoluteFilePath(parentPath);
         if (!QDir().mkpath(parentAbs)) {
-            QMessageBox::warning(this, i18n("Add File Link"),
+            QMessageBox::warning(this, i18n("Add File"),
                 i18n("Could not access the destination folder."));
             return;
         }
@@ -872,7 +887,7 @@ void ProjectTreePanel::addFile()
         }
 
         if (!QFile::copy(pickedAbs, destAbs)) {
-            QMessageBox::warning(this, i18n("Add File Link"),
+            QMessageBox::warning(this, i18n("Add File"),
                 i18n("Failed to copy \"%1\" into the project.", pickedInfo.fileName()));
             return;
         }
@@ -888,9 +903,32 @@ void ProjectTreePanel::removeItem()
 {
     QModelIndex index = m_treeView->currentIndex();
     ProjectTreeItem *item = m_model->itemFromIndex(index);
-    if (item) {
-        ProjectManager::instance().removeItem(item->path);
+    if (!item) return;
+
+    const bool isFolder = (item->type == ProjectTreeItem::Folder);
+    const QString typeLabel = isFolder ? i18n("folder") : i18n("file");
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(i18n("Remove %1", typeLabel));
+    box.setText(i18n("Remove %1 \"%2\"?", typeLabel, item->name));
+    box.setInformativeText(i18n(
+        "Move to Trash sends the %1 to the system trash (recoverable). "
+        "Remove from Project only drops the tree entry and leaves the "
+        "%1 on disk untouched.", typeLabel));
+    auto *trashBtn = box.addButton(i18n("Move to Trash"), QMessageBox::DestructiveRole);
+    auto *unlinkBtn = box.addButton(i18n("Remove from Project"), QMessageBox::AcceptRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+
+    QAbstractButton *clicked = box.clickedButton();
+    if (clicked == trashBtn) {
+        ProjectManager::instance().removeItem(item->path, /*moveToTrash=*/true);
+    } else if (clicked == unlinkBtn) {
+        ProjectManager::instance().removeItem(item->path, /*moveToTrash=*/false);
     }
+    // Cancel: no-op.
 }
 
 void ProjectTreePanel::renameItem()
