@@ -287,6 +287,13 @@ void MainWindow::setupEditor()
     m_cursorDebounce->setInterval(100);
     connect(m_cursorDebounce, &QTimer::timeout, this, &MainWindow::updateCursorContext);
 
+    // Load per-keystroke settings cache.
+    {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        m_typewriterScrolling = s.value(
+            QStringLiteral("editor/typewriterScrolling"), false).toBool();
+    }
+
     // Debounce text changes to prevent UI stutter and recursion crashes
     m_textChangeDebounce = new QTimer(this);
     m_textChangeDebounce->setSingleShot(true);
@@ -1352,9 +1359,12 @@ void MainWindow::updateErrorHighlighting()
         m_previewPanel->setMarkdown(contentOnly);
     }
 
-    // 3. Update word count
-    // Simple word count: split by whitespace and filter out empty strings
-    int wordCount = contentOnly.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).count();
+    // 3. Update word count. Compiled-once regex + single-pass matcher avoids
+    // the per-tick QRegularExpression construction and the intermediate
+    // QStringList allocation that `.split().count()` creates.
+    static const QRegularExpression wordRe(QStringLiteral("\\S+"));
+    int wordCount = 0;
+    for (auto it = wordRe.globalMatch(contentOnly); it.hasNext(); it.next()) ++wordCount;
     m_wordCountStatus->setText(i18n("Words: %1", wordCount));
 
     // 4. Highlight undefined variable references with red squiggly underline
@@ -1400,8 +1410,12 @@ void MainWindow::updateErrorHighlighting()
     }
 
     if (m_librarianService) {
+        // scanFile is async; entityUpdated fires when it finishes and drives
+        // updateLibrarianHighlights (see ctor wiring). Calling that path
+        // synchronously here runs full-document regex + O(N) SQLite queries
+        // on every keystroke's debounce tick, which is the main source of
+        // typing stutter on large documents.
         m_librarianService->scanFile(doc->url().toLocalFile());
-        updateLibrarianHighlights();
     }
 }
 
@@ -1409,9 +1423,10 @@ void MainWindow::onCursorPositionChanged()
 {
     m_cursorDebounce->start();
 
-    // Typewriter scrolling (keep cursor centered)
-    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    if (settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool()) {
+    // Typewriter scrolling (keep cursor centered). Cached via
+    // m_typewriterScrolling — hitting QSettings on every cursor move
+    // is expensive at keyboard-repeat speed.
+    if (m_typewriterScrolling) {
         auto *view = activeView();
         if (view) {
             // TODO: Centering cursor in KF6 KTextEditor::View
@@ -2009,7 +2024,10 @@ void MainWindow::globalSettings()
 {
     SettingsDialog dialog(this);
     if (dialog.exec() == QDialog::Accepted) {
-        // Models might have changed, refresh the list in chat panel
+        // Refresh cached settings that hot-paths read.
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        m_typewriterScrolling = s.value(
+            QStringLiteral("editor/typewriterScrolling"), false).toBool();
     }
 }
 
@@ -2598,8 +2616,11 @@ void MainWindow::updateLibrarianHighlights()
     QString text = doc->text();
 
     // 1. Check for inconsistencies (Red Squiggles)
-    // We scan for key:value patterns and check them against the DB
-    QRegularExpression kvRegex(QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$"), QRegularExpression::MultilineOption);
+    // We scan for key:value patterns and check them against the DB.
+    // Static so the regex is compiled once per process, not per call.
+    static const QRegularExpression kvRegex(
+        QStringLiteral("^\\s*[-*+]?\\s*([\\w\\s]+):\\s*(.+)$"),
+        QRegularExpression::MultilineOption);
     QRegularExpressionMatchIterator it = kvRegex.globalMatch(text);
 
     KTextEditor::Attribute::Ptr errorAttr(new KTextEditor::Attribute());
@@ -2642,7 +2663,7 @@ void MainWindow::updateLibrarianHighlights()
     boundAttr->setUnderlineStyle(QTextCharFormat::DashUnderline);
     boundAttr->setUnderlineColor(Qt::green);
 
-    QRegularExpression varRegex(QStringLiteral("\\{\\{(.+?)\\}\\}"));
+    static const QRegularExpression varRegex(QStringLiteral("\\{\\{(.+?)\\}\\}"));
     it = varRegex.globalMatch(text);
     while (it.hasNext()) {
         QRegularExpressionMatch match = it.next();

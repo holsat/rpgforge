@@ -1493,22 +1493,26 @@ void LLMService::fetchModels(LLMProvider provider, std::function<void(const QStr
             if (!doc.isNull() && doc.isObject()) {
                 if (provider == LLMProvider::Gemini) {
                     // Native Gemini /models response: {"models":[{"name":"models/gemini-...","supportedGenerationMethods":[...]}]}
-                    // We want IDs usable for generation. Filter to entries that
-                    // advertise generateContent and strip the "models/" prefix
-                    // so downstream code sees bare names consistently.
+                    // Include models that support EITHER generateContent OR
+                    // embedContent — the former power the chat agents, the
+                    // latter power the RAG embedding chain. Filtering to only
+                    // generateContent drops every text-embedding-* model and
+                    // leaves the Embedding Model combo disabled.
                     QJsonArray ms = doc.object().value(QStringLiteral("models")).toArray();
                     for (const QJsonValue &v : ms) {
                         const QJsonObject m = v.toObject();
                         const QJsonArray methods = m.value(
                             QStringLiteral("supportedGenerationMethods")).toArray();
-                        bool supportsGenerate = false;
+                        bool usable = false;
                         for (const QJsonValue &mv : methods) {
-                            if (mv.toString() == QLatin1String("generateContent")) {
-                                supportsGenerate = true;
+                            const QString meth = mv.toString();
+                            if (meth == QLatin1String("generateContent")
+                                || meth == QLatin1String("embedContent")) {
+                                usable = true;
                                 break;
                             }
                         }
-                        if (!supportsGenerate) continue;
+                        if (!usable) continue;
                         QString name = m.value(QStringLiteral("name")).toString();
                         if (name.startsWith(QLatin1String("models/"))) name = name.mid(7);
                         if (!name.isEmpty()) models << name;
