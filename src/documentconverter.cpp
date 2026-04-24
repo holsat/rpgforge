@@ -66,6 +66,41 @@ DocumentConverter::ConversionResult DocumentConverter::convertToMarkdown(const Q
         return result;
     }
 
+    // Normalize alt text inside ![...](...):
+    //   1. Collapse line breaks — cmark and the preview rewriter reject
+    //      multi-line alt text and render the image invisible.
+    //   2. Strip Word's boilerplate "Description automatically generated"
+    //      phrase, which Pandoc faithfully carries over from the docx.
+    //      Also clean trailing punctuation/whitespace left behind.
+    {
+        static const QRegularExpression altRe(
+            QStringLiteral("!\\[([^\\]]*)\\]"),
+            QRegularExpression::DotMatchesEverythingOption);
+        static const QRegularExpression wsRun(QStringLiteral("\\s+"));
+        static const QRegularExpression wordBoilerplate(
+            QStringLiteral("\\s*,?\\s*Description automatically generated\\s*"),
+            QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression trailingPunct(
+            QStringLiteral("[\\s,;:\\-]+$"));
+        int offset = 0;
+        auto it = altRe.globalMatch(markdown);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const QString alt = m.captured(1);
+            QString cleaned = alt;
+            cleaned.replace(wsRun, QStringLiteral(" "));
+            cleaned.remove(wordBoilerplate);
+            cleaned.replace(trailingPunct, QString());
+            cleaned = cleaned.trimmed();
+            if (cleaned == alt) continue;  // no change, skip the splice
+            const QString replacement = QStringLiteral("![") + cleaned + QStringLiteral("]");
+            const int start = m.capturedStart() + offset;
+            const int len = m.capturedLength();
+            markdown.replace(start, len, replacement);
+            offset += replacement.length() - len;
+        }
+    }
+
     // Process extracted media
     QDir mediaDir(tempMediaDir);
     if (mediaDir.exists()) {

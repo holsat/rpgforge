@@ -232,6 +232,8 @@ add_executable(rpgforge
     src/explorersidebar.h
     src/imagepreview.cpp
     src/imagepreview.h
+    src/imagediffview.cpp
+    src/imagediffview.h
     src/corkboardview.cpp
     src/corkboardview.h
     src/corkboardcard.cpp

@@ -501,29 +501,48 @@ QFuture<bool> GitService::extractVersion(const QString &filePath, const QString 
         git_blob *blob = nullptr;
         git_buf repoPath = {nullptr, 0, 0};
         bool success = false;
+        const char *failStage = nullptr;
 
-        if (git_repository_discover(&repoPath, filePath.toUtf8().constData(), 0, nullptr) != 0) goto cleanup;
-        if (git_repository_open(&repo, repoPath.ptr) != 0) goto cleanup;
+        auto lastErr = []() -> QString {
+            const git_error *e = git_error_last();
+            return (e && e->message) ? QString::fromUtf8(e->message) : QStringLiteral("(no libgit2 error)");
+        };
+
+        if (git_repository_discover(&repoPath, filePath.toUtf8().constData(), 0, nullptr) != 0) { failStage = "repository_discover"; goto cleanup; }
+        if (git_repository_open(&repo, repoPath.ptr) != 0) { failStage = "repository_open"; goto cleanup; }
 
         git_oid oid;
-        if (git_oid_fromstr(&oid, hash.toUtf8().constData()) != 0) goto cleanup;
-        if (git_commit_lookup(&commit, repo, &oid) != 0) goto cleanup;
-        if (git_commit_tree(&tree, commit) != 0) goto cleanup;
+        if (git_oid_fromstr(&oid, hash.toUtf8().constData()) != 0) { failStage = "oid_fromstr"; goto cleanup; }
+        if (git_commit_lookup(&commit, repo, &oid) != 0) { failStage = "commit_lookup"; goto cleanup; }
+        if (git_commit_tree(&tree, commit) != 0) { failStage = "commit_tree"; goto cleanup; }
 
         {
-            QString relativePath = QDir(QString::fromUtf8(git_repository_workdir(repo))).relativeFilePath(filePath);
-            if (git_tree_entry_bypath(&entry, tree, relativePath.toUtf8().constData()) == 0) {
-                if (git_blob_lookup(&blob, repo, git_tree_entry_id(entry)) == 0) {
-                    QFile file(destPath);
-                    if (file.open(QIODevice::WriteOnly)) {
-                        file.write((const char *)git_blob_rawcontent(blob), git_blob_rawsize(blob));
-                        success = true;
-                    }
-                }
+            const QString relativePath = QDir(QString::fromUtf8(git_repository_workdir(repo)))
+                                            .relativeFilePath(filePath);
+            if (git_tree_entry_bypath(&entry, tree, relativePath.toUtf8().constData()) != 0) {
+                qWarning().noquote() << "GitService::extractVersion: tree_entry_bypath failed for"
+                                     << relativePath << "in commit" << hash << "-" << lastErr();
+                failStage = "tree_entry_bypath";
+                goto cleanup;
             }
+            if (git_blob_lookup(&blob, repo, git_tree_entry_id(entry)) != 0) { failStage = "blob_lookup"; goto cleanup; }
+
+            QFile file(destPath);
+            if (!file.open(QIODevice::WriteOnly)) {
+                qWarning().noquote() << "GitService::extractVersion: could not open dest file"
+                                     << destPath << "-" << file.errorString();
+                failStage = "dest_open";
+                goto cleanup;
+            }
+            file.write((const char *)git_blob_rawcontent(blob), git_blob_rawsize(blob));
+            success = true;
         }
 
     cleanup:
+        if (!success && failStage) {
+            qWarning().noquote() << "GitService::extractVersion: FAILED at" << failStage
+                                 << "for" << filePath << "@" << hash << "-" << lastErr();
+        }
         git_buf_dispose(&repoPath);
         if (blob) git_blob_free(blob);
         if (entry) git_tree_entry_free(entry);

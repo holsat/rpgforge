@@ -703,35 +703,99 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                 
                 auto *dialog = new HistoryDialog(fullPath, this);
                 connect(dialog, &HistoryDialog::viewVersion, this, [this, fullPath, itemPath](const QString &hash, int vIndex, const QDateTime &date, const QStringList &tags) {
-                    QString tempDir = QDir::homePath() + QStringLiteral("/.rpgforge/.versions/");
-                    QString tempPath = tempDir + hash + QStringLiteral("_") + QFileInfo(fullPath).fileName();
-                    
+                    const QString tempDir = QDir::homePath() + QStringLiteral("/.rpgforge/.versions/");
+                    // Make sure the scratch directory exists — first-run users
+                    // don't have it, and QFile::open(WriteOnly) fails silently
+                    // when the parent is missing, so the version never extracts.
+                    QDir().mkpath(tempDir);
+                    const QString tempPath = tempDir + hash + QStringLiteral("_") + QFileInfo(fullPath).fileName();
+
                     auto future = GitService::instance().extractVersion(fullPath, hash, tempPath);
                     future.then(this, [this, tempPath, itemPath, vIndex, date, tags](bool success) {
-                        if (success) {
-                            ProjectTreeItem *res = m_model->findItem(itemPath);
-                            if (res) {
-                                QModelIndex resIdx = m_model->indexForItem(res);
-                                QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
-                                if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
-                                
-                                m_model->addTransientVersionLink(label, tempPath, resIdx);
-                                m_treeView->expand(resIdx);
-                                
-                                // Persist the change via authoritative model save
-                                ProjectManager::instance().saveProject();
-
-                                Q_EMIT fileActivated(tempPath);
-                            }
+                        if (!success) {
+                            qWarning().noquote() << "HistoryDialog::viewVersion: extractVersion failed for" << tempPath;
+                            QMessageBox::warning(this, i18n("View Version"),
+                                i18n("Could not extract this version for viewing. "
+                                     "See the debug log for details."));
+                            return;
                         }
+                        ProjectTreeItem *res = m_model->findItem(itemPath);
+                        if (!res) return;
+                        QModelIndex resIdx = m_model->indexForItem(res);
+                        QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
+                        if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
+
+                        m_model->addTransientVersionLink(label, tempPath, resIdx);
+                        m_treeView->expand(resIdx);
+
+                        // Persist the change via authoritative model save
+                        ProjectManager::instance().saveProject();
+
+                        Q_EMIT fileActivated(tempPath);
                     });
                 });
                 connect(dialog, &HistoryDialog::restoreVersion, this, [this, fullPath](const QString &hash) {
-                    auto future = GitService::instance().extractVersion(fullPath, hash, fullPath);
-                    future.then(this, [this, fullPath](bool success) {
-                        if (success) {
-                            Q_EMIT fileActivated(fullPath);
+                    // Ask whether to overwrite the current file or save the
+                    // old version under a new filename. "Save as new file"
+                    // is essential when the user is trying to recover a
+                    // pre-overwrite version without clobbering whatever is
+                    // currently on disk.
+                    QMessageBox box(this);
+                    box.setIcon(QMessageBox::Question);
+                    box.setWindowTitle(i18n("Restore Version"));
+                    box.setText(i18n("Restore this version of \"%1\"?",
+                        QFileInfo(fullPath).fileName()));
+                    box.setInformativeText(i18n(
+                        "Replace current: overwrites the file on disk with this version.\n"
+                        "Save as new file: writes this version next to the current one with a different name."));
+                    auto *replaceBtn = box.addButton(i18n("Replace Current"), QMessageBox::DestructiveRole);
+                    auto *saveAsBtn = box.addButton(i18n("Save as New File..."), QMessageBox::AcceptRole);
+                    box.addButton(QMessageBox::Cancel);
+                    box.setDefaultButton(QMessageBox::Cancel);
+                    box.exec();
+
+                    QAbstractButton *clicked = box.clickedButton();
+                    if (clicked != replaceBtn && clicked != saveAsBtn) return;
+
+                    QString destPath;
+                    if (clicked == replaceBtn) {
+                        destPath = fullPath;
+                    } else {
+                        const QFileInfo fi(fullPath);
+                        const QString suggested = QStringLiteral("%1_restored.%2")
+                            .arg(fi.completeBaseName(), fi.suffix());
+                        bool ok = false;
+                        const QString newName = QInputDialog::getText(
+                            this, i18n("Save as New File"),
+                            i18n("New filename (in %1):", fi.absolutePath()),
+                            QLineEdit::Normal, suggested, &ok);
+                        if (!ok || newName.trimmed().isEmpty()) return;
+                        destPath = fi.absolutePath() + QDir::separator() + newName;
+                        if (QFileInfo::exists(destPath)) {
+                            QMessageBox::warning(this, i18n("Restore Version"),
+                                i18n("\"%1\" already exists. Pick a different name.", newName));
+                            return;
                         }
+                    }
+
+                    auto future = GitService::instance().extractVersion(fullPath, hash, destPath);
+                    future.then(this, [this, destPath, savedAsNew = (destPath != fullPath)](bool success) {
+                        if (!success) {
+                            QMessageBox::warning(this, i18n("Restore Version"),
+                                i18n("Failed to restore the version."));
+                            return;
+                        }
+                        if (savedAsNew) {
+                            // Register the new file in the project tree.
+                            const QString projectDir = ProjectManager::instance().projectPath();
+                            const QString rel = QDir(projectDir).relativeFilePath(destPath);
+                            const QString parent = QFileInfo(rel).path();
+                            ProjectManager::instance().addFile(
+                                QFileInfo(destPath).completeBaseName(),
+                                rel,
+                                parent == QStringLiteral(".") ? QString() : parent);
+                        }
+                        Q_EMIT fileActivated(destPath);
                     });
                 });
                 connect(dialog, &HistoryDialog::compareVersion, this, [this, fullPath](const QString &hash) {
