@@ -26,6 +26,8 @@
 
 class QWebEngineView;
 class QFileSystemWatcher;
+class QResizeEvent;
+template <typename T> class QFutureWatcher;
 
 class PreviewPanel : public QWidget
 {
@@ -43,6 +45,13 @@ public:
     void scrollToLine(int line, bool smooth = true);
     void reloadStylesheet();
 
+protected:
+    /// Detect splitter resizes that flip the panel from collapsed (width 0)
+    /// to visible. While collapsed, updatePreview() short-circuits and the
+    /// rendering pipeline is skipped entirely. On the 0 -> >0 transition we
+    /// kick the debounce so the latest pending markdown gets rendered once.
+    void resizeEvent(QResizeEvent *event) override;
+
 private Q_SLOTS:
     void updatePreview();
     void onLoadFinished(bool ok);
@@ -57,6 +66,29 @@ private:
     bool m_projectMode = false;
     bool m_needsFullReload = true;
     bool m_isLoaded = false;
+
+    /// Hash of the last successfully-rendered processedMarkdown input.
+    /// updatePreview() short-circuits when the new input hashes equal —
+    /// the pandoc subprocess is the dominant cost on big docs (~1s on
+    /// 225 KB) so skipping no-ops is a real win.
+    quint64 m_lastRenderedInputHash = 0;
+
+    /// Generation counter for the async render coalescing scheme. Bumped on
+    /// every dispatch; the worker carries its generation in the result, and
+    /// the finished slot discards results whose generation no longer matches
+    /// (a newer render superseded it).
+    quint64 m_renderGeneration = 0;
+    /// At most one render queued behind one in-flight render. When a new
+    /// render is requested while a worker is running we set this flag and
+    /// dispatch from the watcher's finished slot rather than stacking
+    /// parallel workers.
+    bool m_renderPending = false;
+    /// QFutureWatcher used to marshal the worker's RenderResult back to the
+    /// main thread. Reused across renders; only one runs at a time.
+    QFutureWatcher<struct PreviewRenderResult> *m_renderWatcher = nullptr;
+    /// Tracks whether the panel was width-zero at the last updatePreview
+    /// short-circuit. resizeEvent uses this to detect the 0 -> >0 transition.
+    bool m_wasCollapsed = true;
 
     void setupStylesheetWatcher();
     QString wrapHtml(const QString &body) const;
