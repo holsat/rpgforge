@@ -581,6 +581,21 @@ void MainWindow::setupSidebar()
     // Initial size of 0 hides the preview; do NOT call hide() — togglePreview()
     // intentionally never calls setVisible() to avoid a QtWebEngine render crash.
 
+    // Remember user-chosen preview pane width across show/hide cycles and
+    // app restarts. Stored when the user drags the splitter handle; reused
+    // by togglePreview() next time preview is shown.
+    {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        m_preferredPreviewWidth = s.value(QStringLiteral("preview/paneWidth"), 0).toInt();
+    }
+    connect(m_mainSplitter, &QSplitter::splitterMoved, this, [this]() {
+        const QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() < 3 || sizes[2] <= 0) return;  // Ignore collapse events.
+        m_preferredPreviewWidth = sizes[2];
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        s.setValue(QStringLiteral("preview/paneWidth"), m_preferredPreviewWidth);
+    });
+
     m_problemsPanel = new ProblemsPanel(this);
 
     // SynopsisService consumes ProjectManager snapshots and writes back via
@@ -1444,7 +1459,15 @@ void MainWindow::togglePreview()
     if (shouldShow) {
         int total = 0;
         for (int s : sizes) total += s;
-        int previewSize = total * 0.3; // ~30% for preview
+        // Restore the user's last chosen width; fall back to ~30% on first
+        // show or if the saved width would leave no room for the editor.
+        int previewSize = (m_preferredPreviewWidth > 0)
+            ? m_preferredPreviewWidth
+            : static_cast<int>(total * 0.3);
+        const int minEditor = 200;
+        if (previewSize > total - sizes[0] - minEditor) {
+            previewSize = qMax(0, total - sizes[0] - minEditor);
+        }
         sizes[2] = previewSize;
         sizes[1] = qMax(0, total - sizes[0] - previewSize);
         m_mainSplitter->setSizes(sizes);

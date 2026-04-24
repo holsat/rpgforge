@@ -267,6 +267,11 @@ private:
     QSplitter *m_vSplitter = nullptr;
     QAction *m_togglePreviewAction = nullptr;
     bool m_diffClientAdded = false;
+    /// Last user-chosen width of the preview pane. Saved whenever the user
+    /// manually resizes the splitter while preview is visible; restored on
+    /// the next togglePreview(true). Persists across app restarts via
+    /// QSettings("preview/paneWidth"). 0 means "use the 30% default".
+    int m_preferredPreviewWidth = 0;
 
     QTimer *m_cursorDebounce = nullptr;
     QTimer *m_textChangeDebounce = nullptr;

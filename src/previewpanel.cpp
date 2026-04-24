@@ -336,8 +336,12 @@ void PreviewPanel::updatePreview()
         // installs where pandoc is unavailable.
         qInfo().noquote() << "PreviewPanel: pandoc render failed — falling back to cmark-gfm.";
         htmlBody = m_parser.renderHtml(processedMarkdown);
-        applyLegacyCmarkPandocShims(htmlBody);
     }
+    // Always run the shim pass as belt-and-suspenders. Pandoc output
+    // doesn't contain literal {#...} / {width=...} tokens so the regex
+    // no-ops there; the cmark fallback genuinely needs the rewrite.
+    // Catches edge cases where either renderer leaks an attribute token.
+    applyLegacyCmarkPandocShims(htmlBody);
 
     // Escape for JavaScript string
     QString escaped = htmlBody;
@@ -389,16 +393,24 @@ void PreviewPanel::scrollToPercentage(double percentage)
 void PreviewPanel::scrollToLine(int line, bool smooth)
 {
     if (!m_webView->page()) return;
-    // Match cmark-gfm's `data-sourcepos` OR Pandoc's `data-pos` — same
-    // "startLine:startCol-endLine:endCol" format. Skip the inline span
-    // wrappers Pandoc's sourcepos adds (data-wrapper="1"), pick the latest
-    // block element whose startLine <= targetLine.
-    // Editor lines are 0-based; cmark/Pandoc sourcepos is 1-based.
+    // Find the preceding AND following blocks that straddle the target line,
+    // then linearly interpolate the preview's scroll position between them.
+    // Snapping to block.start makes the preview lag when the editor's first
+    // visible line falls mid-block (e.g. a long paragraph spanning 10 lines
+    // in the editor but rendering as one short wrapped <p> in the preview).
+    // Interpolation keeps the preview aligned with the editor's actual
+    // first-visible line.
+    //
+    // Matches cmark-gfm's data-sourcepos and Pandoc's data-pos (same
+    // "startLine:startCol-endLine:endCol" format). Skips Pandoc's inline
+    // span wrappers (data-wrapper="1"). Editor lines are 0-based; sourcepos
+    // is 1-based.
     QString js = QStringLiteral(
         "(function() {"
         "  var targetLine = %1 + 1;"
         "  var els = document.querySelectorAll('[data-sourcepos], [data-pos]');"
-        "  var best = null;"
+        "  var prev = null, prevLine = 0;"
+        "  var next = null, nextLine = 0;"
         "  for (var i = 0; i < els.length; i++) {"
         "    var el = els[i];"
         "    if (el.getAttribute('data-wrapper') === '1') continue;"
@@ -407,13 +419,27 @@ void PreviewPanel::scrollToLine(int line, bool smooth)
         "    var startLine = parseInt(pos.split(':')[0]);"
         "    if (isNaN(startLine)) continue;"
         "    if (startLine <= targetLine) {"
-        "      best = el;"
+        "      prev = el; prevLine = startLine;"
         "    } else {"
+        "      next = el; nextLine = startLine;"
         "      break;"
         "    }"
         "  }"
-        "  if (best) {"
-        "    best.scrollIntoView({behavior: '%2', block: 'start'});"
+        "  if (!prev) return;"
+        "  var scroller = document.scrollingElement || document.documentElement;"
+        "  if (!next || nextLine <= prevLine) {"
+        "    prev.scrollIntoView({behavior: '%2', block: 'start'});"
+        "    return;"
+        "  }"
+        "  var t = (targetLine - prevLine) / (nextLine - prevLine);"
+        "  if (t < 0) t = 0; else if (t > 1) t = 1;"
+        "  var prevTop = prev.getBoundingClientRect().top + scroller.scrollTop;"
+        "  var nextTop = next.getBoundingClientRect().top + scroller.scrollTop;"
+        "  var target = prevTop + t * (nextTop - prevTop);"
+        "  if ('%2' === 'smooth') {"
+        "    scroller.scrollTo({top: target, behavior: 'smooth'});"
+        "  } else {"
+        "    scroller.scrollTop = target;"
         "  }"
         "})();"
     ).arg(line).arg(smooth ? QStringLiteral("smooth") : QStringLiteral("auto"));
