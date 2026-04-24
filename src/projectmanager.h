@@ -167,7 +167,12 @@ public:
     bool addFile(const QString &name, const QString &relativePath, const QString &parentPath = QString());
     bool addFolder(const QString &name, const QString &relativePath, const QString &parentPath = QString());
     bool moveItem(const QString &sourcePath, const QString &targetParentPath);
-    bool removeItem(const QString &path);
+    /// Remove an item from the project tree. When `moveToTrash` is true,
+    /// the on-disk file/folder is sent to the system trash via KIO
+    /// (recoverable); when false, the file is left untouched on disk and
+    /// only the tree entry is dropped (useful for breaking external
+    /// links without deleting the target).
+    bool removeItem(const QString &path, bool moveToTrash = true);
     bool renameItem(const QString &path, const QString &newName);
 
     /**

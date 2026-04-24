@@ -158,9 +158,24 @@ void VariablesPanel::setupUi()
     m_loreScanButton->setToolTip(i18n("Scan current document for lore with LoreKeeper AI"));
     connect(m_loreScanButton, &QToolButton::clicked, this, &VariablesPanel::forceLoreKeeperScan);
 
+    auto *expandAllBtn = new QToolButton(toolbar);
+    expandAllBtn->setIcon(QIcon::fromTheme(QStringLiteral("expand-symbolic"),
+        QIcon::fromTheme(QStringLiteral("view-list-tree"))));
+    expandAllBtn->setToolTip(i18n("Expand All"));
+    connect(expandAllBtn, &QToolButton::clicked, this, [this]() { m_treeWidget->expandAll(); });
+
+    auto *collapseAllBtn = new QToolButton(toolbar);
+    collapseAllBtn->setIcon(QIcon::fromTheme(QStringLiteral("collapse-symbolic"),
+        QIcon::fromTheme(QStringLiteral("view-list-details"))));
+    collapseAllBtn->setToolTip(i18n("Collapse All"));
+    connect(collapseAllBtn, &QToolButton::clicked, this, [this]() { m_treeWidget->collapseAll(); });
+
     toolbarLayout->addWidget(m_addButton);
     toolbarLayout->addWidget(m_addVariantButton);
     toolbarLayout->addWidget(m_removeButton);
+    toolbarLayout->addSpacing(10);
+    toolbarLayout->addWidget(expandAllBtn);
+    toolbarLayout->addWidget(collapseAllBtn);
     toolbarLayout->addSpacing(10);
     toolbarLayout->addWidget(m_reindexButton);
     toolbarLayout->addWidget(m_loreScanButton);

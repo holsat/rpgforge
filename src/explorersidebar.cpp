@@ -18,6 +18,7 @@
 
 #include "explorersidebar.h"
 #include "projecttreepanel.h"
+#include "outlinepanel.h"
 #include "fileexplorer.h"
 
 #include <KLocalizedString>
@@ -25,12 +26,62 @@
 #include <QIcon>
 #include <QLabel>
 #include <QSettings>
+#include <QShowEvent>
 #include <QSplitter>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
-ExplorerSidebar::ExplorerSidebar(ProjectTreePanel *projectTree, FileExplorer *fileExplorer, QWidget *parent)
-    : QWidget(parent), m_projectTree(projectTree), m_fileExplorer(fileExplorer)
+namespace {
+
+/// Build a collapsible pane: a header strip with a toggle button + title,
+/// then the body widget. Returns the pane widget; out-params give the
+/// caller references to the toggle button and the body for wiring.
+QWidget *buildCollapsiblePane(const QString &title, const QString &tooltip,
+                               const QString &iconName,
+                               QWidget *body, QToolButton **outToggle,
+                               QWidget *parent)
+{
+    auto *pane = new QWidget(parent);
+    auto *layout = new QVBoxLayout(pane);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto *header = new QWidget(pane);
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(4, 2, 4, 2);
+    headerLayout->setSpacing(4);
+
+    auto *toggle = new QToolButton(header);
+    toggle->setCheckable(true);
+    toggle->setAutoRaise(true);
+    toggle->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    toggle->setToolTip(tooltip);
+    toggle->setIcon(QIcon::fromTheme(iconName, QIcon::fromTheme(QStringLiteral("folder"))));
+
+    auto *titleLabel = new QLabel(title, header);
+
+    headerLayout->addWidget(toggle);
+    headerLayout->addWidget(titleLabel);
+    headerLayout->addStretch(1);
+
+    layout->addWidget(header);
+    layout->addWidget(body, /*stretch=*/1);
+
+    *outToggle = toggle;
+    return pane;
+}
+
+} // namespace
+
+ExplorerSidebar::ExplorerSidebar(ProjectTreePanel *projectTree,
+                                 OutlinePanel *outlinePanel,
+                                 FileExplorer *fileExplorer,
+                                 QWidget *parent)
+    : QWidget(parent),
+      m_projectTree(projectTree),
+      m_outlinePanel(outlinePanel),
+      m_fileExplorer(fileExplorer)
 {
     setupUi();
 }
@@ -45,64 +96,136 @@ void ExplorerSidebar::setupUi()
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->addWidget(m_projectTree);
 
-    // Bottom pane: header strip with a toggle button, then the file
-    // explorer tree. Hiding the file explorer leaves only the thin
-    // header visible, so users can always re-open it without going
-    // through a menu.
-    auto *bottomPane = new QWidget(this);
-    auto *bottomLayout = new QVBoxLayout(bottomPane);
-    bottomLayout->setContentsMargins(0, 0, 0, 0);
-    bottomLayout->setSpacing(0);
+    m_outlinePane = buildCollapsiblePane(
+        i18n("Document Outline"),
+        i18n("Show or hide the document outline"),
+        QStringLiteral("view-list-tree-symbolic"),
+        m_outlinePanel, &m_outlineToggleBtn, this);
+    m_splitter->addWidget(m_outlinePane);
 
-    auto *header = new QWidget(bottomPane);
-    auto *headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(4, 2, 4, 2);
-    headerLayout->setSpacing(4);
+    m_filesystemPane = buildCollapsiblePane(
+        i18n("Filesystem"),
+        i18n("Show or hide the filesystem browser"),
+        QStringLiteral("folder-symbolic"),
+        m_fileExplorer, &m_filesystemToggleBtn, this);
+    m_splitter->addWidget(m_filesystemPane);
 
-    m_toggleBtn = new QToolButton(header);
-    m_toggleBtn->setCheckable(true);
-    m_toggleBtn->setAutoRaise(true);
-    m_toggleBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_toggleBtn->setToolTip(i18n("Show or hide the filesystem browser"));
-    m_toggleBtn->setIcon(QIcon::fromTheme(QStringLiteral("folder-symbolic"),
-        QIcon::fromTheme(QStringLiteral("folder"))));
-
-    auto *titleLabel = new QLabel(i18n("Filesystem"), header);
-
-    headerLayout->addWidget(m_toggleBtn);
-    headerLayout->addWidget(titleLabel);
-    headerLayout->addStretch(1);
-
-    bottomLayout->addWidget(header);
-    bottomLayout->addWidget(m_fileExplorer, /*stretch=*/1);
-
-    m_splitter->addWidget(bottomPane);
-
-    // When the file explorer is visible, give it a reasonable share of
-    // the vertical space; when hidden, the collapsed bottom pane
-    // naturally shrinks to just the header.
-    m_splitter->setStretchFactor(0, 3);
-    m_splitter->setStretchFactor(1, 2);
+    // Project tree gets all the stretch; the two lower panes size to their
+    // content (plus whatever the user gives them by dragging the splitter).
+    m_splitter->setStretchFactor(0, 1);
+    m_splitter->setStretchFactor(1, 0);
+    m_splitter->setStretchFactor(2, 0);
+    // Panes can still collapse fully via the header toggle without the
+    // splitter's own collapse-drag, which is confusing next to our toggles.
+    m_splitter->setChildrenCollapsible(false);
 
     layout->addWidget(m_splitter);
 
-    connect(m_toggleBtn, &QToolButton::toggled, this, &ExplorerSidebar::setFileExplorerVisible);
+    connect(m_outlineToggleBtn, &QToolButton::toggled,
+            this, &ExplorerSidebar::setOutlinePanelVisible);
+    connect(m_filesystemToggleBtn, &QToolButton::toggled,
+            this, &ExplorerSidebar::setFileExplorerVisible);
 
-    // Restore persisted state. Default is hidden to match the reduced-
-    // clutter opening view — most users don't need raw filesystem
-    // access until they specifically ask for it.
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    const bool startVisible = settings.value(
+    const bool outlineVisible = settings.value(
+        QStringLiteral("ui/outline_panel_visible"), true).toBool();
+    const bool fsVisible = settings.value(
         QStringLiteral("ui/filesystem_browser_visible"), false).toBool();
-    m_toggleBtn->setChecked(startVisible);
-    setFileExplorerVisible(startVisible);
+    m_outlineExpandedHeight = settings.value(
+        QStringLiteral("ui/outline_panel_height"), 0).toInt();
+    m_filesystemExpandedHeight = settings.value(
+        QStringLiteral("ui/filesystem_browser_height"), 0).toInt();
+
+    m_outlineToggleBtn->setChecked(outlineVisible);
+    m_outlinePanel->setVisible(outlineVisible);
+    m_filesystemToggleBtn->setChecked(fsVisible);
+    m_fileExplorer->setVisible(fsVisible);
+
+    // User-dragged splitter saves per-pane expanded heights to QSettings so
+    // the layout survives restart. Only save while a pane is actually
+    // expanded — collapsed panes sit at their header height, which isn't
+    // a useful "expanded" value.
+    connect(m_splitter, &QSplitter::splitterMoved, this, [this]() {
+        const QList<int> sizes = m_splitter->sizes();
+        if (sizes.size() < 3) return;
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        if (m_outlinePanel && m_outlinePanel->isVisible() && m_outlinePane) {
+            const int headerOnly = m_outlinePane->sizeHint().height();
+            if (sizes[1] > headerOnly + 20) {
+                m_outlineExpandedHeight = sizes[1];
+                s.setValue(QStringLiteral("ui/outline_panel_height"), m_outlineExpandedHeight);
+            }
+        }
+        if (m_fileExplorer && m_fileExplorer->isVisible() && m_filesystemPane) {
+            const int headerOnly = m_filesystemPane->sizeHint().height();
+            if (sizes[2] > headerOnly + 20) {
+                m_filesystemExpandedHeight = sizes[2];
+                s.setValue(QStringLiteral("ui/filesystem_browser_height"), m_filesystemExpandedHeight);
+            }
+        }
+    });
+
+    reflowSplitter();
+}
+
+void ExplorerSidebar::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    // The splitter's height is 0 until the widget is first shown, so the
+    // ctor's reflowSplitter() call is a no-op. Defer to the event loop so
+    // Qt has finished initial layout before we force our persisted sizes.
+    QTimer::singleShot(0, this, [this]() { reflowSplitter(); });
+}
+
+void ExplorerSidebar::setOutlinePanelVisible(bool visible)
+{
+    if (!m_outlinePanel) return;
+    m_outlinePanel->setVisible(visible);
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+    settings.setValue(QStringLiteral("ui/outline_panel_visible"), visible);
+    reflowSplitter();
 }
 
 void ExplorerSidebar::setFileExplorerVisible(bool visible)
 {
     if (!m_fileExplorer) return;
     m_fileExplorer->setVisible(visible);
-
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     settings.setValue(QStringLiteral("ui/filesystem_browser_visible"), visible);
+    reflowSplitter();
+}
+
+void ExplorerSidebar::reflowSplitter()
+{
+    if (!m_splitter) return;
+
+    // When a lower pane's body widget is hidden, its pane shrinks to the
+    // header height. Explicitly push splitter sizes so the Project Tree
+    // absorbs the freed space instead of stranding a gap between panes.
+    const int total = m_splitter->orientation() == Qt::Vertical
+        ? m_splitter->height()
+        : m_splitter->width();
+    if (total <= 0) return;
+
+    auto paneSize = [](QWidget *pane, bool bodyVisible, int rememberedHeight,
+                       int defaultHeight) -> int {
+        if (!pane) return 0;
+        if (!bodyVisible) {
+            // Pane collapsed: only the header remains.
+            return pane->sizeHint().height();
+        }
+        // Expanded: prefer the user's last-dragged height; fall back to the
+        // default the first time a user expands a pane.
+        return rememberedHeight > 0 ? rememberedHeight : defaultHeight;
+    };
+
+    const int outlineSize = paneSize(m_outlinePane,
+        m_outlinePanel && m_outlinePanel->isVisible(),
+        m_outlineExpandedHeight, 200);
+    const int fsSize = paneSize(m_filesystemPane,
+        m_fileExplorer && m_fileExplorer->isVisible(),
+        m_filesystemExpandedHeight, 200);
+    const int treeSize = qMax(100, total - outlineSize - fsSize);
+
+    m_splitter->setSizes({treeSize, outlineSize, fsSize});
 }
