@@ -1914,12 +1914,16 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     auto *view = activeView();
     if (!doc || !view || items.isEmpty()) return;
 
-    // Base directory: directory of the open document, or the project root
-    QString baseDir;
+    // Resolve links from the project root when the target is inside the
+    // project — produces "./media/X.png" regardless of how deep the current
+    // document is. Falls back to doc-dir-relative or absolute for anything
+    // outside the project.
+    const QString projectRoot = ProjectManager::instance().isProjectOpen()
+        ? ProjectManager::instance().projectPath()
+        : QString();
+    QString docDir;
     if (!doc->url().isEmpty() && doc->url().isLocalFile()) {
-        baseDir = QFileInfo(doc->url().toLocalFile()).absolutePath();
-    } else if (ProjectManager::instance().isProjectOpen()) {
-        baseDir = ProjectManager::instance().projectPath();
+        docDir = QFileInfo(doc->url().toLocalFile()).absolutePath();
     }
 
     static const QStringList imgSuffixes = {
@@ -1932,9 +1936,16 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     for (const auto &[name, url] : items) {
         if (!url.isLocalFile()) continue;
         const QString absPath = url.toLocalFile();
-        const QString relPath = baseDir.isEmpty()
-            ? absPath
-            : QDir(baseDir).relativeFilePath(absPath);
+
+        QString relPath;
+        if (!projectRoot.isEmpty()
+            && (absPath == projectRoot || absPath.startsWith(projectRoot + QDir::separator()))) {
+            relPath = QStringLiteral("./") + QDir(projectRoot).relativeFilePath(absPath);
+        } else if (!docDir.isEmpty()) {
+            relPath = QDir(docDir).relativeFilePath(absPath);
+        } else {
+            relPath = absPath;
+        }
         const QString suffix = QFileInfo(absPath).suffix().toLower();
 
         if (imgSuffixes.contains(suffix)) {

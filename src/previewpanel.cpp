@@ -389,23 +389,27 @@ void PreviewPanel::scrollToPercentage(double percentage)
 void PreviewPanel::scrollToLine(int line, bool smooth)
 {
     if (!m_webView->page()) return;
-    // Find the element with data-sourcepos that corresponds to this line
-    // cmark uses 1-based line numbers.
+    // Match cmark-gfm's `data-sourcepos` OR Pandoc's `data-pos` — same
+    // "startLine:startCol-endLine:endCol" format. Skip the inline span
+    // wrappers Pandoc's sourcepos adds (data-wrapper="1"), pick the latest
+    // block element whose startLine <= targetLine.
+    // Editor lines are 0-based; cmark/Pandoc sourcepos is 1-based.
     QString js = QStringLiteral(
         "(function() {"
         "  var targetLine = %1 + 1;"
-        "  var els = document.querySelectorAll('[data-sourcepos]');"
+        "  var els = document.querySelectorAll('[data-sourcepos], [data-pos]');"
         "  var best = null;"
         "  for (var i = 0; i < els.length; i++) {"
         "    var el = els[i];"
-        "    var pos = el.getAttribute('data-sourcepos');"
-        "    if (pos) {"
-        "      var startLine = parseInt(pos.split(':')[0]);"
-        "      if (startLine <= targetLine) {"
-        "        best = el;"
-        "      } else {"
-        "        break;" // Elements are ordered by line
-        "      }"
+        "    if (el.getAttribute('data-wrapper') === '1') continue;"
+        "    var pos = el.getAttribute('data-sourcepos') || el.getAttribute('data-pos');"
+        "    if (!pos) continue;"
+        "    var startLine = parseInt(pos.split(':')[0]);"
+        "    if (isNaN(startLine)) continue;"
+        "    if (startLine <= targetLine) {"
+        "      best = el;"
+        "    } else {"
+        "      break;"
         "    }"
         "  }"
         "  if (best) {"
@@ -466,12 +470,14 @@ QString PreviewPanel::renderWithPandoc(const QString &markdown, bool *ok) const
         return fail();
     }
 
-    // -f markdown -t html: Pandoc-flavored markdown -> HTML fragment.
+    // commonmark_x+sourcepos: Pandoc-flavored markdown with source-position
+    // attributes (data-pos="line:col-line:col") on every block. scrollToLine
+    // uses those to keep the preview in lockstep with the editor's cursor.
     // NOT -s / --standalone: wrapHtml() supplies the full document shell,
     // including <head>, CSS, and KaTeX. Pandoc's own wrapper would collide.
     QProcess proc;
     proc.start(pandocExe, {
-        QStringLiteral("-f"), QStringLiteral("markdown"),
+        QStringLiteral("-f"), QStringLiteral("commonmark_x+sourcepos"),
         QStringLiteral("-t"), QStringLiteral("html"),
     });
     if (!proc.waitForStarted(2000)) {
