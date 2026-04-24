@@ -28,6 +28,7 @@ class ProjectTreeModel;
 class QToolButton;
 class QPushButton;
 class QComboBox;
+class GitStatusModel;
 struct ProjectTreeItem;
 
 class ProjectTreePanel : public QWidget
@@ -51,6 +52,12 @@ Q_SIGNALS:
     void syncStarted();
     void syncProgress(int value, const QString &message);
     void syncFinished(bool success, const QString &message);
+
+public Q_SLOTS:
+    /// Force an immediate git-status refresh; normally the model polls on a
+    /// 3-second timer, but an explicit nudge after a file save keeps the
+    /// M / U / A badges in sync without the lag.
+    void refreshGitStatus();
 
 private Q_SLOTS:
     void onProjectOpened();
@@ -93,6 +100,7 @@ private:
     QToolButton *m_syncBtn = nullptr;
     QComboBox *m_explorationCombo = nullptr;
     QToolButton *m_newExplorationBtn = nullptr;
+    GitStatusModel *m_gitStatus = nullptr;
     bool m_isSaving = false;
 };
 

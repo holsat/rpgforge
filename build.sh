@@ -1,32 +1,54 @@
 #!/bin/bash
 # Build script that excludes anaconda from PATH to avoid Qt/lib conflicts.
 #
-# Always runs cmake configure with Debug build type + RPGFORGE_DBUS_TESTING
-# and RPGFORGE_DEBUG_LOGS explicitly enabled, so the resulting binary has
-# the full diagnostic surface (RPGFORGE_DLOG macros, DBus test adaptor,
-# full qDebug/qInfo output) regardless of any stale CMakeCache from a
-# prior Release configure.
+# Usage:
+#   ./build.sh                 # Debug build (default): full qDebug/qInfo
+#                              # output + DBus test surface + RPGFORGE_DLOG
+#   ./build.sh release         # Release build: -O2, logs silenced via
+#                              # RPGFORGE_DEBUG_LOGS=OFF; use this when
+#                              # profiling UI performance without log-
+#                              # flush noise
+#   ./build.sh clean           # Wipe build dir, then Debug build
+#   ./build.sh clean release   # Wipe build dir, then Release build
+#   ./build.sh release clean   # Same as above, arg order doesn't matter
 set -e
 
 CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v anaconda | tr '\n' ':')
 BUILD_DIR="$(dirname "$0")/build"
 
+CLEAN=0
+MODE="debug"
+for arg in "$@"; do
+    case "$arg" in
+        clean)   CLEAN=1 ;;
+        release) MODE="release" ;;
+        debug)   MODE="debug" ;;
+        *)       echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
+
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# On clean, wipe the build directory first.
-if [ "$1" = "clean" ]; then
+if [ "$CLEAN" -eq 1 ]; then
     rm -rf ./*
 fi
 
-# Always re-configure with the debug flag set explicitly. cmake is
-# incremental — if the cache already has these values, this is a no-op
-# at build time. But if someone previously ran a Release build, or the
-# cache is stale, this flips them back on without requiring a clean.
+if [ "$MODE" = "release" ]; then
+    BUILD_TYPE="Release"
+    DEBUG_LOGS="OFF"
+else
+    BUILD_TYPE="Debug"
+    DEBUG_LOGS="ON"
+fi
+
+# Always re-configure so toggling between debug and release flips the
+# cache even without a clean. cmake is incremental; no-op if values
+# match what's already in CMakeCache.
 PATH="$CLEAN_PATH" cmake .. \
-    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DRPGFORGE_DBUS_TESTING=ON \
-    -DRPGFORGE_DEBUG_LOGS=ON \
+    -DRPGFORGE_DEBUG_LOGS="$DEBUG_LOGS" \
     -DCMAKE_IGNORE_PREFIX_PATH="/home/sheldonl/anaconda3" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
@@ -34,6 +56,6 @@ PATH="$CLEAN_PATH" make -j$(nproc)
 
 echo ""
 echo "Build complete: $BUILD_DIR/bin/rpgforge"
-echo "  CMAKE_BUILD_TYPE=Debug"
+echo "  CMAKE_BUILD_TYPE=$BUILD_TYPE"
 echo "  RPGFORGE_DBUS_TESTING=ON"
-echo "  RPGFORGE_DEBUG_LOGS=ON"
+echo "  RPGFORGE_DEBUG_LOGS=$DEBUG_LOGS"

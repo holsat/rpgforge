@@ -27,6 +27,7 @@
 #include "explorersidebar.h"
 #include "corkboardview.h"
 #include "imagepreview.h"
+#include "imagediffview.h"
 #include "fileexplorer.h"
 #include "gitpanel.h"
 #include "outlinepanel.h"
@@ -541,6 +542,7 @@ void MainWindow::setupSidebar()
 
     m_corkboardView = new CorkboardView(this);
     m_imagePreview = new ImagePreview(this);
+    m_imageDiffView = new ImageDiffView(this);
     m_diffView = new VisualDiffView(this);
     connect(m_diffView, &VisualDiffView::saveRequested, this, [this](const QString &path) {
         if (m_document->url().toLocalFile() == path) {
@@ -560,6 +562,7 @@ void MainWindow::setupSidebar()
     m_centralViewLayout->addWidget(m_editorSplitter);
     m_centralViewLayout->addWidget(m_corkboardView);
     m_centralViewLayout->addWidget(m_imagePreview);
+    m_centralViewLayout->addWidget(m_imageDiffView);
     m_centralViewLayout->addWidget(m_diffView);
     m_centralViewLayout->addWidget(m_pdfViewer);
 
@@ -834,6 +837,10 @@ void MainWindow::setupSidebar()
             // Note: autoCommit is handled by the setupAutoSync connection in setupEditor;
             // calling it here again would create a duplicate commit on every save.
             KnowledgeBase::instance().indexFile(filePath);
+            // Poke both git-status models so the M badge shows up immediately
+            // instead of waiting for the 3-second polling cycle.
+            if (m_projectTree) m_projectTree->refreshGitStatus();
+            if (m_fileExplorer) m_fileExplorer->refreshGitStatus();
         }
     });
     connect(m_document, &KTextEditor::Document::documentUrlChanged, this, [this]() {
@@ -1588,6 +1595,20 @@ QString MainWindow::currentViewId() const
 
 void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, const QString &hash2)
 {
+    // Two-file compare: if either side is an image, route to ImageDiffView
+    // (side-by-side visual compare). Kompare renders a blank part for
+    // binary files, which isn't useful for images.
+    if (path2OrHash1.startsWith(QLatin1Char('/'))
+        && (ImageDiffView::isImagePath(path1) || ImageDiffView::isImagePath(path2OrHash1))) {
+        if (m_imageDiffView->setImages(path1, path2OrHash1)) {
+            showCentralView(m_imageDiffView);
+            collapsePreviewPane();
+            return;
+        }
+        // Fall through to Kompare if image load failed — at least something
+        // shows up instead of a silent empty pane.
+    }
+
     // If path2OrHash1 looks like a file path (starts with /), compare files.
     // Otherwise, treat as git hashes.
     if (path2OrHash1.startsWith(QLatin1Char('/'))) {
@@ -2265,17 +2286,67 @@ void MainWindow::importWord()
     DocumentConverter converter;
     QString projectDir = ProjectManager::instance().projectPath();
     QString mediaDir = projectDir + QStringLiteral("/media");
-    
+
     SynopsisService::instance().pause();
 
     // 1. Find the Manuscript folder via path lookup. The authoritative
     // root is at "manuscript" — validateTree creates it on project open.
     const bool hasManuscript = ProjectManager::instance().findItem(QStringLiteral("manuscript")) != nullptr;
 
+    // Collision detector: the same safeName is used as both the manuscript
+    // subfolder name AND the prefix on extracted media images. Refusing
+    // overlapping names stops the second import from overwriting the first
+    // import's media files.
+    auto hasCollision = [&](const QString &sn) -> bool {
+        if (sn.isEmpty()) return true;
+        const QString folderRel = hasManuscript
+            ? (QStringLiteral("manuscript/") + sn)
+            : sn;
+        const QString folderAbs = QDir(projectDir).absoluteFilePath(folderRel);
+        if (QFileInfo::exists(folderAbs)) return true;
+        QDir mediaD(mediaDir);
+        if (mediaD.exists()
+            && !mediaD.entryList({sn + QStringLiteral("_*")}, QDir::Files).isEmpty()) {
+            return true;
+        }
+        return false;
+    };
+
     for (const QString &file : files) {
         QFileInfo info(file);
-        QString baseName = info.baseName();
+        // completeBaseName() returns everything before the LAST dot, so
+        // filenames like "Kabal v0.18.2 - Part 1 - Intro to Flaws.docx"
+        // survive as-is instead of getting truncated to "Kabal v0".
+        QString baseName = info.completeBaseName();
         QString safeName = DocumentConverter::sanitizePrefix(baseName);
+
+        // If either the target manuscript subfolder OR the image-prefix slot
+        // is already taken by a prior import, ask the user for a unique name
+        // before we proceed. Empty-string / cancel skips this file entirely.
+        if (hasCollision(safeName)) {
+            QString suggested = baseName + QStringLiteral(" (2)");
+            while (true) {
+                bool ok = false;
+                const QString newName = QInputDialog::getText(
+                    this, i18n("Import Name Collision"),
+                    i18n("\"%1\" conflicts with an existing folder or media prefix "
+                         "in this project.\n\nChoose a different name for the "
+                         "imported document:", baseName),
+                    QLineEdit::Normal, suggested, &ok);
+                if (!ok || newName.trimmed().isEmpty()) {
+                    baseName.clear();
+                    break;
+                }
+                const QString sanitized = DocumentConverter::sanitizePrefix(newName);
+                if (!hasCollision(sanitized)) {
+                    baseName = newName;
+                    safeName = sanitized;
+                    break;
+                }
+                suggested = newName + QStringLiteral(" (2)");
+            }
+            if (baseName.isEmpty()) continue;  // user cancelled; skip this file
+        }
 
         // Create a per-document subfolder under Manuscript (or at root as
         // a fallback if Manuscript is somehow missing).
@@ -2307,6 +2378,19 @@ void MainWindow::importWord()
     ProjectManager::instance().saveProject();
     SynopsisService::instance().resume();
     ProjectManager::instance().notifyTreeChanged();
+
+    // Auto-commit the newly-imported files if the project is a git repo.
+    // Without this, imported manuscripts + media sit uncommitted until the
+    // user manually runs Sync — and an overwrite before that sync wipes the
+    // prior version from git history (which it never captured).
+    if (GitService::instance().isRepo(projectDir)
+        && GitService::instance().hasUncommittedChanges(projectDir)) {
+        const QString label = files.size() == 1
+            ? QFileInfo(files.first()).fileName()
+            : i18n("%1 documents", files.size());
+        GitService::instance().commitAll(projectDir,
+            i18n("Import %1", label));
+    }
 
     QMessageBox::information(this, i18n("Import Complete"), i18n("Documents imported successfully."));
     }

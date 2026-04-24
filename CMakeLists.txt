@@ -159,6 +159,14 @@ target_link_libraries(rpgforge_core
 # branch on the define.
 if(RPGFORGE_DEBUG_LOGS)
     target_compile_definitions(rpgforge_core PUBLIC RPGFORGE_DEBUG_LOGS=1)
+else()
+    # Strip qDebug/qInfo at compile time when debug logging is off. Silences
+    # the entire log stream — including third-party and per-frame noise —
+    # for clean profiling runs. qWarning/qCritical/qFatal still fire so real
+    # problems surface.
+    target_compile_definitions(rpgforge_core PUBLIC
+        QT_NO_DEBUG_OUTPUT
+        QT_NO_INFO_OUTPUT)
 endif()
 
 # Main Executable
@@ -232,6 +240,8 @@ add_executable(rpgforge
     src/explorersidebar.h
     src/imagepreview.cpp
     src/imagepreview.h
+    src/imagediffview.cpp
+    src/imagediffview.h
     src/corkboardview.cpp
     src/corkboardview.h
     src/corkboardcard.cpp

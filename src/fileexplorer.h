@@ -42,6 +42,11 @@ public:
     bool showHiddenFiles() const { return m_showHidden; }
     void setShowHiddenFiles(bool show);
 
+public Q_SLOTS:
+    /// Force an immediate git-status refresh, bypassing the 3-second
+    /// polling timer so badges update right after a save.
+    void refreshGitStatus();
+
 Q_SIGNALS:
     void fileActivated(const QUrl &url);
 

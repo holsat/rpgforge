@@ -217,6 +217,11 @@ void FileExplorer::setRootPath(const QString &path)
     m_gitStatus->setRootPath(path);
 }
 
+void FileExplorer::refreshGitStatus()
+{
+    if (m_gitStatus) m_gitStatus->refresh();
+}
+
 QString FileExplorer::rootPath() const
 {
     return m_model->rootPath();

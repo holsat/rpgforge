@@ -72,6 +72,9 @@ private:
     ToggleSwitch *m_aiSynopsisToggle = nullptr;
     ToggleSwitch *m_aiLibrarianToggle = nullptr;
     ToggleSwitch *m_aiRagAssistToggle = nullptr;
+
+    // Version control
+    ToggleSwitch *m_autoSyncToggle = nullptr;
 };
 
 #endif // PROJECTSETTINGSDIALOG_H

@@ -66,6 +66,41 @@ DocumentConverter::ConversionResult DocumentConverter::convertToMarkdown(const Q
         return result;
     }
 
+    // Normalize alt text inside ![...](...):
+    //   1. Collapse line breaks — cmark and the preview rewriter reject
+    //      multi-line alt text and render the image invisible.
+    //   2. Strip Word's boilerplate "Description automatically generated"
+    //      phrase, which Pandoc faithfully carries over from the docx.
+    //      Also clean trailing punctuation/whitespace left behind.
+    {
+        static const QRegularExpression altRe(
+            QStringLiteral("!\\[([^\\]]*)\\]"),
+            QRegularExpression::DotMatchesEverythingOption);
+        static const QRegularExpression wsRun(QStringLiteral("\\s+"));
+        static const QRegularExpression wordBoilerplate(
+            QStringLiteral("\\s*,?\\s*Description automatically generated\\s*"),
+            QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression trailingPunct(
+            QStringLiteral("[\\s,;:\\-]+$"));
+        int offset = 0;
+        auto it = altRe.globalMatch(markdown);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const QString alt = m.captured(1);
+            QString cleaned = alt;
+            cleaned.replace(wsRun, QStringLiteral(" "));
+            cleaned.remove(wordBoilerplate);
+            cleaned.replace(trailingPunct, QString());
+            cleaned = cleaned.trimmed();
+            if (cleaned == alt) continue;  // no change, skip the splice
+            const QString replacement = QStringLiteral("![") + cleaned + QStringLiteral("]");
+            const int start = m.capturedStart() + offset;
+            const int len = m.capturedLength();
+            markdown.replace(start, len, replacement);
+            offset += replacement.length() - len;
+        }
+    }
+
     // Process extracted media
     QDir mediaDir(tempMediaDir);
     if (mediaDir.exists()) {
@@ -84,36 +119,46 @@ DocumentConverter::ConversionResult DocumentConverter::convertToMarkdown(const Q
             QString finalName = baseNewName + QStringLiteral(".") + extension;
             QString targetPath = targetDir.absoluteFilePath(finalName);
 
-            // Handle EMF/WMF conversion. Rasterize to PNG via LibreOffice/
-            // Inkscape — the prior EMF→SVG pipeline produced XML wrappers that
-            // the preview could not render. If rasterization fails the image
-            // reference is dropped from the markdown so the preview doesn't
-            // show a broken link to an .emf the browser can't decode.
+            // Matches any pandoc-emitted path ending in `/media/<entry>` inside
+            // an image reference. Pandoc 3.x prepends `../../<docbasename>/`
+            // when extract-media is "." and the input is given by absolute
+            // path, so a substring replace leaves the traversal prefix stuck
+            // in front of our renamed filename. The regex anchors on the
+            // enclosing `(` and a following `)` or whitespace, and is
+            // rebuilt per-entry because the filename is interpolated in.
+            auto pathRefRegex = [&](const QString &fileName) {
+                // Group 1 = the `(` literal so we can put it back in the
+                // replacement. Everything between `(` and the filename is
+                // discarded.
+                return QRegularExpression(
+                    QStringLiteral("(\\()[^)\\s]*media/")
+                    + QRegularExpression::escape(fileName)
+                    + QStringLiteral("(?=[)\\s])"));
+            };
+
             if (extension == QStringLiteral("emf") || extension == QStringLiteral("wmf")) {
-                QString pngName = baseNewName + QStringLiteral(".png");
-                QString pngPath = targetDir.absoluteFilePath(pngName);
+                const QString pngName = baseNewName + QStringLiteral(".png");
+                const QString pngPath = targetDir.absoluteFilePath(pngName);
                 if (convertEmfToPng(fullTempPath, pngPath)) {
-                    QString oldRef = mediaSubDir + QStringLiteral("/") + entry;
-                    QString newRef = QStringLiteral("media/") + pngName;
-                    markdown.replace(oldRef, newRef);
+                    markdown.replace(pathRefRegex(entry),
+                        QStringLiteral("\\1media/") + pngName);
                     result.extractedMedia << pngPath;
                 } else {
                     qWarning().noquote() << "DocumentConverter: failed to rasterize"
                                          << entry << "— removing reference from markdown";
-                    QString oldRef = mediaSubDir + QStringLiteral("/") + entry;
-                    static const QRegularExpression imgTag(
-                        QStringLiteral("!\\[[^\\]]*\\]\\(%1[^)]*\\)").arg(
-                            QRegularExpression::escape(oldRef)));
+                    // Drop the whole `![alt](anypath/media/<entry>...)` ref.
+                    const QRegularExpression imgTag(
+                        QStringLiteral("!\\[[^\\]]*\\]\\([^)\\s]*media/")
+                        + QRegularExpression::escape(entry)
+                        + QStringLiteral("[^)]*\\)"));
                     markdown.remove(imgTag);
                 }
             } else {
                 // Regular image
                 if (QFile::exists(targetPath)) QFile::remove(targetPath);
                 if (QFile::copy(fullTempPath, targetPath)) {
-                    // Update markdown reference
-                    QString oldRef = mediaSubDir + QStringLiteral("/") + entry;
-                    QString newRef = QStringLiteral("media/") + finalName;
-                    markdown.replace(oldRef, newRef);
+                    markdown.replace(pathRefRegex(entry),
+                        QStringLiteral("\\1media/") + finalName);
                     result.extractedMedia << targetPath;
                 }
             }

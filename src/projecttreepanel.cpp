@@ -23,6 +23,7 @@
 #include "metadatadialog.h"
 #include "variablemanager.h"
 #include "gitservice.h"
+#include "gitstatusmodel.h"
 #include "githubservice.h"
 #include "githubonboardingdialog.h"
 #include "historydialog.h"
@@ -31,6 +32,10 @@
 #include "lorekeeperservice.h"
 #include "librarianservice.h"
 #include "mainwindow.h"
+#include <QDir>
+#include <QPainter>
+#include <QStyledItemDelegate>
+#include <QApplication>
 #include <QComboBox>
 #include <QLabel>
 
@@ -48,6 +53,62 @@
 #include <QTimer>
 #include <QProgressDialog>
 
+// Delegate that paints a git-status badge (M, U, A, D, ...) on the right edge
+// of each file row, mirroring the filesystem panel's treatment. Resolves each
+// tree item's project-relative path to an absolute path before querying
+// GitStatusModel. Reuses the model's badgeForStatus + colorForStatus so both
+// views report identically.
+class ProjectTreeDelegate : public QStyledItemDelegate
+{
+public:
+    ProjectTreeDelegate(ProjectTreeModel *model, GitStatusModel *git, QObject *parent = nullptr)
+        : QStyledItemDelegate(parent), m_model(model), m_git(git)
+    {}
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::paint(painter, option, index);
+        if (index.column() != 0) return;
+        if (!m_git || !m_git->isGitRepo()) return;
+
+        ProjectTreeItem *item = m_model ? m_model->itemFromIndex(index) : nullptr;
+        if (!item || item->type != ProjectTreeItem::File) return;
+        if (item->path.isEmpty()) return;
+
+        const QString projectRoot = ProjectManager::instance().projectPath();
+        if (projectRoot.isEmpty()) return;
+
+        const QString absPath = QDir(projectRoot).absoluteFilePath(item->path);
+        const auto status = m_git->statusForFile(absPath);
+        const QString badge = m_git->badgeForStatus(status);
+        if (badge.isEmpty()) return;
+
+        const QColor color = m_git->colorForStatus(status);
+        QFont font = painter->font();
+        font.setBold(true);
+        font.setPointSize(font.pointSize() - 1);
+        painter->save();
+        painter->setFont(font);
+        painter->setPen(color);
+        QRect badgeRect = option.rect;
+        badgeRect.setLeft(badgeRect.right() - 20);
+        painter->drawText(badgeRect, Qt::AlignCenter, badge);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QSize size = QStyledItemDelegate::sizeHint(option, index);
+        if (index.column() == 0) size.setWidth(size.width() + 24);
+        return size;
+    }
+
+private:
+    ProjectTreeModel *m_model;
+    GitStatusModel *m_git;
+};
+
 ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     : QWidget(parent)
 {
@@ -59,8 +120,11 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
         if (m_activeFolderIndex.isValid()) {
             ProjectTreeItem *item = m_model->itemFromIndex(m_activeFolderIndex);
             // We don't Q_EMIT folderActivated here because it forces MainWindow to show the corkboard
+            Q_UNUSED(item);
         }
     });
+
+    m_gitStatus = new GitStatusModel(this);
 
     setupUi();
     
@@ -164,6 +228,11 @@ void ProjectTreePanel::setupUi()
 
     m_treeView = new QTreeView(this);
     m_treeView->setModel(m_model);
+    m_treeView->setItemDelegate(new ProjectTreeDelegate(m_model, m_gitStatus, m_treeView));
+    // Repaint the tree when git status refreshes so M/U/A badges flip in real
+    // time instead of waiting for another click or scroll.
+    connect(m_gitStatus, &GitStatusModel::statusChanged, m_treeView,
+            QOverload<>::of(&QWidget::update));
     m_treeView->setHeaderHidden(true);
     m_treeView->setAnimated(true);
     m_treeView->setDragEnabled(true);
@@ -216,6 +285,11 @@ void ProjectTreePanel::setupUi()
     layout->addWidget(m_treeView);
 }
 
+void ProjectTreePanel::refreshGitStatus()
+{
+    if (m_gitStatus) m_gitStatus->refresh();
+}
+
 void ProjectTreePanel::onProjectOpened()
 {
     qDebug() << "ProjectTreePanel: Handling project update/opened. Model root children:" << m_model->rowCount(QModelIndex());
@@ -230,7 +304,13 @@ void ProjectTreePanel::onProjectOpened()
     m_activeFolderIndex = QPersistentModelIndex();
     m_emptyWidget->hide();
     m_treeView->show();
-    
+
+    // Point the git status model at the project root so file-level badges
+    // line up with whatever project just opened.
+    if (m_gitStatus) {
+        m_gitStatus->setRootPath(ProjectManager::instance().projectPath());
+    }
+
     m_treeView->expandAll();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
@@ -703,35 +783,99 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
                 
                 auto *dialog = new HistoryDialog(fullPath, this);
                 connect(dialog, &HistoryDialog::viewVersion, this, [this, fullPath, itemPath](const QString &hash, int vIndex, const QDateTime &date, const QStringList &tags) {
-                    QString tempDir = QDir::homePath() + QStringLiteral("/.rpgforge/.versions/");
-                    QString tempPath = tempDir + hash + QStringLiteral("_") + QFileInfo(fullPath).fileName();
-                    
+                    const QString tempDir = QDir::homePath() + QStringLiteral("/.rpgforge/.versions/");
+                    // Make sure the scratch directory exists — first-run users
+                    // don't have it, and QFile::open(WriteOnly) fails silently
+                    // when the parent is missing, so the version never extracts.
+                    QDir().mkpath(tempDir);
+                    const QString tempPath = tempDir + hash + QStringLiteral("_") + QFileInfo(fullPath).fileName();
+
                     auto future = GitService::instance().extractVersion(fullPath, hash, tempPath);
                     future.then(this, [this, tempPath, itemPath, vIndex, date, tags](bool success) {
-                        if (success) {
-                            ProjectTreeItem *res = m_model->findItem(itemPath);
-                            if (res) {
-                                QModelIndex resIdx = m_model->indexForItem(res);
-                                QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
-                                if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
-                                
-                                m_model->addTransientVersionLink(label, tempPath, resIdx);
-                                m_treeView->expand(resIdx);
-                                
-                                // Persist the change via authoritative model save
-                                ProjectManager::instance().saveProject();
-
-                                Q_EMIT fileActivated(tempPath);
-                            }
+                        if (!success) {
+                            qWarning().noquote() << "HistoryDialog::viewVersion: extractVersion failed for" << tempPath;
+                            QMessageBox::warning(this, i18n("View Version"),
+                                i18n("Could not extract this version for viewing. "
+                                     "See the debug log for details."));
+                            return;
                         }
+                        ProjectTreeItem *res = m_model->findItem(itemPath);
+                        if (!res) return;
+                        QModelIndex resIdx = m_model->indexForItem(res);
+                        QString label = QStringLiteral("v%1 (%2)").arg(QString::number(vIndex), date.toString(Qt::ISODate));
+                        if (!tags.isEmpty()) label += QStringLiteral(" [%1]").arg(tags.join(QLatin1Char(',')));
+
+                        m_model->addTransientVersionLink(label, tempPath, resIdx);
+                        m_treeView->expand(resIdx);
+
+                        // Persist the change via authoritative model save
+                        ProjectManager::instance().saveProject();
+
+                        Q_EMIT fileActivated(tempPath);
                     });
                 });
                 connect(dialog, &HistoryDialog::restoreVersion, this, [this, fullPath](const QString &hash) {
-                    auto future = GitService::instance().extractVersion(fullPath, hash, fullPath);
-                    future.then(this, [this, fullPath](bool success) {
-                        if (success) {
-                            Q_EMIT fileActivated(fullPath);
+                    // Ask whether to overwrite the current file or save the
+                    // old version under a new filename. "Save as new file"
+                    // is essential when the user is trying to recover a
+                    // pre-overwrite version without clobbering whatever is
+                    // currently on disk.
+                    QMessageBox box(this);
+                    box.setIcon(QMessageBox::Question);
+                    box.setWindowTitle(i18n("Restore Version"));
+                    box.setText(i18n("Restore this version of \"%1\"?",
+                        QFileInfo(fullPath).fileName()));
+                    box.setInformativeText(i18n(
+                        "Replace current: overwrites the file on disk with this version.\n"
+                        "Save as new file: writes this version next to the current one with a different name."));
+                    auto *replaceBtn = box.addButton(i18n("Replace Current"), QMessageBox::DestructiveRole);
+                    auto *saveAsBtn = box.addButton(i18n("Save as New File..."), QMessageBox::AcceptRole);
+                    box.addButton(QMessageBox::Cancel);
+                    box.setDefaultButton(QMessageBox::Cancel);
+                    box.exec();
+
+                    QAbstractButton *clicked = box.clickedButton();
+                    if (clicked != replaceBtn && clicked != saveAsBtn) return;
+
+                    QString destPath;
+                    if (clicked == replaceBtn) {
+                        destPath = fullPath;
+                    } else {
+                        const QFileInfo fi(fullPath);
+                        const QString suggested = QStringLiteral("%1_restored.%2")
+                            .arg(fi.completeBaseName(), fi.suffix());
+                        bool ok = false;
+                        const QString newName = QInputDialog::getText(
+                            this, i18n("Save as New File"),
+                            i18n("New filename (in %1):", fi.absolutePath()),
+                            QLineEdit::Normal, suggested, &ok);
+                        if (!ok || newName.trimmed().isEmpty()) return;
+                        destPath = fi.absolutePath() + QDir::separator() + newName;
+                        if (QFileInfo::exists(destPath)) {
+                            QMessageBox::warning(this, i18n("Restore Version"),
+                                i18n("\"%1\" already exists. Pick a different name.", newName));
+                            return;
                         }
+                    }
+
+                    auto future = GitService::instance().extractVersion(fullPath, hash, destPath);
+                    future.then(this, [this, destPath, savedAsNew = (destPath != fullPath)](bool success) {
+                        if (!success) {
+                            QMessageBox::warning(this, i18n("Restore Version"),
+                                i18n("Failed to restore the version."));
+                            return;
+                        }
+                        if (savedAsNew) {
+                            // Register the new file in the project tree.
+                            const QString projectDir = ProjectManager::instance().projectPath();
+                            const QString rel = QDir(projectDir).relativeFilePath(destPath);
+                            const QString parent = QFileInfo(rel).path();
+                            ProjectManager::instance().addFile(
+                                QFileInfo(destPath).completeBaseName(),
+                                rel,
+                                parent == QStringLiteral(".") ? QString() : parent);
+                        }
+                        Q_EMIT fileActivated(destPath);
                     });
                 });
                 connect(dialog, &HistoryDialog::compareVersion, this, [this, fullPath](const QString &hash) {

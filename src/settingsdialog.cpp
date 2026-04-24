@@ -58,7 +58,7 @@ void SettingsDialog::setupUi()
     m_tabWidget = new QTabWidget(this);
 
     m_tabWidget->addTab(createLLMTab(), i18n("LLM Providers"));
-    m_tabWidget->addTab(createAgentsTab(), i18n("AI Agents"));
+    m_tabWidget->addTab(createAgentsTab(), i18n("AI Services"));
     m_tabWidget->addTab(createPromptsTab(), i18n("System Prompts"));
     m_tabWidget->addTab(createAnalyzerTab(), i18n("Game Analyzer"));
     m_tabWidget->addTab(createEditorTab(), i18n("Editor"));
@@ -415,11 +415,16 @@ QWidget* SettingsDialog::createAgentsTab()
         });
     };
 
+    // Names here MUST match the Project Settings "AI Services" tab so users
+    // recognize the same service between global model config and per-project
+    // enable/disable. Simulation rows stay as-is (they're not part of the
+    // per-project AI Services toggles).
     createAgentRow(QStringLiteral("analyzer"), i18n("Game Analyzer"), QStringLiteral("analyzer"));
-    createAgentRow(QStringLiteral("chat"), i18n("AI Writing Assistant"), QStringLiteral("llm"));
     createAgentRow(QStringLiteral("lorekeeper"), i18n("LoreKeeper"), QStringLiteral("lorekeeper"));
-    createAgentRow(QStringLiteral("synopsis_file"), i18n("File Synopsis"), QStringLiteral("synopsis"));
-    createAgentRow(QStringLiteral("synopsis_folder"), i18n("Folder Synopsis"), QStringLiteral("synopsis"));
+    createAgentRow(QStringLiteral("synopsis_file"), i18n("Synopsis Generator (File)"), QStringLiteral("synopsis"));
+    createAgentRow(QStringLiteral("synopsis_folder"), i18n("Synopsis Generator (Folder)"), QStringLiteral("synopsis"));
+    createAgentRow(QStringLiteral("librarian"), i18n("Variable Librarian"), QStringLiteral("librarian"));
+    createAgentRow(QStringLiteral("chat"), i18n("AI Writing Assistant"), QStringLiteral("llm"));
     createAgentRow(QStringLiteral("chargen"), i18n("Character Generator"), QStringLiteral("chargen"));
     createAgentRow(QStringLiteral("sim_arbiter"), i18n("Simulation Arbiter"), QStringLiteral("simulation"));
     createAgentRow(QStringLiteral("sim_griot"), i18n("Simulation Griot"), QStringLiteral("simulation"));

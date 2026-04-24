@@ -242,6 +242,7 @@ private:
     CorkboardView *m_corkboardView = nullptr;
     ImagePreview *m_imagePreview = nullptr;
     VisualDiffView *m_diffView = nullptr;
+    class ImageDiffView *m_imageDiffView = nullptr;
     QWebEngineView *m_pdfViewer = nullptr;
 
     Sidebar *m_sidebar = nullptr;

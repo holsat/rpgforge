@@ -84,7 +84,13 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
 
     if (!logStream) return;
     *logStream << formattedMessage;
-    logStream->flush();
+    // Flushing on every debug/info call serializes high-frequency logging
+    // (preview renders, LLM dispatches, status refreshes) behind a syscall
+    // and drops perceptible stutter into text editing. Flush only for
+    // Warning/Critical/Fatal so crash-adjacent lines still hit disk.
+    if (type >= QtWarningMsg) {
+        logStream->flush();
+    }
 }
 
 
