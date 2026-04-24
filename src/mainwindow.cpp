@@ -2375,6 +2375,19 @@ void MainWindow::importWord()
     SynopsisService::instance().resume();
     ProjectManager::instance().notifyTreeChanged();
 
+    // Auto-commit the newly-imported files if the project is a git repo.
+    // Without this, imported manuscripts + media sit uncommitted until the
+    // user manually runs Sync — and an overwrite before that sync wipes the
+    // prior version from git history (which it never captured).
+    if (GitService::instance().isRepo(projectDir)
+        && GitService::instance().hasUncommittedChanges(projectDir)) {
+        const QString label = files.size() == 1
+            ? QFileInfo(files.first()).fileName()
+            : i18n("%1 documents", files.size());
+        GitService::instance().commitAll(projectDir,
+            i18n("Import %1", label));
+    }
+
     QMessageBox::information(this, i18n("Import Complete"), i18n("Documents imported successfully."));
     }
 

@@ -28,6 +28,7 @@ class ProjectTreeModel;
 class QToolButton;
 class QPushButton;
 class QComboBox;
+class GitStatusModel;
 struct ProjectTreeItem;
 
 class ProjectTreePanel : public QWidget
@@ -93,6 +94,7 @@ private:
     QToolButton *m_syncBtn = nullptr;
     QComboBox *m_explorationCombo = nullptr;
     QToolButton *m_newExplorationBtn = nullptr;
+    GitStatusModel *m_gitStatus = nullptr;
     bool m_isSaving = false;
 };
 

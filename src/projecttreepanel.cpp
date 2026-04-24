@@ -23,6 +23,7 @@
 #include "metadatadialog.h"
 #include "variablemanager.h"
 #include "gitservice.h"
+#include "gitstatusmodel.h"
 #include "githubservice.h"
 #include "githubonboardingdialog.h"
 #include "historydialog.h"
@@ -31,6 +32,10 @@
 #include "lorekeeperservice.h"
 #include "librarianservice.h"
 #include "mainwindow.h"
+#include <QDir>
+#include <QPainter>
+#include <QStyledItemDelegate>
+#include <QApplication>
 #include <QComboBox>
 #include <QLabel>
 
@@ -48,6 +53,62 @@
 #include <QTimer>
 #include <QProgressDialog>
 
+// Delegate that paints a git-status badge (M, U, A, D, ...) on the right edge
+// of each file row, mirroring the filesystem panel's treatment. Resolves each
+// tree item's project-relative path to an absolute path before querying
+// GitStatusModel. Reuses the model's badgeForStatus + colorForStatus so both
+// views report identically.
+class ProjectTreeDelegate : public QStyledItemDelegate
+{
+public:
+    ProjectTreeDelegate(ProjectTreeModel *model, GitStatusModel *git, QObject *parent = nullptr)
+        : QStyledItemDelegate(parent), m_model(model), m_git(git)
+    {}
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::paint(painter, option, index);
+        if (index.column() != 0) return;
+        if (!m_git || !m_git->isGitRepo()) return;
+
+        ProjectTreeItem *item = m_model ? m_model->itemFromIndex(index) : nullptr;
+        if (!item || item->type != ProjectTreeItem::File) return;
+        if (item->path.isEmpty()) return;
+
+        const QString projectRoot = ProjectManager::instance().projectPath();
+        if (projectRoot.isEmpty()) return;
+
+        const QString absPath = QDir(projectRoot).absoluteFilePath(item->path);
+        const auto status = m_git->statusForFile(absPath);
+        const QString badge = m_git->badgeForStatus(status);
+        if (badge.isEmpty()) return;
+
+        const QColor color = m_git->colorForStatus(status);
+        QFont font = painter->font();
+        font.setBold(true);
+        font.setPointSize(font.pointSize() - 1);
+        painter->save();
+        painter->setFont(font);
+        painter->setPen(color);
+        QRect badgeRect = option.rect;
+        badgeRect.setLeft(badgeRect.right() - 20);
+        painter->drawText(badgeRect, Qt::AlignCenter, badge);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QSize size = QStyledItemDelegate::sizeHint(option, index);
+        if (index.column() == 0) size.setWidth(size.width() + 24);
+        return size;
+    }
+
+private:
+    ProjectTreeModel *m_model;
+    GitStatusModel *m_git;
+};
+
 ProjectTreePanel::ProjectTreePanel(QWidget *parent)
     : QWidget(parent)
 {
@@ -59,8 +120,11 @@ ProjectTreePanel::ProjectTreePanel(QWidget *parent)
         if (m_activeFolderIndex.isValid()) {
             ProjectTreeItem *item = m_model->itemFromIndex(m_activeFolderIndex);
             // We don't Q_EMIT folderActivated here because it forces MainWindow to show the corkboard
+            Q_UNUSED(item);
         }
     });
+
+    m_gitStatus = new GitStatusModel(this);
 
     setupUi();
     
@@ -164,6 +228,11 @@ void ProjectTreePanel::setupUi()
 
     m_treeView = new QTreeView(this);
     m_treeView->setModel(m_model);
+    m_treeView->setItemDelegate(new ProjectTreeDelegate(m_model, m_gitStatus, m_treeView));
+    // Repaint the tree when git status refreshes so M/U/A badges flip in real
+    // time instead of waiting for another click or scroll.
+    connect(m_gitStatus, &GitStatusModel::statusChanged, m_treeView,
+            QOverload<>::of(&QWidget::update));
     m_treeView->setHeaderHidden(true);
     m_treeView->setAnimated(true);
     m_treeView->setDragEnabled(true);
@@ -230,7 +299,13 @@ void ProjectTreePanel::onProjectOpened()
     m_activeFolderIndex = QPersistentModelIndex();
     m_emptyWidget->hide();
     m_treeView->show();
-    
+
+    // Point the git status model at the project root so file-level badges
+    // line up with whatever project just opened.
+    if (m_gitStatus) {
+        m_gitStatus->setRootPath(ProjectManager::instance().projectPath());
+    }
+
     m_treeView->expandAll();
     m_addFolderBtn->setEnabled(true);
     m_addFileBtn->setEnabled(true);
