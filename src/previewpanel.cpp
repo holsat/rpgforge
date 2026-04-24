@@ -23,9 +23,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QFutureWatcher>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QStandardPaths>
+#include <QtConcurrent/QtConcurrent>
 #include <QWebEngineView>
 #include <QWebEngineSettings>
 #include <QWebEnginePage>
@@ -53,6 +56,19 @@ protected:
     }
 };
 } // namespace
+
+/// Result struct for the async render worker. Carries the rendered HTML
+/// fragment plus a generation counter so the main-thread finished slot
+/// can discard stale results when a newer render has superseded this one.
+/// Declared at file scope (not inside the class) so QFutureWatcher's
+/// template instantiation can see it.
+struct PreviewRenderResult {
+    QString htmlBody;
+    quint64 generation = 0;
+    quint64 inputHash = 0;
+    bool ok = false;
+};
+
 #include <QApplication>
 #include <KColorScheme>
 #include <KLocalizedString>
@@ -84,6 +100,48 @@ PreviewPanel::PreviewPanel(QWidget *parent)
     m_debounceTimer->setInterval(150);
     connect(m_debounceTimer, &QTimer::timeout, this, &PreviewPanel::updatePreview);
     connect(m_webView, &QWebEngineView::loadFinished, this, &PreviewPanel::onLoadFinished);
+
+    // Async render plumbing. The worker runs pandoc (or the cmark fallback +
+    // shims) off the main thread; this watcher delivers the result back to
+    // the UI thread on its `finished` signal. We coalesce so at most one
+    // worker is in flight — when a newer render is requested while a worker
+    // is running, we set m_renderPending = true and dispatch from this
+    // finished slot.
+    m_renderWatcher = new QFutureWatcher<PreviewRenderResult>(this);
+    connect(m_renderWatcher, &QFutureWatcher<PreviewRenderResult>::finished,
+            this, [this]() {
+        if (!m_renderWatcher->future().isValid()) return;
+        const PreviewRenderResult res = m_renderWatcher->result();
+        // Discard stale results — newer dispatch already superseded this.
+        const bool isLatest = (res.generation == m_renderGeneration);
+        if (isLatest && res.ok && m_webView->page()) {
+            QString escaped = res.htmlBody;
+            escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+            escaped.replace(QLatin1Char('\"'), QLatin1String("\\\""));
+            escaped.replace(QLatin1Char('\''), QLatin1String("\\\'"));
+            escaped.replace(QLatin1Char('\n'), QLatin1String("\\n"));
+            escaped.replace(QLatin1Char('\r'), QLatin1String("\\r"));
+            escaped.replace(QLatin1Char('\b'), QLatin1String("\\b"));
+            escaped.replace(QLatin1Char('\f'), QLatin1String("\\f"));
+            const QString js = QStringLiteral(
+                "var content = document.getElementById('content');"
+                "if (content) {"
+                "  content.innerHTML = \"%1\";"
+                "  if (window.renderMathInElement) {"
+                "    renderMathInElement(content);"
+                "  }"
+                "}").arg(escaped);
+            m_webView->page()->runJavaScript(js);
+            m_lastRenderedInputHash = res.inputHash;
+        }
+        // If a render request came in while this worker was running, fire
+        // the next dispatch now. Single-pending — burst typing collapses to
+        // at most one running + one queued.
+        if (m_renderPending) {
+            m_renderPending = false;
+            updatePreview();
+        }
+    });
 
     // Watch for CSS file changes
     connect(m_styleWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
@@ -196,6 +254,23 @@ void PreviewPanel::reloadStylesheet()
     m_debounceTimer->start();
 }
 
+void PreviewPanel::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    // Detect the collapse -> expand transition and trigger a single
+    // catch-up render. While collapsed updatePreview() short-circuits, so
+    // any text changes the user made meanwhile are sitting in
+    // m_pendingMarkdown waiting to render.
+    if (m_wasCollapsed && width() > 0) {
+        m_wasCollapsed = false;
+        if (!m_pendingMarkdown.isEmpty()) {
+            m_debounceTimer->start();
+        }
+    } else if (width() <= 0) {
+        m_wasCollapsed = true;
+    }
+}
+
 void PreviewPanel::onLoadFinished(bool ok)
 {
     m_isLoaded = ok;
@@ -301,66 +376,75 @@ QString PreviewPanel::resolveRelativeImageUrlsInMarkdown(const QString &markdown
 
 void PreviewPanel::updatePreview()
 {
+    // Skip the entire pipeline when the splitter pane is collapsed to
+    // width 0. The pandoc subprocess dominates render cost (~1s on big
+    // docs); paying it while invisible is pure waste. resizeEvent fires
+    // a single render when the user expands the pane back open.
+    if (width() <= 0) {
+        m_wasCollapsed = true;
+        return;
+    }
+    m_wasCollapsed = false;
+
     if (m_needsFullReload || !m_isLoaded) {
         loadHtmlViaTempFile(wrapHtml(QString()));
         m_needsFullReload = false;
+        // Force a re-render after the skeleton finishes loading.
+        m_lastRenderedInputHash = 0;
         return;
     }
 
     if (!m_webView->page()) return;
 
+    // Stage 1 — main thread, cheap. Touches VariableManager and
+    // ProjectManager, neither of which is thread-safe; must not be moved
+    // to the worker.
     QString contentOnly = VariableManager::stripMetadata(m_pendingMarkdown);
-
-    // Replace variables before rendering markdown to HTML
     QString processedMarkdown = VariableManager::instance().processMarkdown(contentOnly);
-    // Rewrite ![alt](relative/path) AT THE MARKDOWN LEVEL before cmark
-    // renders. HTML post-processing was unreliable because the rendered
-    // HTML goes through a JS-escape + innerHTML assignment that mangled
-    // file:// URLs in edge cases. Rewriting the source markdown
-    // produces a ready-to-render absolute URL that survives every
-    // downstream step intact.
     processedMarkdown = resolveRelativeImageUrlsInMarkdown(processedMarkdown);
 
-    // Preferred path: Pandoc subprocess. It natively handles header IDs
-    // ({#slug}), image attributes ({width=... height=...}), grid tables,
-    // definition lists, and other Pandoc-flavored markdown extensions we
-    // use throughout imported manuscripts.
-    bool pandocOk = false;
-    QString htmlBody = renderWithPandoc(processedMarkdown, &pandocOk);
-    if (!pandocOk) {
-        // Fallback path: cmark-gfm + legacy regex shims that patch
-        // Pandoc-extension syntax into HTML. Kept as a safety net for
-        // installs where pandoc is unavailable.
-        qInfo().noquote() << "PreviewPanel: pandoc render failed — falling back to cmark-gfm.";
-        htmlBody = m_parser.renderHtml(processedMarkdown);
+    // Stage 2 — coalesce no-op renders (cursor moves, focus toggles, undo
+    // back to current state). qHash is ~1 ms on 225 KB; saves up to ~1 s.
+    const quint64 inputHash = qHash(processedMarkdown);
+    if (inputHash == m_lastRenderedInputHash && !m_needsFullReload) {
+        return;
     }
-    // Always run the shim pass as belt-and-suspenders. Pandoc output
-    // doesn't contain literal {#...} / {width=...} tokens so the regex
-    // no-ops there; the cmark fallback genuinely needs the rewrite.
-    // Catches edge cases where either renderer leaks an attribute token.
-    applyLegacyCmarkPandocShims(htmlBody);
 
-    // Escape for JavaScript string
-    QString escaped = htmlBody;
-    escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
-    escaped.replace(QLatin1Char('\"'), QLatin1String("\\\""));
-    escaped.replace(QLatin1Char('\''), QLatin1String("\\\'"));
-    escaped.replace(QLatin1Char('\n'), QLatin1String("\\n"));
-    escaped.replace(QLatin1Char('\r'), QLatin1String("\\r"));
-    escaped.replace(QLatin1Char('\b'), QLatin1String("\\b"));
-    escaped.replace(QLatin1Char('\f'), QLatin1String("\\f"));
+    // Stage 3 — async. If a worker is already running, defer; the watcher
+    // will pick the latest render up when it finishes. At most one queued
+    // dispatch behind one in-flight worker.
+    if (m_renderWatcher && m_renderWatcher->isRunning()) {
+        m_renderPending = true;
+        return;
+    }
 
-    QString js = QStringLiteral(
-        "var content = document.getElementById('content');"
-        "if (content) {"
-        "  content.innerHTML = \"%1\";"
-        "  if (window.renderMathInElement) {"
-        "    renderMathInElement(content);"
-        "  }"
-        "}"
-    ).arg(escaped);
-
-    m_webView->page()->runJavaScript(js);
+    const quint64 generation = ++m_renderGeneration;
+    QPointer<const PreviewPanel> self(this);
+    auto future = QtConcurrent::run([self, processedMarkdown, generation, inputHash]() {
+        PreviewRenderResult result;
+        result.generation = generation;
+        result.inputHash = inputHash;
+        if (!self) return result;
+        bool pandocOk = false;
+        result.htmlBody = self->renderWithPandoc(processedMarkdown, &pandocOk);
+        if (!pandocOk) {
+            // Fallback path: cmark-gfm + legacy regex shims. MarkdownParser
+            // has mutable cache state, so it is NOT thread-safe — use a
+            // worker-local instance instead of the panel's m_parser member.
+            qInfo().noquote() << "PreviewPanel: pandoc render failed — falling back to cmark-gfm.";
+            MarkdownParser localParser;
+            result.htmlBody = localParser.renderHtml(processedMarkdown);
+        }
+        // Always run the shim pass as belt-and-suspenders. Pandoc output
+        // doesn't contain literal {#...} / {width=...} tokens so the regex
+        // no-ops there; the cmark fallback genuinely needs the rewrite.
+        if (self) {
+            self->applyLegacyCmarkPandocShims(result.htmlBody);
+        }
+        result.ok = true;
+        return result;
+    });
+    m_renderWatcher->setFuture(future);
 }
 
 void PreviewPanel::scrollBy(int x, int y)
