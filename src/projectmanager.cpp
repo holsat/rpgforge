@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -520,6 +520,18 @@ void ProjectManager::setLoreKeeperConfig(const QJsonObject &config)
     Q_EMIT projectSettingsChanged();
 }
 
+bool ProjectManager::aiAnalyzerEnabled() const   { return m_meta.aiAnalyzerEnabled; }
+bool ProjectManager::aiLoreKeeperEnabled() const { return m_meta.aiLoreKeeperEnabled; }
+bool ProjectManager::aiSynopsisEnabled() const   { return m_meta.aiSynopsisEnabled; }
+bool ProjectManager::aiLibrarianEnabled() const  { return m_meta.aiLibrarianEnabled; }
+bool ProjectManager::aiRagAssistEnabled() const  { return m_meta.aiRagAssistEnabled; }
+
+void ProjectManager::setAiAnalyzerEnabled(bool enabled)   { m_meta.aiAnalyzerEnabled = enabled; }
+void ProjectManager::setAiLoreKeeperEnabled(bool enabled) { m_meta.aiLoreKeeperEnabled = enabled; }
+void ProjectManager::setAiSynopsisEnabled(bool enabled)   { m_meta.aiSynopsisEnabled = enabled; }
+void ProjectManager::setAiLibrarianEnabled(bool enabled)  { m_meta.aiLibrarianEnabled = enabled; }
+void ProjectManager::setAiRagAssistEnabled(bool enabled)  { m_meta.aiRagAssistEnabled = enabled; }
+
 bool ProjectManager::addFile(const QString &name, const QString &relativePath, const QString &parentPath)
 {
     if (!isProjectOpen()) return false;
@@ -719,7 +731,9 @@ bool ProjectManager::renameItem(const QString &path, const QString &newName)
     QString newBasename = newName;
     if (item->type == ProjectTreeItem::File) {
         const QString ext = oldFi.suffix();
-        if (!ext.isEmpty() && !newBasename.contains(QLatin1Char('.'))) {
+        // contains('.') is unsafe: filenames can carry dots that aren't extensions (e.g. "v0.17").
+        const QString newSuffix = QFileInfo(newBasename).suffix();
+        if (!ext.isEmpty() && newSuffix.compare(ext, Qt::CaseInsensitive) != 0) {
             newBasename = newBasename + QLatin1Char('.') + ext;
         }
     }

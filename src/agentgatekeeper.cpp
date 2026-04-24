@@ -4,6 +4,7 @@
 #include "knowledgebase.h"
 #include "analyzerservice.h"
 #include "lorekeeperservice.h"
+#include "projectmanager.h"
 #include <QDebug>
 
 AgentGatekeeper& AgentGatekeeper::instance()
@@ -20,6 +21,39 @@ AgentGatekeeper::AgentGatekeeper(QObject *parent)
 void AgentGatekeeper::setLibrarianService(LibrarianService *service)
 {
     m_librarianService = service;
+}
+
+bool AgentGatekeeper::isEnabled(Service s) const
+{
+    auto &pm = ProjectManager::instance();
+    if (!pm.isProjectOpen()) return true;
+    switch (s) {
+    case Service::Analyzer:   return pm.aiAnalyzerEnabled();
+    case Service::LoreKeeper: return pm.aiLoreKeeperEnabled();
+    case Service::Synopsis:   return pm.aiSynopsisEnabled();
+    case Service::Librarian:  return pm.aiLibrarianEnabled();
+    case Service::RagAssist:  return pm.aiRagAssistEnabled();
+    }
+    return true;
+}
+
+void AgentGatekeeper::setEnabled(Service s, bool enabled)
+{
+    auto &pm = ProjectManager::instance();
+    if (!pm.isProjectOpen()) return;
+
+    bool current = isEnabled(s);
+    if (current == enabled) return;
+
+    switch (s) {
+    case Service::Analyzer:   pm.setAiAnalyzerEnabled(enabled);   break;
+    case Service::LoreKeeper: pm.setAiLoreKeeperEnabled(enabled); break;
+    case Service::Synopsis:   pm.setAiSynopsisEnabled(enabled);   break;
+    case Service::Librarian:  pm.setAiLibrarianEnabled(enabled);  break;
+    case Service::RagAssist:  pm.setAiRagAssistEnabled(enabled);  break;
+    }
+    pm.saveProject();
+    Q_EMIT serviceEnabledChanged(s, enabled);
 }
 
 void AgentGatekeeper::pauseAll()

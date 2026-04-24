@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     Unit tests for the ProjectMetadata value type (Phase 1 of the
     ProjectManager / tree-refactor plan).
@@ -55,7 +55,7 @@ private Q_SLOTS:
     {
         ProjectMetadata original;
         original.name = QStringLiteral("Kabal");
-        original.author = QStringLiteral("Sheldon L.");
+        original.author = QStringLiteral("Sheldon Lee Wen");
         original.pageSize = QStringLiteral("Letter");
         original.margins.left = 15.5;
         original.margins.right = 16.5;

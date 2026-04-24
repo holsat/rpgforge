@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     Unit tests for TreeNodeSnapshot and ProjectManager's snapshot-based
     read API (Phase 2 of the tree-refactor plan).

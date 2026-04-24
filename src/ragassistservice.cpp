@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 
 #include "ragassistservice.h"
 
+#include "agentgatekeeper.h"
 #include "knowledgebase.h"
 #include "projectmanager.h"
 #include "debuglog.h"
@@ -357,6 +358,10 @@ LLMService* RagAssistService::llmService() const
 QString RagAssistService::generate(const RagAssistRequest &request,
                                     const RagAssistCallbacks &callbacks)
 {
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::RagAssist)) {
+        qDebug() << "RAG Assist: generate skipped — disabled for this project.";
+        return {};
+    }
     const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
     RPGFORGE_DLOG("RAG") << "generate: service=" << request.serviceName

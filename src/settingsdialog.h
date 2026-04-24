@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -143,8 +143,9 @@ private:
 
     // Analyzer
     QComboBox *m_analyzerRunModeCombo;
-    QComboBox *m_analyzerProviderCombo;
-    QComboBox *m_analyzerModelCombo; // Changed from QLineEdit
+    // Analyzer provider/model are configured on the AI Agents tab —
+    // the old dedicated combos here were duplicates writing to the
+    // same QSettings keys. Kept only the analyzer-specific run-mode.
 };
 
 #endif // SETTINGSDIALOG_H

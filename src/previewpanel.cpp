@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,7 +25,32 @@
 #include <QFileSystemWatcher>
 #include <QRegularExpression>
 #include <QWebEngineView>
+#include <QWebEngineSettings>
+#include <QWebEnginePage>
 #include <QVBoxLayout>
+
+namespace {
+// Subclass only exists to surface Chromium console messages into our debug
+// log. Renderer errors (e.g. "Not allowed to load local resource") are
+// otherwise silent.
+class LoggingWebEnginePage : public QWebEnginePage
+{
+public:
+    using QWebEnginePage::QWebEnginePage;
+protected:
+    void javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level,
+                                  const QString &message,
+                                  int lineNumber,
+                                  const QString &sourceID) override
+    {
+        const char *lvl = (level == ErrorMessageLevel)   ? "ERROR"
+                        : (level == WarningMessageLevel) ? "WARN"
+                        :                                  "INFO";
+        qInfo().noquote() << "PreviewPanel[webengine]" << lvl
+                          << sourceID << ":" << lineNumber << "-" << message;
+    }
+};
+} // namespace
 #include <QApplication>
 #include <KColorScheme>
 #include <KLocalizedString>
@@ -39,6 +64,19 @@ PreviewPanel::PreviewPanel(QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_webView);
+
+    // Install a logging page subclass so Chromium renderer errors (e.g. blocked
+    // file:// fetches) surface in our log instead of disappearing silently.
+    m_webView->setPage(new LoggingWebEnginePage(m_webView));
+
+    // Allow the preview page (loaded via setHtml with a file:// baseUrl) to
+    // fetch other file:// resources — markdown-referenced images live under
+    // the project's media/ directory and are loaded as <img src="file://...">.
+    // QtWebEngine defaults are restrictive for cross-origin file access.
+    if (auto *settings = m_webView->settings()) {
+        settings->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
+        settings->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+    }
 
     m_debounceTimer->setSingleShot(true);
     m_debounceTimer->setInterval(150);
@@ -69,8 +107,30 @@ PreviewPanel::PreviewPanel(QWidget *parent)
         setupStylesheetWatcher();
     }
 
-    // Load initial empty skeleton
-    m_webView->setHtml(wrapHtml(QString()));
+    // One stable temp file per process; loadHtmlViaTempFile() overwrites it
+    // before each full reload. Stays in /tmp so it's cleaned on reboot.
+    m_tempHtmlPath = QDir::tempPath()
+        + QStringLiteral("/rpgforge-preview-")
+        + QString::number(QCoreApplication::applicationPid())
+        + QStringLiteral(".html");
+
+    loadHtmlViaTempFile(wrapHtml(QString()));
+}
+
+void PreviewPanel::loadHtmlViaTempFile(const QString &html)
+{
+    QFile f(m_tempHtmlPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qWarning().noquote() << "PreviewPanel: failed to open preview temp file"
+                             << m_tempHtmlPath << ":" << f.errorString();
+        // Fallback to setHtml so preview still shows something, even if
+        // cross-path images will be broken until we recover.
+        m_webView->setHtml(html, m_baseUrl);
+        return;
+    }
+    f.write(html.toUtf8());
+    f.close();
+    m_webView->load(QUrl::fromLocalFile(m_tempHtmlPath));
 }
 
 void PreviewPanel::setMarkdown(const QString &markdown)
@@ -170,15 +230,27 @@ QString PreviewPanel::resolveRelativeImageUrlsInMarkdown(const QString &markdown
         if (src.isEmpty()) return src;
         static const QRegularExpression scheme(QStringLiteral("^[a-zA-Z][a-zA-Z0-9+.-]*:"));
         if (scheme.match(src).hasMatch()) return src;
-        if (src.startsWith(QLatin1Char('/'))) return src;
+
+        // Pandoc's Word importer emits leading-slash paths like "/media/X.png"
+        // meaning project-root-relative, not filesystem-absolute. Strip the
+        // leading slash so the same two-base search handles both conventions.
+        QString rel = src;
+        if (rel.startsWith(QLatin1Char('/'))) {
+            rel = rel.mid(1);
+        }
 
         auto tryBase = [&](const QString &base) -> QString {
             if (base.isEmpty()) return QString();
-            const QString candidate = QDir(base).absoluteFilePath(src);
-            if (QFileInfo::exists(candidate)) {
-                return QUrl::fromLocalFile(candidate).toString();
-            }
-            return QString();
+            const QString candidate = QDir::cleanPath(QDir(base).absoluteFilePath(rel));
+            if (!QFileInfo::exists(candidate)) return QString();
+
+            // FullyEncoded so paths with spaces (e.g. "Kabal RPG Project")
+            // become %20 — markdown image syntax rejects bare whitespace in
+            // the URL and cmark-gfm silently falls back to literal text.
+            const QString url = QString::fromLatin1(
+                QUrl::fromLocalFile(candidate).toEncoded());
+            qInfo().noquote() << "PreviewPanel: image resolved" << src << "->" << url;
+            return url;
         };
 
         const QString fromDoc = tryBase(docDir);
@@ -222,7 +294,7 @@ QString PreviewPanel::resolveRelativeImageUrlsInMarkdown(const QString &markdown
 void PreviewPanel::updatePreview()
 {
     if (m_needsFullReload || !m_isLoaded) {
-        m_webView->setHtml(wrapHtml(QString()), m_baseUrl);
+        loadHtmlViaTempFile(wrapHtml(QString()));
         m_needsFullReload = false;
         return;
     }
@@ -241,7 +313,57 @@ void PreviewPanel::updatePreview()
     // downstream step intact.
     processedMarkdown = resolveRelativeImageUrlsInMarkdown(processedMarkdown);
     QString htmlBody = m_parser.renderHtml(processedMarkdown);
-    
+
+    // Promote Pandoc's header_attributes syntax (e.g. "## Title {#slug}")
+    // into real HTML ids. cmark-gfm doesn't recognize the extension and
+    // emits it as literal trailing text inside the heading. Rewrite to
+    // <hN id="slug">Title</hN> so the tokens disappear from the rendered
+    // preview AND anchor links / future scroll-to-heading sync work.
+    static const QRegularExpression headingAttrRe(
+        QStringLiteral("<h([1-6])(\\s[^>]*)?>(.*?)\\s*\\{#([^\\s}]+)(?:\\s[^}]*)?\\}\\s*</h\\1>"));
+    htmlBody.replace(headingAttrRe, QStringLiteral("<h\\1 id=\"\\4\"\\2>\\3</h\\1>"));
+
+    // Same story for Pandoc image attributes: ![](src){width="X" height="Y"}.
+    // Extract width/height into an inline style on the <img> and drop the
+    // trailing {...} text. The attr block can span multiple lines.
+    static const QRegularExpression imgAttrRe(
+        QStringLiteral("(<img\\b[^>]*?)(\\s*/?>)\\s*\\{([^}]+)\\}"),
+        QRegularExpression::DotMatchesEverythingOption);
+    static const QRegularExpression kvRe(
+        QStringLiteral("(\\w+)\\s*=\\s*\"?([^\"\\s}]+)\"?"));
+    {
+        int offset = 0;
+        auto it = imgAttrRe.globalMatch(htmlBody);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const QString imgPrefix = m.captured(1);
+            const QString imgEnd = m.captured(2);
+            const QString attrs = m.captured(3);
+
+            QString styleFragment;
+            auto kvIt = kvRe.globalMatch(attrs);
+            while (kvIt.hasNext()) {
+                const auto kv = kvIt.next();
+                const QString key = kv.captured(1).toLower();
+                const QString val = kv.captured(2);
+                if (key == QLatin1String("width") || key == QLatin1String("height")) {
+                    styleFragment += key + QLatin1Char(':') + val + QLatin1Char(';');
+                }
+            }
+
+            QString replacement = imgPrefix;
+            if (!styleFragment.isEmpty()) {
+                replacement += QStringLiteral(" style=\"") + styleFragment + QLatin1Char('"');
+            }
+            replacement += imgEnd;
+
+            const int start = m.capturedStart() + offset;
+            const int len = m.capturedLength();
+            htmlBody.replace(start, len, replacement);
+            offset += replacement.length() - len;
+        }
+    }
+
     // Escape for JavaScript string
     QString escaped = htmlBody;
     escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));

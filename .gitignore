@@ -31,3 +31,8 @@ dbd.txt
 .claude/
 .gemini/
 nanobanana-output/
+
+# Personal scratch / notes (never commit)
+/Bugs
+/Testing_bugs_ets
+/conductor/

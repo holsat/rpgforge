@@ -1,6 +1,6 @@
 /*
     RPG Forge
-    Copyright (C) 2026  Sheldon L.
+    Copyright (C) 2026  Sheldon Lee Wen
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@
 */
 
 #include "synopsisservice.h"
+#include "agentgatekeeper.h"
 #include "projecttreemodel.h"
 #include "projectmanager.h"
 #include "llmservice.h"
@@ -40,6 +41,20 @@ SynopsisService& SynopsisService::instance()
 SynopsisService::SynopsisService(QObject *parent)
     : QObject(parent)
 {
+    connect(&AgentGatekeeper::instance(), &AgentGatekeeper::serviceEnabledChanged,
+            this, [this](AgentGatekeeper::Service s, bool enabled) {
+        if (s != AgentGatekeeper::Service::Synopsis) return;
+        if (!enabled) {
+            {
+                QMutexLocker locker(&m_mutex);
+                m_queue.clear();
+                m_activeRequests.clear();
+            }
+            pause();
+        } else {
+            resume();
+        }
+    });
 }
 
 SynopsisService::~SynopsisService() = default;
@@ -47,6 +62,11 @@ SynopsisService::~SynopsisService() = default;
 void SynopsisService::requestUpdate(const QString &relativePath, bool force)
 {
     if (relativePath.isEmpty()) return;
+
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Synopsis)) {
+        qDebug() << "Synopsis AI: requestUpdate skipped — disabled for this project.";
+        return;
+    }
 
     {
         QMutexLocker locker(&m_mutex);
@@ -80,6 +100,10 @@ void SynopsisService::cancelRequest(const QString &relativePath)
 void SynopsisService::scanProject()
 {
     qDebug() << "Synopsis AI: Scanning project for missing synopses...";
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Synopsis)) {
+        qDebug() << "Synopsis AI: scanProject skipped — disabled for this project.";
+        return;
+    }
     if (!ProjectManager::instance().isProjectOpen()) {
         qDebug() << "Synopsis AI: Scan aborted - Project not open.";
         return;
