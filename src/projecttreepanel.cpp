@@ -285,6 +285,11 @@ void ProjectTreePanel::setupUi()
     layout->addWidget(m_treeView);
 }
 
+void ProjectTreePanel::refreshGitStatus()
+{
+    if (m_gitStatus) m_gitStatus->refresh();
+}
+
 void ProjectTreePanel::onProjectOpened()
 {
     qDebug() << "ProjectTreePanel: Handling project update/opened. Model root children:" << m_model->rowCount(QModelIndex());

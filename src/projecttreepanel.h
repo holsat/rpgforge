@@ -53,6 +53,12 @@ Q_SIGNALS:
     void syncProgress(int value, const QString &message);
     void syncFinished(bool success, const QString &message);
 
+public Q_SLOTS:
+    /// Force an immediate git-status refresh; normally the model polls on a
+    /// 3-second timer, but an explicit nudge after a file save keeps the
+    /// M / U / A badges in sync without the lag.
+    void refreshGitStatus();
+
 private Q_SLOTS:
     void onProjectOpened();
     void onProjectClosed();

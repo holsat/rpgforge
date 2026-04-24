@@ -258,10 +258,7 @@ QString PreviewPanel::resolveRelativeImageUrlsInMarkdown(const QString &markdown
             // FullyEncoded so paths with spaces (e.g. "Kabal RPG Project")
             // become %20 — markdown image syntax rejects bare whitespace in
             // the URL and cmark-gfm silently falls back to literal text.
-            const QString url = QString::fromLatin1(
-                QUrl::fromLocalFile(candidate).toEncoded());
-            qInfo().noquote() << "PreviewPanel: image resolved" << src << "->" << url;
-            return url;
+            return QString::fromLatin1(QUrl::fromLocalFile(candidate).toEncoded());
         };
 
         const QString fromDoc = tryBase(docDir);

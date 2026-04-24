@@ -218,12 +218,46 @@ void ProjectSettingsDialog::setupUi()
     addToggleRow(m_aiLibrarianToggle, i18n(
         "Variable Librarian — extracts stats/variables from tables and lists"));
     addToggleRow(m_aiRagAssistToggle, i18n(
-        "RAG Assist — AI writing assistant (user-triggered)"));
+        "AI Writing Assistant — on-demand AI for expanding, rewriting, and drafting"));
 
     aiLayout->addWidget(aiGroup);
     aiLayout->addStretch();
 
     tabs->addTab(aiTab, i18n("AI Services"));
+
+    // --- Version Control Tab ---
+    auto *vcTab = new QWidget(this);
+    auto *vcLayout = new QVBoxLayout(vcTab);
+
+    auto *vcInfo = new QLabel(i18n(
+        "Control how RPG Forge interacts with the project's Git repository. "
+        "Auto-Sync commits every saved change immediately, giving you a "
+        "complete history at the cost of many small commits. Turn it off to "
+        "batch changes manually via the Sync Project button; note that files "
+        "modified while Auto-Sync is off will not be restorable until you "
+        "sync. These settings are saved on a per project basis."), this);
+    vcInfo->setWordWrap(true);
+    vcLayout->addWidget(vcInfo);
+
+    auto *vcGroup = new QGroupBox(i18n("Seamless Version Control"), this);
+    auto *vcGroupLayout = new QVBoxLayout(vcGroup);
+
+    auto *autoSyncRow = new QHBoxLayout();
+    autoSyncRow->setContentsMargins(0, 0, 0, 0);
+    m_autoSyncToggle = new ToggleSwitch(this);
+    auto *autoSyncLabel = new QLabel(i18n(
+        "Auto-Sync — commit every saved change to Git automatically"), this);
+    autoSyncLabel->setWordWrap(true);
+    autoSyncLabel->setBuddy(m_autoSyncToggle);
+    autoSyncRow->addWidget(m_autoSyncToggle, 0, Qt::AlignTop);
+    autoSyncRow->addSpacing(8);
+    autoSyncRow->addWidget(autoSyncLabel, 1);
+    vcGroupLayout->addLayout(autoSyncRow);
+
+    vcLayout->addWidget(vcGroup);
+    vcLayout->addStretch();
+
+    tabs->addTab(vcTab, i18n("Version Control"));
 
     mainLayout->addWidget(tabs);
 
@@ -274,6 +308,8 @@ void ProjectSettingsDialog::load()
     m_aiSynopsisToggle->setChecked(pm.aiSynopsisEnabled());
     m_aiLibrarianToggle->setChecked(pm.aiLibrarianEnabled());
     m_aiRagAssistToggle->setChecked(pm.aiRagAssistEnabled());
+
+    m_autoSyncToggle->setChecked(pm.autoSync());
 }
 
 void ProjectSettingsDialog::enhanceCurrentPrompt()
@@ -426,6 +462,8 @@ void ProjectSettingsDialog::save()
     gate.setEnabled(AgentGatekeeper::Service::Synopsis,   m_aiSynopsisToggle->isChecked());
     gate.setEnabled(AgentGatekeeper::Service::Librarian,  m_aiLibrarianToggle->isChecked());
     gate.setEnabled(AgentGatekeeper::Service::RagAssist,  m_aiRagAssistToggle->isChecked());
+
+    pm.setAutoSync(m_autoSyncToggle->isChecked());
 
     pm.saveProject();
 

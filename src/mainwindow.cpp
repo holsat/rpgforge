@@ -837,6 +837,10 @@ void MainWindow::setupSidebar()
             // Note: autoCommit is handled by the setupAutoSync connection in setupEditor;
             // calling it here again would create a duplicate commit on every save.
             KnowledgeBase::instance().indexFile(filePath);
+            // Poke both git-status models so the M badge shows up immediately
+            // instead of waiting for the 3-second polling cycle.
+            if (m_projectTree) m_projectTree->refreshGitStatus();
+            if (m_fileExplorer) m_fileExplorer->refreshGitStatus();
         }
     });
     connect(m_document, &KTextEditor::Document::documentUrlChanged, this, [this]() {

@@ -1346,22 +1346,36 @@ void LLMService::generateEmbedding(LLMProvider provider, const QString &model, c
                                   << err
                                   << "- body:" << QString::fromUtf8(body).left(512);
 
-            // Record a cooldown on 429 so KnowledgeBase::generateEmbeddingWithFallback
-            // skips this {provider, model} pair until the retry window passes,
-            // the same contract the chat paths use.
-            if (weakThis && httpStatus == 429 && !model.isEmpty()) {
-                int seconds = extractRetryDelaySecondsFromErrorBody(body);
-                if (seconds <= 0) seconds = 60;
+            // Record a cooldown on terminal errors so
+            // KnowledgeBase::generateEmbeddingWithFallback skips this
+            // {provider, model} pair on subsequent requests. 429 is a
+            // temporary rate-limit; 404/400/401/403 mean the model isn't
+            // reachable as configured and the user has to fix settings —
+            // give those a long cooldown (1h) so we stop spamming the log.
+            if (weakThis && !model.isEmpty()) {
+                int cooldownSeconds = 0;
                 QString reasonText;
-                QJsonDocument edoc = QJsonDocument::fromJson(body);
-                if (edoc.isObject()) {
-                    reasonText = edoc.object().value(QStringLiteral("error"))
-                                     .toObject().value(QStringLiteral("message"))
-                                     .toString().left(240);
-                }
-                if (reasonText.isEmpty())
+                if (httpStatus == 429) {
+                    cooldownSeconds = extractRetryDelaySecondsFromErrorBody(body);
+                    if (cooldownSeconds <= 0) cooldownSeconds = 60;
                     reasonText = QStringLiteral("HTTP 429 (embedding rate-limited)");
-                weakThis->recordCooldown(provider, model, seconds, reasonText);
+                } else if (httpStatus == 404) {
+                    cooldownSeconds = 3600;
+                    reasonText = QStringLiteral("HTTP 404 (embedding model not found at endpoint)");
+                } else if (httpStatus == 400 || httpStatus == 401 || httpStatus == 403) {
+                    cooldownSeconds = 3600;
+                    reasonText = QStringLiteral("HTTP %1 (embedding request rejected)").arg(httpStatus);
+                }
+                if (cooldownSeconds > 0) {
+                    QJsonDocument edoc = QJsonDocument::fromJson(body);
+                    if (edoc.isObject()) {
+                        const QString bodyMsg = edoc.object().value(QStringLiteral("error"))
+                                                    .toObject().value(QStringLiteral("message"))
+                                                    .toString().left(200);
+                        if (!bodyMsg.isEmpty()) reasonText += QStringLiteral(": ") + bodyMsg;
+                    }
+                    weakThis->recordCooldown(provider, model, cooldownSeconds, reasonText);
+                }
             }
         }
         if (callback) {
