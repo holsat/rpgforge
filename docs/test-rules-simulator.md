@@ -12,10 +12,17 @@ and note the exact step — that's the regression to file.
 ## 0. Prerequisites
 
 - A build of the app:
-  `cmake --build build -j$(nproc)` (or run via `./scripts/run-nvidia.sh`
-  if the AMD-GPU preview crash is still open on your machine).
+  - `./build.sh` for a debug build with full logging.
+  - `./build.sh release` for a performance build (qDebug/qInfo
+    stripped, optimizations on; recommended when actually running
+    sims). The launcher binary is `./build/bin/rpgforge` either way.
+  - The earlier AMD/Mesa preview crash is no longer an issue —
+    `QT_QUICK_BACKEND=software` is now baked into `main.cpp` so the
+    preview's `QQuickWidget` no longer touches `libgallium`. The
+    `run-nvidia.sh` PRIME-offload launcher is still in `scripts/` but
+    you don't need it for the simulator.
 - **An LLM provider configured.** At minimum one provider with a valid
-  API key and a default chat model. Settings → LLM tab. Most of the
+  API key and a default chat model. **Settings → LLM** tab. Most of the
   simulator's quality rides on a mid/top-tier model (Gemini Pro, Claude
   Sonnet, GPT-4-class); a tiny local model will produce weak turns.
 - **An RPG project opened** (File → Open, or create a fresh one with
@@ -33,10 +40,11 @@ and note the exact step — that's the regression to file.
 **Do:**
 1. Look at the left sidebar of the main window.
 2. Click the ▶ (`media-playback-start-symbolic`) icon labelled
-   **Rule Simulation**.
+   **Rule Simulation**. (Sidebar tab order today: Project Explorer,
+   Variables, AI Writing Assistant, Rule Simulation, Explorations.)
 
 **Expected:**
-- The left sidebar flips from the Project Tree view to a Simulation
+- The left sidebar flips from the Project Explorer to a Simulation
   view with three tabs at the top: **Live Log**, **Participants**,
   **World State**.
 - Above the tabs you see a toolbar: **Start** button (blue-highlighted),
@@ -45,6 +53,10 @@ and note the exact step — that's the regression to file.
   (default 20), a **Batch** checkbox with a batch-count spinner
   (default 10, disabled unless Batch is checked), and an **Aggression**
   slider (default around the middle).
+
+> Note: "Document Outline" is no longer a separate sidebar tab — it
+> lives as a collapsible pane inside Project Explorer. Doesn't affect
+> the simulator but the icon list is one shorter than before.
 
 ---
 
@@ -103,10 +115,12 @@ once by emptying the list and pressing Start.
 
 ---
 
-## 5. Verify Simulation agents have providers set
+## 5. Verify Simulation agents have providers + models set
 
 **Do:**
-1. Open Settings → AI Agents tab.
+1. Open **Settings → AI Services** tab. (This was previously labelled
+   "AI Agents"; it was renamed for consistency with the per-project
+   AI Services tab.)
 2. Confirm rows for **Simulation Arbiter**, **Simulation Griot**, and
    **Simulation Actor** each have a provider + model selected.
 3. If any show a blank model combo, paste the API key on the LLM tab
@@ -118,6 +132,41 @@ once by emptying the list and pressing Start.
 - If any are blank, the simulator will silently fall back to the
   global default provider (`llm/provider` — the top of your drag list
   in the LLM tab); note this for the log.
+
+> Other rows on this tab — Game Analyzer, LoreKeeper, Synopsis
+> Generator (File / Folder), Variable Librarian, AI Writing Assistant,
+> Character Generator — control the per-agent model bindings for the
+> rest of the app. They don't affect the simulator's three agents
+> directly. Each row's name now matches the per-project **AI Services**
+> tab so you can pair them up.
+
+---
+
+## 5a. *(Optional)* Quiet the rest of the app while simming
+
+If you want to focus on simulator output and stop other AI services
+from chewing tokens / muddying the log:
+
+**Do:**
+1. With the project open, go to **Project menu → Project Settings**
+   (or the gear icon in the project tree toolbar).
+2. Open the **AI Services** tab.
+3. Use the toggle switches to disable **Game Analyzer**, **LoreKeeper**,
+   **Synopsis Generator**, **Variable Librarian**, and/or
+   **AI Writing Assistant**.
+
+**Expected:**
+- Toggles persist per-project in `rpgforge.project`.
+- Disabled services log a single "Skipping — disabled for this project"
+  line on first attempt, then go silent.
+- The Simulation Arbiter / Griot / Actor agents are not gated by these
+  toggles; the simulator runs regardless of those settings.
+
+There's also a **Version Control → Auto-Sync** toggle on the same
+dialog. With it on (default), every save (including simulator output
+files) is auto-committed; with it off, files build up uncommitted and
+M / U badges appear in the project tree until you click **Sync Project**
+manually.
 
 ---
 
@@ -142,15 +191,22 @@ once by emptying the list and pressing Start.
   key/value pairs being mutated in real time (HP, position, inventory,
   whatever the Arbiter is tracking for that scenario).
 - The **Stop** button is now enabled.
+- If you have the document editor visible in the central pane, the
+  editor itself should stay responsive during turns — preview and
+  agent renders are off-thread now (PR #28). If the UI freezes during
+  a turn, that's a regression.
 
 **Failure modes to log:**
 - No turns advance after Start. → Probably a provider auth failure;
   check `~/.local/share/rpgforge/rpgforge_debug.log` for the real
-  error (our recent changes now surface these properly).
+  error. The embedding circuit breaker now also catches 4xx model-
+  not-found errors and logs `LLM cooldown recorded: <provider>/<model>`
+  with a 1-hour cool-off, so a bad model name will surface clearly.
 - One actor speaks but the other never gets a turn. → Check the
   Participants order and the log for "thinking…" stalls.
 - Arbiter never appears, only Actor + Griot. → Check
-  `simulation/sim_arbiter_provider` has a model set.
+  `simulation/sim_arbiter_provider` has a model set in
+  Settings → AI Services.
 
 ---
 
@@ -179,6 +235,10 @@ once by emptying the list and pressing Start.
   transcript is NOT in this file; it's view-only for now.)
 - If the project path isn't set, save is a silent no-op — confirm
   this doesn't crash.
+- If **Auto-Sync** is on (default), the new file is committed to git
+  immediately. You can verify via `git -C <project> log --oneline -1`
+  or by watching the M/U badges in the Project Explorer (they should
+  flip to clean after the auto-commit).
 
 ---
 
@@ -228,6 +288,9 @@ once by emptying the list and pressing Start.
 - Participants list is preserved for the session.
 - Live Log is cleared (by design — each Start is a fresh run).
 - Toolbar state is reset: Start enabled, Stop disabled.
+- The Project Explorer tree's expand/collapse state is persisted
+  across panel switches now (PR #27), so navigating away and back
+  shouldn't fling collapsed folders open.
 
 **Gotcha:** the Participants list does **not** persist across app
 restart. If you start the app fresh, you'll need to re-add them.
@@ -246,10 +309,12 @@ Copy/paste into your test tracker:
 - [ ] Actor / Arbiter / Griot lines all appear in non-batch mode.
 - [ ] World State tab updates live.
 - [ ] Stop halts within one turn.
-- [ ] Save writes `simulations/sim_<timestamp>.json`.
+- [ ] Save writes `simulations/sim_<timestamp>.json` (and auto-commits if Auto-Sync is on).
 - [ ] Batch mode prints analytics block at end.
 - [ ] Aggression slider visibly shifts actor behaviour.
 - [ ] No crash when switching sidebar panels mid-run.
+- [ ] Editor stays responsive while a turn renders (off-thread preview / async LLM dispatch).
+- [ ] Cooldown log line appears once and then goes silent if a configured embedding model 404s.
 
 ---
 
@@ -257,10 +322,36 @@ Copy/paste into your test tracker:
 
 | Setting | Location |
 |---|---|
-| Provider/model for Actor / Arbiter / Griot | Settings → AI Agents tab |
+| Provider/model for Actor / Arbiter / Griot | Settings → **AI Services** tab (was "AI Agents") |
 | Prompts for each simulation agent | Settings → Prompts tab |
 | Global fallback provider order | Settings → LLM tab (drag to reorder) |
+| Per-project enable/disable for Analyzer / LoreKeeper / Synopsis / Librarian / AI Writing Assistant | Project Settings → AI Services tab |
+| Auto-commit on save | Project Settings → Version Control tab |
 | Scenario file | Simulation panel toolbar, folder picker |
 | Participants | Simulation panel → Participants tab → Add |
 | Output JSON | `<project>/simulations/sim_*.json` |
 | Debug logs | `~/.local/share/rpgforge/rpgforge_debug.log` |
+| Embedding model per provider | Settings → LLM → \<provider\> → Embedding Model |
+
+---
+
+## Performance notes (April 2026)
+
+Recent fixes that may surface in simulator testing:
+- **Editor stays responsive during long-running renders.** Preview rendering,
+  pandoc, cmark, and the per-keystroke regex passes were moved off
+  the main thread (PR #27, #28). If you see UI freezes during an
+  Arbiter or Griot LLM call lasting > 1 s, log it — that's not the
+  preview, that's the simulator path itself.
+- **Embedding fallback chain.** If your primary embedding provider
+  (e.g. Google's `text-embedding-004`) returns 404 because the model
+  was deprecated, the chain now records a 1-hour cooldown and falls
+  through to the next configured provider (LM Studio, etc.). Look for
+  `KnowledgeBase: embedding served by fallback candidate <provider>`
+  in the log to confirm.
+- **AI service kill-switches** (per-project) let you disable the
+  noisy-but-non-essential services while running sims. Project
+  Settings → AI Services.
+- **Auto-Sync toggle** controls whether every save (simulator output
+  included) becomes its own git commit. Off → files accumulate as M
+  badges in the project tree until you sync manually.
