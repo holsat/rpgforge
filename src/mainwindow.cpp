@@ -578,7 +578,8 @@ void MainWindow::setupSidebar()
     m_mainSplitter->setStretchFactor(0, 0);
     m_mainSplitter->setStretchFactor(1, 1);
     m_mainSplitter->setStretchFactor(2, 0);
-    m_previewPanel->hide();
+    // Initial size of 0 hides the preview; do NOT call hide() — togglePreview()
+    // intentionally never calls setVisible() to avoid a QtWebEngine render crash.
 
     m_problemsPanel = new ProblemsPanel(this);
 
@@ -723,7 +724,8 @@ void MainWindow::setupSidebar()
     });
 
     connect(&VariableManager::instance(), &VariableManager::variablesChanged, this, [this]() {
-        if (m_previewPanel && m_document) {
+        if (m_previewPanel && m_document
+            && m_centralViewLayout && m_centralViewLayout->currentWidget() == m_editorSplitter) {
             m_previewPanel->setMarkdown(m_document->text());
         }
     });
@@ -1038,13 +1040,13 @@ void MainWindow::openFileFromUrl(const QUrl &url)
         if (imgSuffixes.contains(suffix)) {
             if (m_imagePreview->loadImage(path)) {
                 showCentralView(m_imagePreview);
-                if (m_previewPanel) m_previewPanel->hide();
+                collapsePreviewPane();
                 return;
             }
         } else if (suffix == QLatin1String("pdf")) {
             m_pdfViewer->setUrl(url);
             showCentralView(m_pdfViewer);
-            if (m_previewPanel) m_previewPanel->hide();
+            collapsePreviewPane();
             return;
         } else if (!textSuffixes.contains(suffix)) {
             // Unknown / likely binary — don't open in the editor
@@ -1416,45 +1418,68 @@ void MainWindow::navigateToLine(int line)
     if (view) {
         view->setCursorPosition(KTextEditor::Cursor(line, 0));
         view->setFocus();
-        if (m_previewPanel && m_previewPanel->isVisible()) {
-            m_previewPanel->scrollToLine(line);
+        // Preview is always "visible" in Qt terms (we never hide the widget
+        // to avoid a QSG crash); check the splitter pane width instead.
+        if (m_previewPanel && m_mainSplitter) {
+            const QList<int> sizes = m_mainSplitter->sizes();
+            if (sizes.size() >= 3 && sizes[2] > 0) {
+                m_previewPanel->scrollToLine(line);
+            }
         }
     }
 }
 
 void MainWindow::togglePreview()
 {
-    if (m_previewPanel) {
-        bool visible = m_togglePreviewAction->isChecked();
-        m_previewPanel->setVisible(visible);
-        
-        QList<int> sizes = m_mainSplitter->sizes();
-        if (visible) {
-            // Give it some reasonable space if it was hidden (size 0)
-            if (sizes.size() >= 3 && sizes[2] < 50) {
-                int total = 0;
-                for (int s : sizes) total += s;
-                int previewSize = total * 0.3; // 30% for preview
-                sizes[2] = previewSize;
-                sizes[1] = total - sizes[0] - previewSize;
-                m_mainSplitter->setSizes(sizes);
-            }
-            syncScroll();
-        } else {
-            // Hide it completely in the splitter
-            if (sizes.size() >= 3) {
-                sizes[1] += sizes[2];
-                sizes[2] = 0;
-                m_mainSplitter->setSizes(sizes);
-            }
-        }
+    // Keep the QWebEngineView mounted at all times; setVisible(false)/true
+    // triggers a QSGBatchRenderer crash in libgallium on hide/show cycles.
+    // Collapse/expand the splitter pane instead.
+    if (!m_previewPanel || !m_mainSplitter) return;
+
+    const bool shouldShow = m_togglePreviewAction->isChecked();
+
+    QList<int> sizes = m_mainSplitter->sizes();
+    if (sizes.size() < 3) return;
+
+    if (shouldShow) {
+        int total = 0;
+        for (int s : sizes) total += s;
+        int previewSize = total * 0.3; // ~30% for preview
+        sizes[2] = previewSize;
+        sizes[1] = qMax(0, total - sizes[0] - previewSize);
+        m_mainSplitter->setSizes(sizes);
+        syncScroll();
+    } else {
+        sizes[1] += sizes[2];
+        sizes[2] = 0;
+        m_mainSplitter->setSizes(sizes);
     }
+}
+
+void MainWindow::collapsePreviewPane()
+{
+    // Shrink the preview column to 0 without calling hide()/setVisible() on the
+    // QWebEngineView — those flip QtWebEngine's internal QQuickWidget and
+    // trigger the QSGBatchRenderer crash on this GPU family.
+    if (!m_mainSplitter) return;
+    QList<int> sizes = m_mainSplitter->sizes();
+    if (sizes.size() < 3 || sizes[2] == 0) return;
+    sizes[1] += sizes[2];
+    sizes[2] = 0;
+    m_mainSplitter->setSizes(sizes);
 }
 
 void MainWindow::syncScroll()
 {
     auto *view = activeView();
-    if (!view || !m_previewPanel || !m_previewPanel->isVisible() || !m_previewPanel->window()) return;
+    if (!view || !m_previewPanel || !m_previewPanel->window()) return;
+    // Skip when the editor isn't the foreground central widget (e.g. corkboard is up).
+    if (m_centralViewLayout && m_centralViewLayout->currentWidget() != m_editorSplitter) return;
+    // Skip when the preview pane is collapsed to width 0.
+    if (m_mainSplitter) {
+        const QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 3 && sizes[2] <= 0) return;
+    }
 
     // Use scrollToLine with smooth=false for real-time synchronization
     // Ensure the view is valid and has a Kate view interface
@@ -1548,7 +1573,7 @@ void MainWindow::showDiff(const QString &path1, const QString &path2OrHash1, con
         m_diffView->setDiff(path1, path2OrHash1, hash2);
     }
     showCentralView(m_diffView);
-    if (m_previewPanel) m_previewPanel->hide();
+    collapsePreviewPane();
 }
 
 void MainWindow::performSearch(const QString &text)
@@ -2247,6 +2272,7 @@ void MainWindow::importWord()
 
     ProjectManager::instance().saveProject();
     SynopsisService::instance().resume();
+    ProjectManager::instance().notifyTreeChanged();
 
     QMessageBox::information(this, i18n("Import Complete"), i18n("Documents imported successfully."));
     }

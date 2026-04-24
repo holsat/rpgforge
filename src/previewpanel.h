@@ -61,6 +61,12 @@ private:
     void setupStylesheetWatcher();
     QString wrapHtml(const QString &body) const;
     QString loadProjectStylesheets() const;
+    /// Write `html` to a stable temp file and load it via setUrl() so the
+    /// page has a real file:// origin. setHtml(html, baseUrl) gives an
+    /// opaque origin in QtWebEngine, which blocks cross-path file:// image
+    /// fetches even with LocalContentCanAccessFileUrls = true.
+    void loadHtmlViaTempFile(const QString &html);
+    QString m_tempHtmlPath;
     /// Rewrite ![alt](path) in markdown source so relative paths
     /// resolve to absolute file:// URLs BEFORE cmark-gfm renders.
     /// Tries the document directory first (CommonMark convention)

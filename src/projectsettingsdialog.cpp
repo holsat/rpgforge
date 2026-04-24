@@ -17,9 +17,11 @@
 */
 
 #include "projectsettingsdialog.h"
+#include "agentgatekeeper.h"
 #include "projectmanager.h"
 #include "lorekeeperservice.h"
 #include "llmservice.h"
+#include "toggleswitch.h"
 
 #include <QMessageBox>
 #include <QPointer>
@@ -177,6 +179,52 @@ void ProjectSettingsDialog::setupUi()
 
     tabs->addTab(lkTab, i18n("LoreKeeper"));
 
+    // --- AI Services Tab ---
+    auto *aiTab = new QWidget(this);
+    auto *aiLayout = new QVBoxLayout(aiTab);
+
+    auto *aiInfo = new QLabel(i18n(
+        "Enable or disable individual AI agent services that are used for "
+        "this project. Disabled agents will not activate when a project is "
+        "opened, or file contents are changed. This is useful when working "
+        "offline or when you want to manage token costs for services you do "
+        "not want to use. These settings are saved on a per project basis."),
+        this);
+    aiInfo->setWordWrap(true);
+    aiLayout->addWidget(aiInfo);
+
+    auto *aiGroup = new QGroupBox(i18n("Background AI Services"), this);
+    auto *aiGroupLayout = new QVBoxLayout(aiGroup);
+
+    auto addToggleRow = [&](ToggleSwitch *&outToggle, const QString &label) {
+        auto *row = new QHBoxLayout();
+        row->setContentsMargins(0, 0, 0, 0);
+        outToggle = new ToggleSwitch(this);
+        auto *text = new QLabel(label, this);
+        text->setWordWrap(true);
+        text->setBuddy(outToggle);
+        row->addWidget(outToggle, 0, Qt::AlignTop);
+        row->addSpacing(8);
+        row->addWidget(text, 1);
+        aiGroupLayout->addLayout(row);
+    };
+
+    addToggleRow(m_aiAnalyzerToggle, i18n(
+        "Game Analyzer — checks rules for conflicts and ambiguities (runs per edit)"));
+    addToggleRow(m_aiLoreKeeperToggle, i18n(
+        "LoreKeeper — auto-generates character/setting dossiers (runs at project open and per doc)"));
+    addToggleRow(m_aiSynopsisToggle, i18n(
+        "Synopsis Generator — writes short summaries per file (runs per text change)"));
+    addToggleRow(m_aiLibrarianToggle, i18n(
+        "Variable Librarian — extracts stats/variables from tables and lists"));
+    addToggleRow(m_aiRagAssistToggle, i18n(
+        "RAG Assist — AI writing assistant (user-triggered)"));
+
+    aiLayout->addWidget(aiGroup);
+    aiLayout->addStretch();
+
+    tabs->addTab(aiTab, i18n("AI Services"));
+
     mainLayout->addWidget(tabs);
 
     // --- Buttons ---
@@ -220,6 +268,12 @@ void ProjectSettingsDialog::load()
     } else {
         m_lkPromptEdit->setEnabled(false);
     }
+
+    m_aiAnalyzerToggle->setChecked(pm.aiAnalyzerEnabled());
+    m_aiLoreKeeperToggle->setChecked(pm.aiLoreKeeperEnabled());
+    m_aiSynopsisToggle->setChecked(pm.aiSynopsisEnabled());
+    m_aiLibrarianToggle->setChecked(pm.aiLibrarianEnabled());
+    m_aiRagAssistToggle->setChecked(pm.aiRagAssistEnabled());
 }
 
 void ProjectSettingsDialog::enhanceCurrentPrompt()
@@ -361,6 +415,17 @@ void ProjectSettingsDialog::save()
                       << QJsonDocument(categories).toJson(QJsonDocument::Compact);
 
     pm.setLoreKeeperConfig(lkConfig);
+
+    // Apply AI toggles before the final save so we don't write the project
+    // twice with a brief stale-flag window in between. setEnabled itself
+    // persists + emits serviceEnabledChanged; subsequent saveProject() below
+    // is idempotent.
+    auto &gate = AgentGatekeeper::instance();
+    gate.setEnabled(AgentGatekeeper::Service::Analyzer,   m_aiAnalyzerToggle->isChecked());
+    gate.setEnabled(AgentGatekeeper::Service::LoreKeeper, m_aiLoreKeeperToggle->isChecked());
+    gate.setEnabled(AgentGatekeeper::Service::Synopsis,   m_aiSynopsisToggle->isChecked());
+    gate.setEnabled(AgentGatekeeper::Service::Librarian,  m_aiLibrarianToggle->isChecked());
+    gate.setEnabled(AgentGatekeeper::Service::RagAssist,  m_aiRagAssistToggle->isChecked());
 
     pm.saveProject();
 

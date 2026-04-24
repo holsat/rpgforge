@@ -62,7 +62,12 @@ public:
 
 private:
     QString runPandoc(const QStringList &arguments, const QString &workingDir, QString *errorOutput);
-    bool convertEmfToSvg(const QString &emfPath, const QString &svgPath);
+    /// Rasterize an EMF/WMF to PNG. Prefers LibreOffice (best EMF renderer
+    /// for Office-authored documents); falls back to Inkscape's PNG export.
+    /// Do NOT convert EMF to SVG — Inkscape's EMF→SVG path produces an XML
+    /// wrapper around a stripped-down raster and renders as garbage in the
+    /// preview.
+    bool convertEmfToPng(const QString &emfPath, const QString &pngPath);
     QString sanitizeFilename(const QString &filename);
 };
 

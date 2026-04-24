@@ -90,6 +90,15 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
 
 int main(int argc, char *argv[])
 {
+    // Route QtQuick's scene graph through the software rasterizer. The Mesa/
+    // gallium GL path segfaults in QSGBatchRenderer when QWebEngineView renders
+    // its first frame on this family of GPUs; software rendering sidesteps
+    // libgallium entirely. Must be set before QApplication. Chromium's own GPU
+    // process is left alone so image decoding keeps working normally.
+    if (!qEnvironmentVariableIsSet("QT_QUICK_BACKEND")) {
+        qputenv("QT_QUICK_BACKEND", "software");
+    }
+
     QApplication app(argc, argv);
 
     // Setup logging. Historically this wrote to the current working

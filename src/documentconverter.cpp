@@ -84,20 +84,28 @@ DocumentConverter::ConversionResult DocumentConverter::convertToMarkdown(const Q
             QString finalName = baseNewName + QStringLiteral(".") + extension;
             QString targetPath = targetDir.absoluteFilePath(finalName);
 
-            // Handle EMF/WMF conversion
+            // Handle EMF/WMF conversion. Rasterize to PNG via LibreOffice/
+            // Inkscape — the prior EMF→SVG pipeline produced XML wrappers that
+            // the preview could not render. If rasterization fails the image
+            // reference is dropped from the markdown so the preview doesn't
+            // show a broken link to an .emf the browser can't decode.
             if (extension == QStringLiteral("emf") || extension == QStringLiteral("wmf")) {
-                QString svgName = baseNewName + QStringLiteral(".svg");
-                QString svgPath = targetDir.absoluteFilePath(svgName);
-                if (convertEmfToSvg(fullTempPath, svgPath)) {
-                    // Update markdown to point to SVG instead of EMF
+                QString pngName = baseNewName + QStringLiteral(".png");
+                QString pngPath = targetDir.absoluteFilePath(pngName);
+                if (convertEmfToPng(fullTempPath, pngPath)) {
                     QString oldRef = mediaSubDir + QStringLiteral("/") + entry;
-                    QString newRef = QStringLiteral("media/") + svgName;
+                    QString newRef = QStringLiteral("media/") + pngName;
                     markdown.replace(oldRef, newRef);
-                    result.extractedMedia << svgPath;
+                    result.extractedMedia << pngPath;
+                } else {
+                    qWarning().noquote() << "DocumentConverter: failed to rasterize"
+                                         << entry << "— removing reference from markdown";
+                    QString oldRef = mediaSubDir + QStringLiteral("/") + entry;
+                    static const QRegularExpression imgTag(
+                        QStringLiteral("!\\[[^\\]]*\\]\\(%1[^)]*\\)").arg(
+                            QRegularExpression::escape(oldRef)));
+                    markdown.remove(imgTag);
                 }
-                
-                // Also keep PNG as fallback if possible (using high-res raster)
-                // For now, let's just do SVG as it's cleaner for RPG Forge
             } else {
                 // Regular image
                 if (QFile::exists(targetPath)) QFile::remove(targetPath);
@@ -162,26 +170,53 @@ QString DocumentConverter::runPandoc(const QStringList &arguments, const QString
     return QString::fromUtf8(proc.readAllStandardOutput());
 }
 
-bool DocumentConverter::convertEmfToSvg(const QString &emfPath, const QString &svgPath)
+bool DocumentConverter::convertEmfToPng(const QString &emfPath, const QString &pngPath)
 {
-    // Try Inkscape first
-    QString inkscape = QStandardPaths::findExecutable(QStringLiteral("inkscape"));
-    if (!inkscape.isEmpty()) {
-        // inkscape source.emf --export-type=svg --export-filename=target.svg
+    const QFileInfo emfInfo(emfPath);
+    const QFileInfo outInfo(pngPath);
+
+    // LibreOffice renders Office-authored EMF/WMF far more faithfully than
+    // Inkscape — Microsoft and LibreOffice share ancestry in Office file
+    // format handling. Try it first.
+    const QString soffice = QStandardPaths::findExecutable(QStringLiteral("soffice"));
+    if (!soffice.isEmpty()) {
         QProcess proc;
-        proc.start(inkscape, {emfPath, QStringLiteral("--export-type=svg"), QStringLiteral("--export-filename=") + svgPath});
-        return proc.waitForFinished() && proc.exitCode() == 0;
+        proc.start(soffice, {
+            QStringLiteral("--headless"),
+            QStringLiteral("--convert-to"), QStringLiteral("png"),
+            QStringLiteral("--outdir"), outInfo.absolutePath(),
+            emfPath,
+        });
+        if (proc.waitForFinished(30000) && proc.exitCode() == 0) {
+            // soffice writes to <outdir>/<emf-basename>.png — rename if the
+            // caller wanted a different filename.
+            const QString sofficeOut = outInfo.absolutePath()
+                + QDir::separator()
+                + emfInfo.completeBaseName()
+                + QStringLiteral(".png");
+            if (sofficeOut != pngPath) {
+                QFile::remove(pngPath);
+                QFile::rename(sofficeOut, pngPath);
+            }
+            if (QFileInfo::exists(pngPath)) return true;
+        }
     }
 
-    // Fallback to libreoffice/soffice if available
-    QString soffice = QStandardPaths::findExecutable(QStringLiteral("soffice"));
-    if (!soffice.isEmpty()) {
-        // soffice --headless --convert-to svg --outdir dir source.emf
-        QFileInfo info(svgPath);
+    // Inkscape as fallback — render EMF directly to raster (NOT to SVG; its
+    // EMF→SVG path produces broken wrappers).
+    const QString inkscape = QStandardPaths::findExecutable(QStringLiteral("inkscape"));
+    if (!inkscape.isEmpty()) {
         QProcess proc;
-        proc.start(soffice, {QStringLiteral("--headless"), QStringLiteral("--convert-to"), QStringLiteral("svg"), 
-                            QStringLiteral("--outdir"), info.absolutePath(), emfPath});
-        return proc.waitForFinished() && proc.exitCode() == 0;
+        proc.start(inkscape, {
+            emfPath,
+            QStringLiteral("--export-type=png"),
+            QStringLiteral("--export-dpi=150"),
+            QStringLiteral("--export-filename=") + pngPath,
+        });
+        if (proc.waitForFinished(30000) && proc.exitCode() == 0
+            && QFileInfo::exists(pngPath)) {
+            return true;
+        }
     }
 
     return false;

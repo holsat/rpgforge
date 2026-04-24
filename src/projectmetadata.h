@@ -50,6 +50,14 @@ struct ProjectMetadata {
     bool autoSync = true;
     int version = 3;                // ProjectKeys::CurrentVersion
 
+    // Per-service AI kill-switches. All default true so existing
+    // projects (pre-dating this field) keep behaving identically.
+    bool aiAnalyzerEnabled = true;
+    bool aiLoreKeeperEnabled = true;
+    bool aiSynopsisEnabled = true;
+    bool aiLibrarianEnabled = true;
+    bool aiRagAssistEnabled = true;
+
     QVariantMap wordCountCache;
     QVariantMap explorationColors;
 

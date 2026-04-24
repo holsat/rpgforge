@@ -1234,5 +1234,9 @@ bool ProjectTreeModel::dropMimeData(const QMimeData *data, Qt::DropAction action
         }
     }
 
+    if (anyMoved) {
+        ProjectManager::instance().notifyTreeChanged();
+    }
+
     return anyMoved;
 }

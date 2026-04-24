@@ -29,6 +29,7 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QTableWidget;
 class QPlainTextEdit;
+class ToggleSwitch;
 
 class ProjectSettingsDialog : public QDialog
 {
@@ -64,6 +65,13 @@ private:
     QTableWidget *m_lkTable = nullptr;
     QPlainTextEdit *m_lkPromptEdit = nullptr;
     QPushButton *m_lkEnhanceBtn = nullptr;
+
+    // AI Services (per-service kill-switches)
+    ToggleSwitch *m_aiAnalyzerToggle = nullptr;
+    ToggleSwitch *m_aiLoreKeeperToggle = nullptr;
+    ToggleSwitch *m_aiSynopsisToggle = nullptr;
+    ToggleSwitch *m_aiLibrarianToggle = nullptr;
+    ToggleSwitch *m_aiRagAssistToggle = nullptr;
 };
 
 #endif // PROJECTSETTINGSDIALOG_H

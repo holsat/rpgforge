@@ -96,6 +96,22 @@ public:
     QJsonObject loreKeeperConfig() const;
     void setLoreKeeperConfig(const QJsonObject &config);
 
+    // Per-service AI kill-switches. Values persist in the project file
+    // under the "aiFeatures" object and default to true for projects
+    // created before the feature existed. Mutations do NOT save the
+    // project — AgentGatekeeper::setEnabled() handles persistence so
+    // batched multi-flag writes produce a single save.
+    bool aiAnalyzerEnabled() const;
+    bool aiLoreKeeperEnabled() const;
+    bool aiSynopsisEnabled() const;
+    bool aiLibrarianEnabled() const;
+    bool aiRagAssistEnabled() const;
+    void setAiAnalyzerEnabled(bool enabled);
+    void setAiLoreKeeperEnabled(bool enabled);
+    void setAiSynopsisEnabled(bool enabled);
+    void setAiLibrarianEnabled(bool enabled);
+    void setAiRagAssistEnabled(bool enabled);
+
     // Logical Tree Management — model() access is intentionally restricted
     // to ProjectTreePanel. Qt's model/view framework requires a non-const
     // QAbstractItemModel* to render a QTreeView; no other consumer needs

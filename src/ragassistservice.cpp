@@ -18,6 +18,7 @@
 
 #include "ragassistservice.h"
 
+#include "agentgatekeeper.h"
 #include "knowledgebase.h"
 #include "projectmanager.h"
 #include "debuglog.h"
@@ -357,6 +358,10 @@ LLMService* RagAssistService::llmService() const
 QString RagAssistService::generate(const RagAssistRequest &request,
                                     const RagAssistCallbacks &callbacks)
 {
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::RagAssist)) {
+        qDebug() << "RAG Assist: generate skipped — disabled for this project.";
+        return {};
+    }
     const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
     RPGFORGE_DLOG("RAG") << "generate: service=" << request.serviceName

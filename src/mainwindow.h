@@ -109,6 +109,7 @@ private Q_SLOTS:
     void updateProjectPreview();
     void toggleFocusMode();
     void togglePreview();
+    void collapsePreviewPane();
     void syncScroll();
     void updateErrorHighlighting();
     void updateLibrarianHighlights();

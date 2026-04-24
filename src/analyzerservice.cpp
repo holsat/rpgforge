@@ -17,6 +17,7 @@
 */
 
 #include "analyzerservice.h"
+#include "agentgatekeeper.h"
 #include "llmservice.h"
 #include "projectmanager.h"
 #include <KLocalizedString>
@@ -37,6 +38,16 @@ AnalyzerService& AnalyzerService::instance()
 AnalyzerService::AnalyzerService(QObject *parent)
     : QObject(parent)
 {
+    connect(&AgentGatekeeper::instance(), &AgentGatekeeper::serviceEnabledChanged,
+            this, [this](AgentGatekeeper::Service s, bool enabled) {
+        if (s != AgentGatekeeper::Service::Analyzer) return;
+        if (!enabled) {
+            m_queue.clear();
+            pause();
+        } else {
+            resume();
+        }
+    });
 }
 
 AnalyzerService::~AnalyzerService() = default;
@@ -44,7 +55,12 @@ AnalyzerService::~AnalyzerService() = default;
 void AnalyzerService::analyzeDocument(const QString &filePath, const QString &content)
 {
     qDebug() << "Analyzer AI: Requested analysis for" << filePath;
-    
+
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Analyzer)) {
+        qDebug() << "Analyzer AI: Skipping — disabled for this project.";
+        return;
+    }
+
     QStringList activeFiles = ProjectManager::instance().getActiveFiles();
     if (!activeFiles.contains(filePath)) {
         qWarning() << "Analyzer AI: Skipping analysis - file is NOT in authoritative project tree:" << filePath;
@@ -133,14 +149,33 @@ void AnalyzerService::onRagSearchCompleted(const QString &filePath, const QStrin
     LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("analyzer/analyzer_provider"), 
                                                                    settings.value(QStringLiteral("llm/provider"), 0)).toInt());
     
-    QString systemPrompt = settings.value(QStringLiteral("analyzer/system_prompt"), 
+    QString systemPrompt = settings.value(QStringLiteral("analyzer/system_prompt"),
         QStringLiteral("You are an expert RPG game design analyzer.\n"
                        "Analyze the provided document for rule conflicts, ambiguities, and completeness gaps.\n"
-                       "IMPORTANT: Use 1-based line indexing. Line 1 is the very first line of the provided text (including YAML frontmatter).\n"
+                       "Each line of <current_document> is prefixed with its 1-based line number and a pipe, e.g. `42| some text`. "
+                       "In every `line` field of your response, report the number you see in that prefix — do not count lines yourself. "
+                       "The prefix is a guide for you; it is not part of the document content.\n"
                        "You must output ONLY a valid JSON array of objects. Do not include markdown code blocks or conversational text.\n"
                        "Format: [{\"line\": 1, \"severity\": \"error|warning|info\", \"message\": \"...\", \"references\": [{\"filePath\": \"...\", \"line\": 1}]}]")).toString();
 
-    QString augmentedContext = QStringLiteral("<current_document path=\"%1\">\n%2\n</current_document>\n").arg(QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath), content);
+    // Annotate each line with its 1-based number so the model reads the number
+    // instead of counting — LLMs are unreliable at line arithmetic on long
+    // documents and were reporting offsets of hundreds of lines.
+    QString annotated;
+    annotated.reserve(content.size() + content.count(QLatin1Char('\n')) * 8);
+    int lineNo = 1;
+    int start = 0;
+    for (int i = 0; i <= content.size(); ++i) {
+        if (i == content.size() || content.at(i) == QLatin1Char('\n')) {
+            annotated += QString::number(lineNo++);
+            annotated += QStringLiteral("| ");
+            annotated += QStringView{content}.mid(start, i - start);
+            annotated += QLatin1Char('\n');
+            start = i + 1;
+        }
+    }
+
+    QString augmentedContext = QStringLiteral("<current_document path=\"%1\">\n%2</current_document>\n").arg(QDir(ProjectManager::instance().projectPath()).relativeFilePath(filePath), annotated);
 
     if (!results.isEmpty()) {
         augmentedContext += QStringLiteral("\n<related_context>\n");

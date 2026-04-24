@@ -733,9 +733,10 @@ void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
         // would just present the user with actions that silently no-op.
         const bool isAuthoritative = m_model->isAuthoritativeRoot(item);
         if (!isAuthoritative) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), i18n("Project Rename"), this, &ProjectTreePanel::renameItem);
+            const QString renameLabel = isFile ? i18n("Rename...") : i18n("Rename Folder...");
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")), renameLabel, this, &ProjectTreePanel::renameItem);
             if (isFile) {
-                menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("File Rename..."), this, &ProjectTreePanel::renameFile);
+                menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Rename File..."), this, &ProjectTreePanel::renameFile);
             }
         }
         menu.addAction(QIcon::fromTheme(QStringLiteral("configure")), i18n("Edit Metadata..."), this, &ProjectTreePanel::editMetadata);

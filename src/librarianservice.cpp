@@ -17,6 +17,7 @@
 */
 
 #include "librarianservice.h"
+#include "agentgatekeeper.h"
 #include "llmservice.h"
 #include "projectmanager.h"
 #include "debuglog.h"
@@ -54,6 +55,20 @@ LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     m_semanticTimer->start();
 
     connect(m_watcher, &QFileSystemWatcher::fileChanged, this, &LibrarianService::onFileChanged);
+
+    connect(&AgentGatekeeper::instance(), &AgentGatekeeper::serviceEnabledChanged,
+            this, [this](AgentGatekeeper::Service s, bool enabled) {
+        if (s != AgentGatekeeper::Service::Librarian) return;
+        if (!enabled) {
+            {
+                QMutexLocker locker(&m_mutex);
+                m_pendingFiles.clear();
+            }
+            pause();
+        } else {
+            resume();
+        }
+    });
 }
 
 LibrarianService::~LibrarianService()
@@ -107,6 +122,10 @@ void LibrarianService::resume()
 
 void LibrarianService::scanAll()
 {
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Librarian)) {
+        qDebug() << "Data Extractor: scanAll skipped — disabled for this project.";
+        return;
+    }
     if (m_paused || m_projectPath.isEmpty()) {
         RPGFORGE_DLOG("VARS") << "LibrarianService::scanAll: skipping — paused="
                               << m_paused << "projectPath=" << m_projectPath;
@@ -137,6 +156,10 @@ void LibrarianService::scanAll()
 void LibrarianService::scanFile(const QString &filePath)
 {
     if (filePath.isEmpty()) return;
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Librarian)) {
+        qDebug() << "Data Extractor: scanFile skipped — disabled for this project.";
+        return;
+    }
     QMutexLocker locker(&m_mutex);
     if (!m_pendingFiles.contains(filePath)) {
         m_pendingFiles.append(filePath);

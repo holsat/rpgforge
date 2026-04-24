@@ -139,8 +139,9 @@ void ProblemsPanel::refreshTable()
             auto *msgItem = new QTableWidgetItem(d.message);
             auto *fileItem = new QTableWidgetItem(relPath);
             fileItem->setData(Qt::UserRole, filePath); // Store absolute path
-            auto *lineItem = new QTableWidgetItem(QString::number(d.line + 1));
-            lineItem->setData(Qt::UserRole, d.line); // Store 0-based index
+            // d.line is 1-based (from the LLM's annotated line prefix); display as-is.
+            auto *lineItem = new QTableWidgetItem(QString::number(d.line));
+            lineItem->setData(Qt::UserRole, d.line);
 
             m_table->setItem(row, 0, sevItem);
             m_table->setItem(row, 1, msgItem);
@@ -189,8 +190,8 @@ void ProblemsPanel::onItemDoubleClicked(int row, int /*column*/)
         }
     }
 
-    // Default action: jump to line
-    Q_EMIT issueActivated(path, line);
+    // Default action: jump to line. d.line is 1-based (from LLM); editor is 0-based.
+    Q_EMIT issueActivated(path, qMax(0, line - 1));
 }
 
 void ProblemsPanel::onItemClicked(int row, int column)

@@ -1,4 +1,5 @@
 #include "lorekeeperservice.h"
+#include "agentgatekeeper.h"
 #include "llmservice.h"
 #include "librarianservice.h"
 #include "ragassistservice.h"
@@ -31,6 +32,20 @@ LoreKeeperService::LoreKeeperService(QObject *parent)
     m_scanTimer->setInterval(300000); // Scan every 5 minutes by default
     m_scanTimer->setSingleShot(false);
     connect(m_scanTimer, &QTimer::timeout, this, &LoreKeeperService::scanManuscript);
+
+    connect(&AgentGatekeeper::instance(), &AgentGatekeeper::serviceEnabledChanged,
+            this, [this](AgentGatekeeper::Service s, bool enabled) {
+        if (s != AgentGatekeeper::Service::LoreKeeper) return;
+        if (!enabled) {
+            {
+                QMutexLocker locker(&m_mutex);
+                m_pendingLore.clear();
+            }
+            pause();
+        } else {
+            resume();
+        }
+    });
 }
 
 void LoreKeeperService::init(LLMService *llm, LibrarianService *librarian)
@@ -79,6 +94,11 @@ void LoreKeeperService::resume()
 
 void LoreKeeperService::scanManuscript()
 {
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::LoreKeeper)) {
+        qDebug() << "Lore AI: scanManuscript skipped — disabled for this project.";
+        return;
+    }
+
     {
         QMutexLocker locker(&m_mutex);
         if (m_paused || m_projectPath.isEmpty() || !m_llm) return;
@@ -187,6 +207,10 @@ void LoreKeeperService::scanManuscript()
 
 void LoreKeeperService::indexDocument(const QString &filePath)
 {
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::LoreKeeper)) {
+        qDebug() << "Lore AI: indexDocument skipped — disabled for this project.";
+        return;
+    }
     if (m_paused || filePath.isEmpty() || !m_llm) return;
     
     QFile file(filePath);

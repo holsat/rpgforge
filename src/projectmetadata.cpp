@@ -30,6 +30,12 @@ constexpr auto WordCountCacheKey    = "wordCountCache";
 constexpr auto ExplorationColorsKey = "explorationColors";
 constexpr auto NodeMetadataKey      = "nodeMetadata";
 constexpr auto OrderHintsKey        = "orderHints";
+constexpr auto AiFeaturesKey        = "aiFeatures";
+constexpr auto AiAnalyzerKey        = "analyzer";
+constexpr auto AiLoreKeeperKey      = "loreKeeper";
+constexpr auto AiSynopsisKey        = "synopsis";
+constexpr auto AiLibrarianKey       = "librarian";
+constexpr auto AiRagAssistKey       = "ragAssist";
 
 double marginValue(const QJsonObject &obj,
                    const char *key,
@@ -101,6 +107,22 @@ ProjectMetadata ProjectMetadata::fromJson(const QJsonObject &doc)
     meta.orderHints =
         doc.value(QLatin1String(OrderHintsKey)).toObject();
 
+    // Per-service AI kill-switches. Missing block or missing keys leave
+    // each flag at the default (true), keeping pre-existing projects on
+    // the previous behaviour.
+    const QJsonObject aiFeatures =
+        doc.value(QLatin1String(AiFeaturesKey)).toObject();
+    meta.aiAnalyzerEnabled =
+        aiFeatures.value(QLatin1String(AiAnalyzerKey)).toBool(true);
+    meta.aiLoreKeeperEnabled =
+        aiFeatures.value(QLatin1String(AiLoreKeeperKey)).toBool(true);
+    meta.aiSynopsisEnabled =
+        aiFeatures.value(QLatin1String(AiSynopsisKey)).toBool(true);
+    meta.aiLibrarianEnabled =
+        aiFeatures.value(QLatin1String(AiLibrarianKey)).toBool(true);
+    meta.aiRagAssistEnabled =
+        aiFeatures.value(QLatin1String(AiRagAssistKey)).toBool(true);
+
     return meta;
 }
 
@@ -151,6 +173,14 @@ QJsonObject ProjectMetadata::toJson() const
         obj[QLatin1String(OrderHintsKey)] = orderHints;
     }
 
+    QJsonObject aiFeatures;
+    aiFeatures[QLatin1String(AiAnalyzerKey)]   = aiAnalyzerEnabled;
+    aiFeatures[QLatin1String(AiLoreKeeperKey)] = aiLoreKeeperEnabled;
+    aiFeatures[QLatin1String(AiSynopsisKey)]   = aiSynopsisEnabled;
+    aiFeatures[QLatin1String(AiLibrarianKey)]  = aiLibrarianEnabled;
+    aiFeatures[QLatin1String(AiRagAssistKey)]  = aiRagAssistEnabled;
+    obj[QLatin1String(AiFeaturesKey)] = aiFeatures;
+
     return obj;
 }
 
@@ -175,5 +205,6 @@ QStringList ProjectMetadata::knownKeys()
         QLatin1String(ExplorationColorsKey),
         QLatin1String(NodeMetadataKey),
         QLatin1String(OrderHintsKey),
+        QLatin1String(AiFeaturesKey),
     };
 }
