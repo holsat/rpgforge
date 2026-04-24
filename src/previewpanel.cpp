@@ -23,7 +23,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QProcess>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QWebEngineView>
 #include <QWebEngineSettings>
 #include <QWebEnginePage>
@@ -113,6 +115,15 @@ PreviewPanel::PreviewPanel(QWidget *parent)
         + QStringLiteral("/rpgforge-preview-")
         + QString::number(QCoreApplication::applicationPid())
         + QStringLiteral(".html");
+
+    // Report Pandoc availability up-front so the user can tell from logs
+    // whether the preview will use the native Pandoc pipeline or fall back
+    // to cmark-gfm with legacy shims.
+    if (QStandardPaths::findExecutable(QStringLiteral("pandoc")).isEmpty()) {
+        qWarning().noquote() << "PreviewPanel: pandoc not found on PATH — preview will use cmark-gfm fallback.";
+    } else {
+        qInfo().noquote() << "PreviewPanel: using pandoc for markdown rendering.";
+    }
 
     loadHtmlViaTempFile(wrapHtml(QString()));
 }
@@ -312,57 +323,25 @@ void PreviewPanel::updatePreview()
     // produces a ready-to-render absolute URL that survives every
     // downstream step intact.
     processedMarkdown = resolveRelativeImageUrlsInMarkdown(processedMarkdown);
-    QString htmlBody = m_parser.renderHtml(processedMarkdown);
 
-    // Promote Pandoc's header_attributes syntax (e.g. "## Title {#slug}")
-    // into real HTML ids. cmark-gfm doesn't recognize the extension and
-    // emits it as literal trailing text inside the heading. Rewrite to
-    // <hN id="slug">Title</hN> so the tokens disappear from the rendered
-    // preview AND anchor links / future scroll-to-heading sync work.
-    static const QRegularExpression headingAttrRe(
-        QStringLiteral("<h([1-6])(\\s[^>]*)?>(.*?)\\s*\\{#([^\\s}]+)(?:\\s[^}]*)?\\}\\s*</h\\1>"));
-    htmlBody.replace(headingAttrRe, QStringLiteral("<h\\1 id=\"\\4\"\\2>\\3</h\\1>"));
-
-    // Same story for Pandoc image attributes: ![](src){width="X" height="Y"}.
-    // Extract width/height into an inline style on the <img> and drop the
-    // trailing {...} text. The attr block can span multiple lines.
-    static const QRegularExpression imgAttrRe(
-        QStringLiteral("(<img\\b[^>]*?)(\\s*/?>)\\s*\\{([^}]+)\\}"),
-        QRegularExpression::DotMatchesEverythingOption);
-    static const QRegularExpression kvRe(
-        QStringLiteral("(\\w+)\\s*=\\s*\"?([^\"\\s}]+)\"?"));
-    {
-        int offset = 0;
-        auto it = imgAttrRe.globalMatch(htmlBody);
-        while (it.hasNext()) {
-            const auto m = it.next();
-            const QString imgPrefix = m.captured(1);
-            const QString imgEnd = m.captured(2);
-            const QString attrs = m.captured(3);
-
-            QString styleFragment;
-            auto kvIt = kvRe.globalMatch(attrs);
-            while (kvIt.hasNext()) {
-                const auto kv = kvIt.next();
-                const QString key = kv.captured(1).toLower();
-                const QString val = kv.captured(2);
-                if (key == QLatin1String("width") || key == QLatin1String("height")) {
-                    styleFragment += key + QLatin1Char(':') + val + QLatin1Char(';');
-                }
-            }
-
-            QString replacement = imgPrefix;
-            if (!styleFragment.isEmpty()) {
-                replacement += QStringLiteral(" style=\"") + styleFragment + QLatin1Char('"');
-            }
-            replacement += imgEnd;
-
-            const int start = m.capturedStart() + offset;
-            const int len = m.capturedLength();
-            htmlBody.replace(start, len, replacement);
-            offset += replacement.length() - len;
-        }
+    // Preferred path: Pandoc subprocess. It natively handles header IDs
+    // ({#slug}), image attributes ({width=... height=...}), grid tables,
+    // definition lists, and other Pandoc-flavored markdown extensions we
+    // use throughout imported manuscripts.
+    bool pandocOk = false;
+    QString htmlBody = renderWithPandoc(processedMarkdown, &pandocOk);
+    if (!pandocOk) {
+        // Fallback path: cmark-gfm + legacy regex shims that patch
+        // Pandoc-extension syntax into HTML. Kept as a safety net for
+        // installs where pandoc is unavailable.
+        qInfo().noquote() << "PreviewPanel: pandoc render failed — falling back to cmark-gfm.";
+        htmlBody = m_parser.renderHtml(processedMarkdown);
     }
+    // Always run the shim pass as belt-and-suspenders. Pandoc output
+    // doesn't contain literal {#...} / {width=...} tokens so the regex
+    // no-ops there; the cmark fallback genuinely needs the rewrite.
+    // Catches edge cases where either renderer leaks an attribute token.
+    applyLegacyCmarkPandocShims(htmlBody);
 
     // Escape for JavaScript string
     QString escaped = htmlBody;
@@ -414,27 +393,53 @@ void PreviewPanel::scrollToPercentage(double percentage)
 void PreviewPanel::scrollToLine(int line, bool smooth)
 {
     if (!m_webView->page()) return;
-    // Find the element with data-sourcepos that corresponds to this line
-    // cmark uses 1-based line numbers.
+    // Find the preceding AND following blocks that straddle the target line,
+    // then linearly interpolate the preview's scroll position between them.
+    // Snapping to block.start makes the preview lag when the editor's first
+    // visible line falls mid-block (e.g. a long paragraph spanning 10 lines
+    // in the editor but rendering as one short wrapped <p> in the preview).
+    // Interpolation keeps the preview aligned with the editor's actual
+    // first-visible line.
+    //
+    // Matches cmark-gfm's data-sourcepos and Pandoc's data-pos (same
+    // "startLine:startCol-endLine:endCol" format). Skips Pandoc's inline
+    // span wrappers (data-wrapper="1"). Editor lines are 0-based; sourcepos
+    // is 1-based.
     QString js = QStringLiteral(
         "(function() {"
         "  var targetLine = %1 + 1;"
-        "  var els = document.querySelectorAll('[data-sourcepos]');"
-        "  var best = null;"
+        "  var els = document.querySelectorAll('[data-sourcepos], [data-pos]');"
+        "  var prev = null, prevLine = 0;"
+        "  var next = null, nextLine = 0;"
         "  for (var i = 0; i < els.length; i++) {"
         "    var el = els[i];"
-        "    var pos = el.getAttribute('data-sourcepos');"
-        "    if (pos) {"
-        "      var startLine = parseInt(pos.split(':')[0]);"
-        "      if (startLine <= targetLine) {"
-        "        best = el;"
-        "      } else {"
-        "        break;" // Elements are ordered by line
-        "      }"
+        "    if (el.getAttribute('data-wrapper') === '1') continue;"
+        "    var pos = el.getAttribute('data-sourcepos') || el.getAttribute('data-pos');"
+        "    if (!pos) continue;"
+        "    var startLine = parseInt(pos.split(':')[0]);"
+        "    if (isNaN(startLine)) continue;"
+        "    if (startLine <= targetLine) {"
+        "      prev = el; prevLine = startLine;"
+        "    } else {"
+        "      next = el; nextLine = startLine;"
+        "      break;"
         "    }"
         "  }"
-        "  if (best) {"
-        "    best.scrollIntoView({behavior: '%2', block: 'start'});"
+        "  if (!prev) return;"
+        "  var scroller = document.scrollingElement || document.documentElement;"
+        "  if (!next || nextLine <= prevLine) {"
+        "    prev.scrollIntoView({behavior: '%2', block: 'start'});"
+        "    return;"
+        "  }"
+        "  var t = (targetLine - prevLine) / (nextLine - prevLine);"
+        "  if (t < 0) t = 0; else if (t > 1) t = 1;"
+        "  var prevTop = prev.getBoundingClientRect().top + scroller.scrollTop;"
+        "  var nextTop = next.getBoundingClientRect().top + scroller.scrollTop;"
+        "  var target = prevTop + t * (nextTop - prevTop);"
+        "  if ('%2' === 'smooth') {"
+        "    scroller.scrollTo({top: target, behavior: 'smooth'});"
+        "  } else {"
+        "    scroller.scrollTop = target;"
         "  }"
         "})();"
     ).arg(line).arg(smooth ? QStringLiteral("smooth") : QStringLiteral("auto"));
@@ -477,6 +482,103 @@ QString PreviewPanel::loadProjectStylesheets() const
         }
     }
     return combined;
+}
+
+QString PreviewPanel::renderWithPandoc(const QString &markdown, bool *ok) const
+{
+    auto fail = [ok]() {
+        if (ok) *ok = false;
+        return QString();
+    };
+
+    const QString pandocExe = QStandardPaths::findExecutable(QStringLiteral("pandoc"));
+    if (pandocExe.isEmpty()) {
+        return fail();
+    }
+
+    // commonmark_x+sourcepos: Pandoc-flavored markdown with source-position
+    // attributes (data-pos="line:col-line:col") on every block. scrollToLine
+    // uses those to keep the preview in lockstep with the editor's cursor.
+    // NOT -s / --standalone: wrapHtml() supplies the full document shell,
+    // including <head>, CSS, and KaTeX. Pandoc's own wrapper would collide.
+    QProcess proc;
+    proc.start(pandocExe, {
+        QStringLiteral("-f"), QStringLiteral("commonmark_x+sourcepos"),
+        QStringLiteral("-t"), QStringLiteral("html"),
+    });
+    if (!proc.waitForStarted(2000)) {
+        return fail();
+    }
+
+    proc.write(markdown.toUtf8());
+    proc.closeWriteChannel();
+
+    if (!proc.waitForFinished(5000)) {
+        proc.kill();
+        proc.waitForFinished(500);
+        return fail();
+    }
+
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+        const QString stderrOut = QString::fromUtf8(proc.readAllStandardError());
+        qWarning().noquote() << "PreviewPanel: pandoc exited with code"
+                             << proc.exitCode() << "-" << stderrOut.trimmed();
+        return fail();
+    }
+
+    if (ok) *ok = true;
+    return QString::fromUtf8(proc.readAllStandardOutput());
+}
+
+void PreviewPanel::applyLegacyCmarkPandocShims(QString &htmlBody) const
+{
+    // Promote Pandoc's header_attributes syntax (e.g. "## Title {#slug}")
+    // into real HTML ids. cmark-gfm doesn't recognize the extension and
+    // emits it as literal trailing text inside the heading. Rewrite to
+    // <hN id="slug">Title</hN> so the tokens disappear from the rendered
+    // preview AND anchor links / future scroll-to-heading sync work.
+    static const QRegularExpression headingAttrRe(
+        QStringLiteral("<h([1-6])(\\s[^>]*)?>(.*?)\\s*\\{#([^\\s}]+)(?:\\s[^}]*)?\\}\\s*</h\\1>"));
+    htmlBody.replace(headingAttrRe, QStringLiteral("<h\\1 id=\"\\4\"\\2>\\3</h\\1>"));
+
+    // Same story for Pandoc image attributes: ![](src){width="X" height="Y"}.
+    // Extract width/height into an inline style on the <img> and drop the
+    // trailing {...} text. The attr block can span multiple lines.
+    static const QRegularExpression imgAttrRe(
+        QStringLiteral("(<img\\b[^>]*?)(\\s*/?>)\\s*\\{([^}]+)\\}"),
+        QRegularExpression::DotMatchesEverythingOption);
+    static const QRegularExpression kvRe(
+        QStringLiteral("(\\w+)\\s*=\\s*\"?([^\"\\s}]+)\"?"));
+    int offset = 0;
+    auto it = imgAttrRe.globalMatch(htmlBody);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const QString imgPrefix = m.captured(1);
+        const QString imgEnd = m.captured(2);
+        const QString attrs = m.captured(3);
+
+        QString styleFragment;
+        auto kvIt = kvRe.globalMatch(attrs);
+        while (kvIt.hasNext()) {
+            const auto kv = kvIt.next();
+            const QString key = kv.captured(1).toLower();
+            const QString val = kv.captured(2);
+            if (key == QLatin1String("width") || key == QLatin1String("height")) {
+                styleFragment += key + QLatin1Char(':') + val + QLatin1Char(';');
+            }
+        }
+
+        QString replacement = imgPrefix;
+        if (!styleFragment.isEmpty()) {
+            replacement += QStringLiteral(" style=\"") + styleFragment + QLatin1Char('"');
+        }
+        replacement += imgEnd;
+
+        const int start = m.capturedStart() + offset;
+        const int len = m.capturedLength();
+        htmlBody.replace(start, len, replacement);
+        offset += replacement.length() - len;
+    }
 }
 
 QString PreviewPanel::wrapHtml(const QString &body) const

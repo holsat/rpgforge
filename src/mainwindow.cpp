@@ -581,6 +581,21 @@ void MainWindow::setupSidebar()
     // Initial size of 0 hides the preview; do NOT call hide() — togglePreview()
     // intentionally never calls setVisible() to avoid a QtWebEngine render crash.
 
+    // Remember user-chosen preview pane width across show/hide cycles and
+    // app restarts. Stored when the user drags the splitter handle; reused
+    // by togglePreview() next time preview is shown.
+    {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        m_preferredPreviewWidth = s.value(QStringLiteral("preview/paneWidth"), 0).toInt();
+    }
+    connect(m_mainSplitter, &QSplitter::splitterMoved, this, [this]() {
+        const QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() < 3 || sizes[2] <= 0) return;  // Ignore collapse events.
+        m_preferredPreviewWidth = sizes[2];
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        s.setValue(QStringLiteral("preview/paneWidth"), m_preferredPreviewWidth);
+    });
+
     m_problemsPanel = new ProblemsPanel(this);
 
     // SynopsisService consumes ProjectManager snapshots and writes back via
@@ -1444,7 +1459,15 @@ void MainWindow::togglePreview()
     if (shouldShow) {
         int total = 0;
         for (int s : sizes) total += s;
-        int previewSize = total * 0.3; // ~30% for preview
+        // Restore the user's last chosen width; fall back to ~30% on first
+        // show or if the saved width would leave no room for the editor.
+        int previewSize = (m_preferredPreviewWidth > 0)
+            ? m_preferredPreviewWidth
+            : static_cast<int>(total * 0.3);
+        const int minEditor = 200;
+        if (previewSize > total - sizes[0] - minEditor) {
+            previewSize = qMax(0, total - sizes[0] - minEditor);
+        }
         sizes[2] = previewSize;
         sizes[1] = qMax(0, total - sizes[0] - previewSize);
         m_mainSplitter->setSizes(sizes);
@@ -1914,12 +1937,16 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     auto *view = activeView();
     if (!doc || !view || items.isEmpty()) return;
 
-    // Base directory: directory of the open document, or the project root
-    QString baseDir;
+    // Resolve links from the project root when the target is inside the
+    // project — produces "./media/X.png" regardless of how deep the current
+    // document is. Falls back to doc-dir-relative or absolute for anything
+    // outside the project.
+    const QString projectRoot = ProjectManager::instance().isProjectOpen()
+        ? ProjectManager::instance().projectPath()
+        : QString();
+    QString docDir;
     if (!doc->url().isEmpty() && doc->url().isLocalFile()) {
-        baseDir = QFileInfo(doc->url().toLocalFile()).absolutePath();
-    } else if (ProjectManager::instance().isProjectOpen()) {
-        baseDir = ProjectManager::instance().projectPath();
+        docDir = QFileInfo(doc->url().toLocalFile()).absolutePath();
     }
 
     static const QStringList imgSuffixes = {
@@ -1932,9 +1959,16 @@ void MainWindow::insertProjectLinksAtCursor(const QList<QPair<QString, QUrl>> &i
     for (const auto &[name, url] : items) {
         if (!url.isLocalFile()) continue;
         const QString absPath = url.toLocalFile();
-        const QString relPath = baseDir.isEmpty()
-            ? absPath
-            : QDir(baseDir).relativeFilePath(absPath);
+
+        QString relPath;
+        if (!projectRoot.isEmpty()
+            && (absPath == projectRoot || absPath.startsWith(projectRoot + QDir::separator()))) {
+            relPath = QStringLiteral("./") + QDir(projectRoot).relativeFilePath(absPath);
+        } else if (!docDir.isEmpty()) {
+            relPath = QDir(docDir).relativeFilePath(absPath);
+        } else {
+            relPath = absPath;
+        }
         const QString suffix = QFileInfo(absPath).suffix().toLower();
 
         if (imgSuffixes.contains(suffix)) {

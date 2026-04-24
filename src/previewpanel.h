@@ -68,12 +68,23 @@ private:
     void loadHtmlViaTempFile(const QString &html);
     QString m_tempHtmlPath;
     /// Rewrite ![alt](path) in markdown source so relative paths
-    /// resolve to absolute file:// URLs BEFORE cmark-gfm renders.
+    /// resolve to absolute file:// URLs BEFORE the renderer runs.
     /// Tries the document directory first (CommonMark convention)
     /// and falls back to the project root (matches how Word/Scrivener
     /// imports were written). Paths that don't resolve against either
     /// are left as-is and show a broken-image indicator.
     QString resolveRelativeImageUrlsInMarkdown(const QString &markdown) const;
+    /// Render markdown to an HTML fragment by spawning `pandoc -f markdown
+    /// -t html` as a subprocess. Returns an empty QString and sets *ok to
+    /// false when pandoc is absent, fails to start, exits non-zero, or
+    /// times out. Caller should fall back to cmark-gfm + legacy shims in
+    /// that case.
+    QString renderWithPandoc(const QString &markdown, bool *ok = nullptr) const;
+    /// Apply the pre-Pandoc regex rewrites needed to make cmark-gfm output
+    /// understand Pandoc extension syntax (header IDs, image attributes).
+    /// Only called on the fallback path when renderWithPandoc() fails —
+    /// Pandoc handles all of this natively.
+    void applyLegacyCmarkPandocShims(QString &htmlBody) const;
 };
 
 #endif // PREVIEWPANEL_H

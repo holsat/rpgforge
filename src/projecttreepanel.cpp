@@ -602,6 +602,13 @@ void ProjectTreePanel::onItemActivated(const QModelIndex &index)
 void ProjectTreePanel::onCustomContextMenu(const QPoint &pos)
 {
     QModelIndex index = m_treeView->indexAt(pos);
+    // Keep the view's current index in sync with what was right-clicked so
+    // menu handlers (Add File Link, Add Folder, etc.) read the right parent
+    // via currentIndex(). Without this they operate on the previous
+    // selection, causing "added nothing" surprises.
+    if (index.isValid()) {
+        m_treeView->setCurrentIndex(index);
+    }
     QMenu menu(this);
 
     auto selected = m_treeView->selectionModel()->selectedRows();
@@ -811,18 +818,70 @@ void ProjectTreePanel::addFile()
 {
     QModelIndex parent = m_treeView->currentIndex();
     ProjectTreeItem *parentItem = m_model->itemFromIndex(parent);
+    // If the right-click landed on a file, use its containing folder instead.
+    if (parentItem && parentItem->type == ProjectTreeItem::File) {
+        parentItem = parentItem->parent;
+    }
     QString parentPath = parentItem ? parentItem->path : QString();
 
-    QString projectDir = ProjectManager::instance().projectPath();
-    
-    QString filePath = QFileDialog::getOpenFileName(this, i18n("Select File to Link"), projectDir, 
+    const QString projectDir = ProjectManager::instance().projectPath();
+    const QString picked = QFileDialog::getOpenFileName(this, i18n("Select File to Link"), projectDir,
         i18n("Supported Files (*.md *.markdown *.txt *.png *.jpg *.jpeg *.gif *.svg *.pdf);;All Files (*)"));
-    if (filePath.isEmpty()) return;
+    if (picked.isEmpty()) return;
 
-    QFileInfo fi(filePath);
-    QString relativePath = QDir(projectDir).relativeFilePath(filePath);
-    
-    ProjectManager::instance().addFile(fi.completeBaseName(), relativePath, parentPath);
+    const QFileInfo pickedInfo(picked);
+    const QString pickedAbs = pickedInfo.absoluteFilePath();
+    const bool insideProject = pickedAbs == projectDir
+        || pickedAbs.startsWith(projectDir + QDir::separator());
+
+    QString finalRelPath;
+    if (insideProject) {
+        finalRelPath = QDir(projectDir).relativeFilePath(pickedAbs);
+    } else {
+        // External file: copy into the clicked folder (or project root) with
+        // a sanitized filename — spaces become underscores, literal quotes
+        // stripped. Links to files outside the project break the preview's
+        // image resolver and the drag-drop path rewriter.
+        const QString parentAbs = parentPath.isEmpty()
+            ? projectDir
+            : QDir(projectDir).absoluteFilePath(parentPath);
+        if (!QDir().mkpath(parentAbs)) {
+            QMessageBox::warning(this, i18n("Add File Link"),
+                i18n("Could not access the destination folder."));
+            return;
+        }
+
+        QString sanitized = pickedInfo.fileName();
+        sanitized.replace(QLatin1Char(' '), QLatin1Char('_'));
+        sanitized.remove(QLatin1Char('\''));
+        sanitized.remove(QLatin1Char('"'));
+        QString destAbs = QDir(parentAbs).absoluteFilePath(sanitized);
+
+        // Avoid overwriting: if the target exists, append _2, _3, ...
+        if (QFileInfo::exists(destAbs)) {
+            const QFileInfo sfi(sanitized);
+            const QString base = sfi.completeBaseName();
+            const QString suffix = sfi.suffix();
+            for (int n = 2; n < 1000; ++n) {
+                const QString candidate = suffix.isEmpty()
+                    ? QStringLiteral("%1_%2").arg(base).arg(n)
+                    : QStringLiteral("%1_%2.%3").arg(base).arg(n).arg(suffix);
+                destAbs = QDir(parentAbs).absoluteFilePath(candidate);
+                if (!QFileInfo::exists(destAbs)) break;
+            }
+        }
+
+        if (!QFile::copy(pickedAbs, destAbs)) {
+            QMessageBox::warning(this, i18n("Add File Link"),
+                i18n("Failed to copy \"%1\" into the project.", pickedInfo.fileName()));
+            return;
+        }
+        finalRelPath = QDir(projectDir).relativeFilePath(destAbs);
+    }
+
+    // Keep the original basename (with spaces, if any) as the display name
+    // so the tree reads nicely even when the on-disk filename was sanitized.
+    ProjectManager::instance().addFile(pickedInfo.completeBaseName(), finalRelPath, parentPath);
 }
 
 void ProjectTreePanel::removeItem()
