@@ -815,6 +815,24 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
     netRequest.setUrl(url);
     netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    // Per-request transfer timeout. Without this, a stalled SSE stream
+    // (silent network drop, Gemini hanging on safety analysis, proxy
+    // killing the connection) leaves the UI spinning forever. Qt's
+    // transfer timeout is a gap-between-bytes timer, not total time,
+    // so on big prompts a local model can sit silently during prefill
+    // for several minutes before any tokens stream back. Cloud APIs
+    // batch prefill server-side and start streaming within tens of
+    // seconds even on long contexts. Use a generous local-only window
+    // so we don't kill genuine in-progress local generations.
+    const bool isLocalProvider = (request.provider == LLMProvider::LMStudio
+                                  || request.provider == LLMProvider::Ollama);
+    int timeoutMs;
+    if (streaming) {
+        timeoutMs = isLocalProvider ? 900000 : 300000;   // 15 min local / 5 min cloud
+    } else {
+        timeoutMs = isLocalProvider ? 300000 : 90000;    // 5 min local / 1.5 min cloud
+    }
+    netRequest.setTransferTimeout(timeoutMs);
 #ifdef QT_DEBUG
     logRequest(url, body, netRequest);
 #endif
@@ -1067,6 +1085,9 @@ void LLMService::handleFinished()
 
         handleError(errorMsg);
     } else if (m_activeReply->error() == QNetworkReply::NoError) {
+        qInfo().noquote() << "LLM stream finished:" << m_currentStreamId
+                          << "bytes=" << m_fullResponse.size()
+                          << "service=" << m_activeRequest.serviceName;
         Q_EMIT responseFinished(m_currentStreamId, m_fullResponse);
     }
 
@@ -1161,8 +1182,20 @@ void LLMService::processGeminiChunk(QByteArray &buffer)
 
         const QJsonArray candidates = doc.object().value(QStringLiteral("candidates")).toArray();
         if (candidates.isEmpty()) continue;
-        const QJsonArray parts = candidates.at(0).toObject()
-            .value(QStringLiteral("content")).toObject()
+        const QJsonObject candidate = candidates.at(0).toObject();
+        // Surface Gemini's terminal reasons (SAFETY, RECITATION, MAX_TOKENS,
+        // OTHER, BLOCKLIST). Without this log, a safety-blocked response
+        // looks identical to a successful empty stream — the chat panel
+        // sees an empty completion and the user sees nothing.
+        const QString finishReason = candidate.value(QStringLiteral("finishReason")).toString();
+        if (!finishReason.isEmpty()) {
+            qInfo().noquote() << "LLM Gemini stream finishReason:" << finishReason
+                              << "stream=" << m_currentStreamId;
+            if (finishReason != QLatin1String("STOP") && m_fullResponse.isEmpty()) {
+                Q_EMIT errorOccurred(QStringLiteral("Gemini blocked the response (finishReason: %1)").arg(finishReason));
+            }
+        }
+        const QJsonArray parts = candidate.value(QStringLiteral("content")).toObject()
             .value(QStringLiteral("parts")).toArray();
 
         QString chunk;

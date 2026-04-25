@@ -158,6 +158,19 @@ void ChatPanel::setupUi()
 
     auto *btnLayout = new QHBoxLayout();
     btnLayout->addStretch();
+    m_cancelBtn = new QPushButton(i18n("Cancel"), this);
+    m_cancelBtn->setIcon(QIcon::fromTheme(QStringLiteral("process-stop")));
+    m_cancelBtn->setEnabled(false);
+    m_cancelBtn->setToolTip(i18n("Abort the in-flight LLM request"));
+    connect(m_cancelBtn, &QPushButton::clicked, this, [this]() {
+        LLMService::instance().cancelRequest();
+        appendMessageToView(QStringLiteral("system"),
+            i18n("(Request cancelled.)"), QString());
+        m_cancelBtn->setEnabled(false);
+        m_sendBtn->setEnabled(true);
+        if (m_progressBar) m_progressBar->hide();
+    });
+    btnLayout->addWidget(m_cancelBtn);
     m_sendBtn = new QPushButton(i18n("Send"), this);
     m_sendBtn->setIcon(QIcon::fromTheme(QStringLiteral("mail-send")));
     connect(m_sendBtn, &QPushButton::clicked, this, &ChatPanel::sendMessage);
@@ -392,6 +405,7 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
     appendMessageToView(QStringLiteral("user"), parser.renderHtml(userPrompt), userPrompt);
     m_progressBar->show();
     m_sendBtn->setEnabled(false);
+    m_cancelBtn->setEnabled(true);
     m_currentAiResponse.clear();
     appendMessageToView(QStringLiteral("assistant"), i18n("AI is thinking..."), QString());
 
@@ -468,6 +482,7 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
         if (!weakThis || requestId != weakThis->m_currentStreamId) return;
         weakThis->m_progressBar->hide();
         weakThis->m_sendBtn->setEnabled(true);
+        weakThis->m_cancelBtn->setEnabled(false);
         weakThis->m_history.append({QStringLiteral("assistant"), fullText});
         MarkdownParser p;
         weakThis->updateLastMessageInView(p.renderHtml(fullText), fullText);
@@ -476,6 +491,7 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
         if (!weakThis || requestId != weakThis->m_currentStreamId) return;
         weakThis->m_progressBar->hide();
         weakThis->m_sendBtn->setEnabled(true);
+        weakThis->m_cancelBtn->setEnabled(false);
         weakThis->onError(message);
     };
 
@@ -486,6 +502,7 @@ void ChatPanel::onError(const QString &message)
 {
     m_progressBar->hide();
     m_sendBtn->setEnabled(true);
+    m_cancelBtn->setEnabled(false);
     // Use a literal string for the HTML tags to avoid i18n placeholder conflicts
     updateLastMessageInView(QStringLiteral("<b>") + i18n("Error") + QStringLiteral(":</b> ") + message, QString());
 }

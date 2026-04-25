@@ -91,6 +91,7 @@ private:
     QComboBox *m_modelCombo;
     QPushButton *m_refreshModelsBtn;
     QPushButton *m_sendBtn;
+    QPushButton *m_cancelBtn;
     QPushButton *m_clearBtn;
     QProgressBar *m_progressBar;
 
