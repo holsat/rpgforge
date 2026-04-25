@@ -978,10 +978,17 @@ void LLMService::dispatchRequest(const LLMRequest &request, const QString &model
 
 void LLMService::cancelRequest()
 {
-    if (m_activeReply) {
-        m_activeReply->abort();
-        m_activeReply->deleteLater();
-        m_activeReply = nullptr;
+    // Null m_activeReply BEFORE calling abort() — abort() emits finished
+    // synchronously, which fires handleFinished on the same stack. If we
+    // leave m_activeReply set, handleFinished runs its own deleteLater +
+    // null-out pass, and the deleteLater() call below crashes on a now-
+    // null member. Order matters: clear, then abort, then schedule delete
+    // on the local pointer.
+    QNetworkReply *reply = m_activeReply;
+    m_activeReply = nullptr;
+    if (reply) {
+        reply->abort();
+        reply->deleteLater();
     }
 }
 
