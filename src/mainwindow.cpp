@@ -652,17 +652,13 @@ void MainWindow::setupSidebar()
     m_mainSplitter->setStretchFactor(0, 0);
     m_mainSplitter->setStretchFactor(1, 1);
     m_mainSplitter->setStretchFactor(2, 0);
-
-    // Same debounced immediate-save pattern as m_vSplitter — user
-    // drags the sidebar / preview width, persists within ~400ms.
-    {
-        auto *mainSaveDebounce = new QTimer(this);
-        mainSaveDebounce->setSingleShot(true);
-        mainSaveDebounce->setInterval(400);
-        connect(mainSaveDebounce, &QTimer::timeout, this, &MainWindow::saveSession);
-        connect(m_mainSplitter, &QSplitter::splitterMoved, this,
-                [mainSaveDebounce](int, int) { mainSaveDebounce->start(); });
-    }
+    // 5s autosave timer + close-time save handle splitter persistence.
+    // Earlier we hooked splitterMoved → debounced save thinking it
+    // would reduce the close-after-drag race, but splitterMoved also
+    // fires on programmatic resizes (e.g. when the ProblemsPanel's
+    // table-widget sizeHint grows during project open) — that meant
+    // the saved state was the auto-grown layout, not the user's
+    // dragged choice, and the analyzer always opened maximized.
     // Initial size of 0 hides the preview; do NOT call hide() — togglePreview()
     // intentionally never calls setVisible() to avoid a QtWebEngine render crash.
 
@@ -767,21 +763,15 @@ void MainWindow::setupSidebar()
     m_vSplitter->addWidget(m_problemsPanel);
     m_vSplitter->setStretchFactor(0, 1);
     m_vSplitter->setStretchFactor(1, 0);
-
-    // Persist user-dragged splitter sizes within ~400ms of release so a
-    // close-immediately-after-drag doesn't lose the new layout. The
-    // 5-second autosave timer is the durable backstop; this is just
-    // the immediate response. splitterMoved fires per pixel during a
-    // drag, so we debounce — single-shot timer that resets on each
-    // move and only runs save once the user pauses.
-    {
-        auto *vSaveDebounce = new QTimer(this);
-        vSaveDebounce->setSingleShot(true);
-        vSaveDebounce->setInterval(400);
-        connect(vSaveDebounce, &QTimer::timeout, this, &MainWindow::saveSession);
-        connect(m_vSplitter, &QSplitter::splitterMoved, this,
-                [vSaveDebounce](int, int) { vSaveDebounce->start(); });
-    }
+    // Cap the analyzer pane so it can never overwhelm the editor area
+    // even when the ProblemsPanel's QTableWidget has a huge sizeHint
+    // (which happens during project-open when emitAllCached dumps
+    // hundreds of cached diagnostics into the table). Without the cap,
+    // QSplitter respects the child's preferred size and grows the
+    // bottom pane, masking the user's saved size on the next layout
+    // pass. 600px is more than the user could need for diagnostics
+    // at typical viewing distance.
+    m_problemsPanel->setMaximumHeight(600);
 
     hbox->addWidget(m_vSplitter, 1);
 
