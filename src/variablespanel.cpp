@@ -23,6 +23,7 @@
 #include "debuglog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QToolButton>
@@ -459,11 +460,39 @@ QMap<QString, QString> VariablesPanel::variables() const
 void VariablesPanel::setLibrarianService(LibrarianService *service)
 {
     m_librarianService = service;
-    if (m_librarianService) {
-        connect(m_librarianService, &LibrarianService::entityUpdated, this, &VariablesPanel::refreshLibrary);
-        connect(m_librarianService, &LibrarianService::scanningFinished, this, &VariablesPanel::refreshLibrary);
+    if (!m_librarianService) return;
+
+    // Debounce refreshLibrary. The librarian emits entityUpdated from
+    // its worker thread for every single entity write, which during a
+    // heuristic table parse can be hundreds of times per file. Each
+    // refresh runs a SELECT + per-row getAttributes() — racing against
+    // the worker thread's INSERTs on the WAL. We were hitting
+    // "disk I/O error Unable to fetch row" when SQLite's WAL got
+    // checkpoint-truncated mid-cursor.
+    //
+    // Coalesce the rapid-fire entityUpdated signals into one refresh
+    // every 750ms. scanningFinished still triggers an immediate final
+    // refresh so the tree shows the complete result the moment the
+    // scan ends.
+    auto *refreshDebounce = new QTimer(this);
+    refreshDebounce->setSingleShot(true);
+    refreshDebounce->setInterval(750);
+    connect(refreshDebounce, &QTimer::timeout, this, &VariablesPanel::refreshLibrary);
+
+    connect(m_librarianService, &LibrarianService::entityUpdated, this,
+            [refreshDebounce](qint64) {
+        if (!refreshDebounce->isActive()) refreshDebounce->start();
+        // If already running, the existing 750ms window catches this
+        // update — no need to reset (resetting would starve the user
+        // of progress feedback during a long scan).
+    });
+    connect(m_librarianService, &LibrarianService::scanningFinished,
+            this, [this, refreshDebounce]() {
+        refreshDebounce->stop();
         refreshLibrary();
-    }
+    });
+
+    refreshLibrary();
 }
 
 void VariablesPanel::onLoreScanStarted(const QString &filePath)
