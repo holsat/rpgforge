@@ -1,6 +1,7 @@
 // Mythos — Tauri entry point and project bridge.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -340,6 +341,8 @@ fn normalize_project(
         document.word_count = word_count(&document.body);
     }
 
+    validate_project(&project)?;
+
     if !project
         .documents
         .iter()
@@ -356,6 +359,23 @@ fn normalize_project(
         project.metadata.updated_at = now_iso();
     }
     Ok(project)
+}
+
+fn validate_project(project: &MythosProject) -> Result<(), String> {
+    let mut document_ids = HashSet::new();
+    for document in &project.documents {
+        if document.id.trim().is_empty() {
+            return Err("Project contains a document without an id".into());
+        }
+        if !document_ids.insert(document.id.clone()) {
+            return Err(format!(
+                "Project contains duplicate document id '{}'",
+                document.id
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn schema_version() -> u32 {
@@ -442,6 +462,68 @@ mod tests {
         assert_eq!(normalized.active_document_id, "document-1");
         assert_eq!(normalized.documents[0].title, "Untitled 1");
         assert_eq!(normalized.documents[0].word_count, 3);
+    }
+
+    #[test]
+    fn migrates_legacy_project_json_defaults() {
+        let raw = r#"{
+          "name": "Legacy Project",
+          "activeDocumentId": "legacy-scene",
+          "documents": [
+            {
+              "id": "legacy-scene",
+              "title": "Legacy Scene",
+              "body": "A remembered road"
+            }
+          ]
+        }"#;
+
+        let project: MythosProject = serde_json::from_str(raw).expect("legacy json should parse");
+        let normalized =
+            normalize_project(project, false).expect("legacy project should normalize");
+
+        assert_eq!(normalized.schema_version, 1);
+        assert_eq!(normalized.metadata.app_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(normalized.documents[0].path, "Drafts/Legacy Scene.md");
+        assert_eq!(normalized.documents[0].word_count, 3);
+    }
+
+    #[test]
+    fn rejects_duplicate_document_ids() {
+        let project = MythosProject {
+            schema_version: 1,
+            name: "Duplicate Draft".into(),
+            metadata: default_metadata(),
+            active_document_id: "scene".into(),
+            documents: vec![
+                MythosDocument {
+                    id: "scene".into(),
+                    title: "Scene A".into(),
+                    path: "Drafts/A.md".into(),
+                    body: "A".into(),
+                    content_html: "".into(),
+                    word_count: 0,
+                },
+                MythosDocument {
+                    id: "scene".into(),
+                    title: "Scene B".into(),
+                    path: "Drafts/B.md".into(),
+                    body: "B".into(),
+                    content_html: "".into(),
+                    word_count: 0,
+                },
+            ],
+            variables: vec![],
+            characters: vec![],
+            locations: vec![],
+        };
+
+        let error = match normalize_project(project, false) {
+            Ok(_) => panic!("duplicate document ids should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("duplicate document id 'scene'"));
     }
 
     #[test]
