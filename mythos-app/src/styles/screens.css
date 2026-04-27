@@ -183,15 +183,45 @@
 .tiptap-manuscript {
   min-height: 480px;
 }
-.tiptap-manuscript .ProseMirror {
+.tiptap-manuscript h1,
+.tiptap-manuscript h2,
+.tiptap-manuscript h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  color: var(--mythos-gold);
+  line-height: 1.25;
+  margin: 30px 0 14px;
+}
+.tiptap-manuscript h1 { font-size: 1.65em; }
+.tiptap-manuscript h2 { font-size: 1.36em; }
+.tiptap-manuscript h3 { font-size: 1.12em; color: var(--mythos-gold-deep); }
+.tiptap-manuscript ul,
+.tiptap-manuscript ol {
+  margin: 0 0 22px 24px;
+  padding: 0;
+}
+.tiptap-manuscript li {
+  margin: 7px 0;
+}
+.tiptap-manuscript blockquote {
+  margin: 26px 0;
+  padding: 4px 0 4px 22px;
+  border-left: 2px solid var(--mythos-gold);
+  color: var(--mythos-parchment-dim);
+  background: linear-gradient(90deg, rgba(212,175,55,0.06), transparent 70%);
+}
+.tiptap-manuscript blockquote p:last-child {
+  margin-bottom: 0;
+}
+.tiptap-manuscript.ProseMirror {
   min-height: 480px;
   outline: none;
   caret-color: var(--mythos-gold);
 }
-.tiptap-manuscript .ProseMirror:focus {
+.tiptap-manuscript.ProseMirror:focus {
   outline: none;
 }
-.tiptap-manuscript .ProseMirror p.is-editor-empty:first-child::before {
+.tiptap-manuscript.ProseMirror p.is-editor-empty:first-child::before {
   content: 'Begin the thread...';
   color: var(--fg-3);
   float: left;
@@ -216,6 +246,79 @@
   border-bottom: 1px solid var(--border-gold-med);
   border-radius: 0;
   padding: 0 1px;
+}
+
+.richtext-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin: -12px 0 28px;
+  padding: 8px;
+  border: 1px solid var(--border-gold-faint);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, rgba(31,31,31,0.96), rgba(18,18,18,0.94)),
+    rgba(18,18,18,0.92);
+  box-shadow: var(--shadow-md), var(--shadow-inset-gold);
+  backdrop-filter: blur(18px);
+}
+.rt-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 7px;
+  border-right: 1px solid rgba(212,175,55,0.12);
+}
+.rt-group:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+.rt-button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.rt-button:hover:not(:disabled) {
+  color: var(--mythos-gold);
+  border-color: var(--border-gold-faint);
+  background: rgba(212,175,55,0.06);
+}
+.rt-button.active {
+  color: var(--mythos-gold);
+  border-color: var(--border-gold-med);
+  background: rgba(212,175,55,0.10);
+  box-shadow: var(--shadow-inset-gold);
+}
+.rt-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.richtext-bubble {
+  position: sticky;
+  top: 52px;
+  z-index: 35;
+  width: max-content;
+  margin: -14px auto 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-gold-med);
+  background: rgba(20,20,20,0.96);
+  box-shadow: var(--shadow-md), 0 0 24px rgba(212,175,55,0.14);
+  backdrop-filter: blur(16px);
 }
 
 /* Caret */

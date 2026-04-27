@@ -23,7 +23,7 @@ Mythos project files use the `.mythos` extension and store UTF-8 JSON. Version 1
 
 ## Collections
 
-`documents` are manuscript files inside the project model. Each document has `id`, `title`, `path`, `body`, and `wordCount`.
+`documents` are manuscript files inside the project model. Each document has `id`, `title`, `path`, `body`, optional `contentHtml`, and `wordCount`. The `body` field is the plain-text manuscript fallback; `contentHtml` preserves rich text formatting for the editor.
 
 `variables` are inline manuscript references. Each variable has `id`, `token`, `label`, and `kind`.
 

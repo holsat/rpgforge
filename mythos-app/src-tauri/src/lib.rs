@@ -48,6 +48,8 @@ pub struct MythosDocument {
     #[serde(default)]
     pub body: String,
     #[serde(default)]
+    pub content_html: String,
+    #[serde(default)]
     pub word_count: usize,
 }
 
@@ -160,6 +162,7 @@ fn default_project() -> MythosProject {
             title: "Chapter III · The Labyrinth".into(),
             path: "Drafts/Chapter 3.md".into(),
             body: body.into(),
+            content_html: "".into(),
             word_count: word_count(body),
         }],
         variables: vec![
@@ -231,6 +234,9 @@ fn normalize_project(
         if document.path.trim().is_empty() {
             document.path = format!("Drafts/{}.md", document.title);
         }
+        if document.body.trim().is_empty() && !document.content_html.trim().is_empty() {
+            document.body = html_to_text(&document.content_html);
+        }
         document.word_count = word_count(&document.body);
     }
 
@@ -273,6 +279,19 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+fn html_to_text(html: &str) -> String {
+    html.replace("</p>", "\n\n")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .split('<')
+        .map(|part| part.split_once('>').map(|(_, text)| text).unwrap_or(part))
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +308,7 @@ mod tests {
                 title: "".into(),
                 path: "".into(),
                 body: "One two three".into(),
+                content_html: "".into(),
                 word_count: 0,
             }],
             variables: vec![],
@@ -323,5 +343,31 @@ mod tests {
         };
 
         assert!(error.contains("Unsupported Mythos schema version 99"));
+    }
+
+    #[test]
+    fn derives_plain_body_from_rich_text_when_needed() {
+        let project = MythosProject {
+            schema_version: 1,
+            name: "Rich Draft".into(),
+            metadata: default_metadata(),
+            active_document_id: "scene".into(),
+            documents: vec![MythosDocument {
+                id: "scene".into(),
+                title: "Scene".into(),
+                path: "Drafts/Scene.md".into(),
+                body: "".into(),
+                content_html: "<p>One <strong>bright</strong> thread</p>".into(),
+                word_count: 0,
+            }],
+            variables: vec![],
+            characters: vec![],
+            locations: vec![],
+        };
+
+        let normalized = normalize_project(project, false).expect("project should normalize");
+
+        assert_eq!(normalized.documents[0].body, "One bright thread");
+        assert_eq!(normalized.documents[0].word_count, 3);
     }
 }

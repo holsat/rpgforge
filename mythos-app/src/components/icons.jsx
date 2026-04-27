@@ -64,6 +64,26 @@ export const Icon = ({ name, size = 18, color = 'currentColor', strokeWidth = 1.
       return <svg {...props}><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5z"/></svg>;
     case 'reset':
       return <svg {...props}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>;
+    case 'bold':
+      return <svg {...props}><path d="M7 5h6a3 3 0 0 1 0 6H7z"/><path d="M7 11h7a3 3 0 0 1 0 6H7z"/><line x1="7" y1="5" x2="7" y2="19"/></svg>;
+    case 'italic':
+      return <svg {...props}><line x1="14" y1="5" x2="10" y2="19"/><line x1="9" y1="5" x2="17" y2="5"/><line x1="7" y1="19" x2="15" y2="19"/></svg>;
+    case 'underline':
+      return <svg {...props}><path d="M7 5v6a5 5 0 0 0 10 0V5"/><line x1="6" y1="21" x2="18" y2="21"/></svg>;
+    case 'strike':
+      return <svg {...props}><path d="M16 6.5A4 4 0 0 0 12.5 5H11a3 3 0 0 0 0 6h2a3 3 0 0 1 0 6h-1.5A4 4 0 0 1 8 15.5"/><line x1="4" y1="12" x2="20" y2="12"/></svg>;
+    case 'heading':
+      return <svg {...props}><line x1="6" y1="5" x2="6" y2="19"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="6" y1="12" x2="18" y2="12"/></svg>;
+    case 'list':
+      return <svg {...props}><line x1="9" y1="7" x2="20" y2="7"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17" x2="20" y2="17"/><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/></svg>;
+    case 'list-ordered':
+      return <svg {...props}><line x1="10" y1="7" x2="20" y2="7"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="17" x2="20" y2="17"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M4 13h2l-2 3h2"/></svg>;
+    case 'quote':
+      return <svg {...props}><path d="M9 7H5v4h4v6H3v-6a4 4 0 0 1 4-4h2z"/><path d="M21 7h-4v4h4v6h-6v-6a4 4 0 0 1 4-4h2z"/></svg>;
+    case 'undo':
+      return <svg {...props}><polyline points="9 7 4 12 9 17"/><path d="M20 18a7 7 0 0 0-7-7H4"/></svg>;
+    case 'redo':
+      return <svg {...props}><polyline points="15 7 20 12 15 17"/><path d="M4 18a7 7 0 0 1 7-7h9"/></svg>;
     case 'minus': return <svg {...props}><line x1="5" y1="12" x2="19" y2="12"/></svg>;
     case 'expand': return <svg {...props}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>;
     case 'filter': return <svg {...props}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>;

@@ -79,6 +79,7 @@ export function normalizeProject(project) {
       title,
       path: document.path || `Drafts/${title}.md`,
       body,
+      contentHtml: document.contentHtml || '',
       wordCount: Number.isFinite(document.wordCount) ? document.wordCount : wordCount(body),
     };
   });
@@ -119,6 +120,7 @@ export function createBlankProject(name = 'Untitled Mythos Project') {
         title: 'Opening Scene',
         path: 'Drafts/Opening Scene.md',
         body: '',
+        contentHtml: '',
         wordCount: 0,
       },
     ],
