@@ -183,6 +183,9 @@
 .tiptap-manuscript {
   min-height: 480px;
 }
+.mythos-editor-shell {
+  position: relative;
+}
 .tiptap-manuscript h1,
 .tiptap-manuscript h2,
 .tiptap-manuscript h3 {
@@ -410,6 +413,10 @@
   box-shadow: inset 0 0 0 1px var(--border-gold-med);
 }
 .ac-row.active .name { color: var(--mythos-gold-bright); }
+.variable-mention-menu {
+  max-height: 260px;
+  overflow-y: auto;
+}
 
 /* Inline AI menu */
 .inline-ai {

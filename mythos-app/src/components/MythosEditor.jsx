@@ -7,7 +7,7 @@ import { Plugin } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Icon } from './icons.jsx';
 
-const TOKEN_PATTERN = /\[@[A-Za-z0-9_]+\]?/g;
+const TOKEN_PATTERN = /\[@[A-Za-z0-9_.]+\]?/g;
 
 function escapeHtml(value) {
   return value
@@ -68,6 +68,9 @@ function createVariableTokenExtension(variables) {
 
 export function MythosEditor({ document, variables, onDocumentChange }) {
   const lastDocumentId = React.useRef(document?.id);
+  const shellRef = React.useRef(null);
+  const mentionRef = React.useRef(null);
+  const [mention, setMention] = React.useState(null);
 
   const editor = useEditor({
     extensions: [
@@ -110,17 +113,158 @@ export function MythosEditor({ document, variables, onDocumentChange }) {
     }
   }, [document?.body, document?.contentHtml, editor]);
 
+  React.useEffect(() => {
+    if (!editor) return undefined;
+    const updateMention = () => {
+      const next = detectVariableMention(editor, shellRef.current);
+      mentionRef.current = next;
+      setMention(next);
+    };
+    const clearMention = () => {
+      mentionRef.current = null;
+      window.setTimeout(() => setMention(null), 120);
+    };
+    editor.on('selectionUpdate', updateMention);
+    editor.on('transaction', updateMention);
+    editor.on('blur', clearMention);
+    return () => {
+      editor.off('selectionUpdate', updateMention);
+      editor.off('transaction', updateMention);
+      editor.off('blur', clearMention);
+    };
+  }, [editor]);
+
+  const insertVariable = React.useCallback((variable) => {
+    if (!editor || !variable || !mentionRef.current) return;
+    const { from, to } = mentionRef.current;
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from, to })
+      .insertContent(`${variable.token} `)
+      .run();
+    mentionRef.current = null;
+    setMention(null);
+  }, [editor]);
+
+  React.useEffect(() => {
+    if (!editor || !mention) return undefined;
+    const onKeyDown = (event) => {
+      const matches = filteredVariables(variables, mention.query);
+      if (!matches.length) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        mentionRef.current = null;
+        setMention(null);
+        return;
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMention(current => {
+          if (!current) return current;
+          const delta = event.key === 'ArrowDown' ? 1 : -1;
+          const active = (current.active + delta + matches.length) % matches.length;
+          const next = { ...current, active };
+          mentionRef.current = next;
+          return next;
+        });
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        insertVariable(matches[mention.active] || matches[0]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [editor, insertVariable, mention, variables]);
+
   return (
-    <>
+    <div className="mythos-editor-shell" ref={shellRef}>
       <RichTextToolbar editor={editor}/>
       <BubbleToolbar editor={editor}/>
       <EditorContent editor={editor}/>
-    </>
+      <VariableMentionMenu
+        mention={mention}
+        variables={variables}
+        onSelect={insertVariable}
+      />
+    </div>
   );
 }
 
 function wordCount(text = '') {
   return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+function detectVariableMention(editor, shell) {
+  const { state, view } = editor;
+  const { selection } = state;
+  if (!selection.empty || !shell) return null;
+
+  const cursor = selection.from;
+  const start = Math.max(0, cursor - 80);
+  const before = state.doc.textBetween(start, cursor, '\n', '\0');
+  const trigger = before.lastIndexOf('[@');
+  if (trigger < 0) return null;
+
+  const query = before.slice(trigger + 2);
+  if (!/^[A-Za-z0-9_.]*$/.test(query)) return null;
+
+  const from = cursor - (before.length - trigger);
+  const coords = view.coordsAtPos(cursor);
+  const shellRect = shell.getBoundingClientRect();
+
+  return {
+    active: 0,
+    query,
+    from,
+    to: cursor,
+    left: coords.left - shellRect.left,
+    top: coords.bottom - shellRect.top + 8,
+  };
+}
+
+function filteredVariables(variables, query) {
+  const normalized = query.toLowerCase();
+  return variables
+    .filter(variable => {
+      if (!normalized) return true;
+      return variable.token.toLowerCase().includes(normalized)
+        || variable.label.toLowerCase().includes(normalized)
+        || variable.kind.toLowerCase().includes(normalized);
+    })
+    .slice(0, 8);
+}
+
+function VariableMentionMenu({ mention, variables, onSelect }) {
+  if (!mention) return null;
+  const matches = filteredVariables(variables, mention.query);
+  if (!matches.length) return null;
+
+  return (
+    <span
+      className="autocomplete variable-mention-menu"
+      style={{ left: mention.left, top: mention.top }}
+    >
+      <span className="ac-list">
+        {matches.map((variable, index) => (
+          <span
+            key={variable.id}
+            className={'ac-row' + (index === mention.active ? ' active' : '')}
+            onMouseDown={event => {
+              event.preventDefault();
+              onSelect(variable);
+            }}
+          >
+            <span className="num">{index + 1}.</span>
+            <span className="name">{variable.token}</span>
+            <span className="kind">{variable.kind}</span>
+          </span>
+        ))}
+      </span>
+    </span>
+  );
 }
 
 function ToolbarButton({ editor, icon, label, active, disabled, onClick }) {
