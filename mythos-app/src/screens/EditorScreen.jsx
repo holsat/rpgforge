@@ -4,27 +4,9 @@ import { MythosEditor } from '../components/MythosEditor.jsx';
 import { activeDocument, FALLBACK_PROJECT } from '../lib/projectBridge.js';
 
 // Mythos — Editor screen (Draft view)
-// Manuscript with variable autocomplete + inline AI menu + Muse sidebar
+// Manuscript editor + inline AI menu + Muse sidebar
 
 const FALLBACK_VARIABLES = FALLBACK_PROJECT.variables;
-
-function VariableAutocomplete({ variables }) {
-  const [active, setActive] = React.useState(0);
-  return (
-    <span className="autocomplete" style={{ left: '50%', top: '6px' }}>
-      <span className="ac-list">
-        {variables.map((v, i) => (
-          <span key={v.token} className={'ac-row' + (i === active ? ' active' : '')}
-               onMouseEnter={() => setActive(i)}>
-            <span className="num">{i + 1}.</span>
-            <span className="name">{v.token}</span>
-            <span className="kind">{v.kind}</span>
-          </span>
-        ))}
-      </span>
-    </span>
-  );
-}
 
 function InlineAIMenu({ onClose }) {
   // Use spans (not buttons / divs) since this renders inside a <p>.
@@ -150,7 +132,6 @@ function ProjectTree({ project, document, variables }) {
 }
 
 export function EditorScreen({ tokenStyle, project, projectData, onDocumentChange }) {
-  const [showAC, setShowAC] = React.useState(true);
   const [showAI, setShowAI] = React.useState(false);
   const document = activeDocument(projectData) || activeDocument(FALLBACK_PROJECT);
   const variables = projectData?.variables?.length ? projectData.variables : FALLBACK_VARIABLES;
@@ -173,7 +154,7 @@ export function EditorScreen({ tokenStyle, project, projectData, onDocumentChang
           <span className="sep">/</span>
           <span className="here">{document?.title || 'Chapter 3 — The Labyrinth'}</span>
           <span className="right">
-            <button className="btn" onClick={() => { setShowAC(false); setShowAI(s => !s); }}>
+            <button className="btn" onClick={() => setShowAI(s => !s)}>
               <Icon name="sparkle" size={12}/> AI
             </button>
             <button className="btn ghost"><Icon name="eye" size={12}/> Preview</button>
@@ -197,12 +178,6 @@ export function EditorScreen({ tokenStyle, project, projectData, onDocumentChang
                 variables={variables}
                 onDocumentChange={handleDocumentChange}
               />
-              {showAC && (
-                <p style={{position:'relative'}}>
-                  <span className="caret"/>
-                  <VariableAutocomplete variables={variables}/>
-                </p>
-              )}
               {showAI && <InlineAIMenu onClose={() => setShowAI(false)}/>}
             </div>
           </div>
