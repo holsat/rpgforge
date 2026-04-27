@@ -652,6 +652,17 @@ void MainWindow::setupSidebar()
     m_mainSplitter->setStretchFactor(0, 0);
     m_mainSplitter->setStretchFactor(1, 1);
     m_mainSplitter->setStretchFactor(2, 0);
+
+    // Same debounced immediate-save pattern as m_vSplitter — user
+    // drags the sidebar / preview width, persists within ~400ms.
+    {
+        auto *mainSaveDebounce = new QTimer(this);
+        mainSaveDebounce->setSingleShot(true);
+        mainSaveDebounce->setInterval(400);
+        connect(mainSaveDebounce, &QTimer::timeout, this, &MainWindow::saveSession);
+        connect(m_mainSplitter, &QSplitter::splitterMoved, this,
+                [mainSaveDebounce](int, int) { mainSaveDebounce->start(); });
+    }
     // Initial size of 0 hides the preview; do NOT call hide() — togglePreview()
     // intentionally never calls setVisible() to avoid a QtWebEngine render crash.
 
@@ -756,6 +767,21 @@ void MainWindow::setupSidebar()
     m_vSplitter->addWidget(m_problemsPanel);
     m_vSplitter->setStretchFactor(0, 1);
     m_vSplitter->setStretchFactor(1, 0);
+
+    // Persist user-dragged splitter sizes within ~400ms of release so a
+    // close-immediately-after-drag doesn't lose the new layout. The
+    // 5-second autosave timer is the durable backstop; this is just
+    // the immediate response. splitterMoved fires per pixel during a
+    // drag, so we debounce — single-shot timer that resets on each
+    // move and only runs save once the user pauses.
+    {
+        auto *vSaveDebounce = new QTimer(this);
+        vSaveDebounce->setSingleShot(true);
+        vSaveDebounce->setInterval(400);
+        connect(vSaveDebounce, &QTimer::timeout, this, &MainWindow::saveSession);
+        connect(m_vSplitter, &QSplitter::splitterMoved, this,
+                [vSaveDebounce](int, int) { vSaveDebounce->start(); });
+    }
 
     hbox->addWidget(m_vSplitter, 1);
 
@@ -2157,25 +2183,25 @@ void MainWindow::restoreSession()
 
     if (m_vSplitter && settings.contains(QStringLiteral("vSplitter"))) {
         m_vSplitter->restoreState(settings.value(QStringLiteral("vSplitter")).toByteArray());
-        // Defensive: if a previous (likely crashed) session saved
-        // degenerate sizes that collapse the editor pane to ~0, the
-        // user opens the app to a window full of just the Problems
-        // panel and no editor / sidebar — and has to drag the splitter
-        // by feel to recover. Force sane sizes when the top pane
-        // (editor area) was restored below a minimum threshold.
+        // Defensive recovery only — the user's dragged size is the
+        // source of truth and must round-trip across restarts. Only
+        // override when the editor pane is so small the user would
+        // see a blank window and assume the app is broken (truly
+        // invisible: <30px). Anything above that is treated as the
+        // user's deliberate choice, even if extreme.
         QList<int> sizes = m_vSplitter->sizes();
-        if (sizes.size() >= 2 && sizes[0] < 80) {
+        if (sizes.size() >= 2 && sizes[0] < 30) {
             const int total = sizes[0] + sizes[1];
             const int problemsHeight = qMin(sizes[1], qMax(120, total / 4));
             m_vSplitter->setSizes({total - problemsHeight, problemsHeight});
         }
     }
     if (m_mainSplitter && settings.contains(QStringLiteral("mainSplitter"))) {
-        // Same defensive clamp on the horizontal splitter — if the
-        // sidebar pane is collapsed to ~0 a corrupted state would hide
-        // the project tree as well.
+        // Same narrow recovery on the horizontal splitter — only
+        // intervene when the editor pane (index 1) is effectively
+        // invisible, not for any "smaller than I'd default" case.
         QList<int> sizes = m_mainSplitter->sizes();
-        if (sizes.size() >= 2 && sizes[1] < 200) {
+        if (sizes.size() >= 2 && sizes[1] < 80) {
             const int total = std::accumulate(sizes.begin(), sizes.end(), 0);
             const int sidebar = qBound(180, sizes.value(0, 250), 320);
             const int preview = sizes.value(2, 0);
