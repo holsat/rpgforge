@@ -1,7 +1,8 @@
 // Mythos — Tauri entry point and project bridge.
 
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize)]
@@ -131,6 +132,32 @@ fn save_project(path: String, project: MythosProject) -> Result<(), String> {
     fs::write(&path, raw).map_err(|err| format!("Could not write {}: {}", path.display(), err))
 }
 
+#[tauri::command]
+fn create_project(
+    parent_dir: String,
+    project_name: String,
+    project: MythosProject,
+) -> Result<String, String> {
+    let folder_name = safe_file_name(&project_name)?;
+    let project_dir = PathBuf::from(parent_dir).join(&folder_name);
+    fs::create_dir_all(&project_dir)
+        .map_err(|err| format!("Could not create {}: {}", project_dir.display(), err))?;
+
+    let project_path = project_dir.join(format!("{}.mythos", folder_name));
+    let project = normalize_project(project, true)?;
+    let raw = serde_json::to_string_pretty(&project)
+        .map_err(|err| format!("Could not serialize project: {}", err))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&project_path)
+        .map_err(|err| format!("Could not create {}: {}", project_path.display(), err))?;
+    file.write_all(raw.as_bytes())
+        .map_err(|err| format!("Could not write {}: {}", project_path.display(), err))?;
+
+    Ok(project_path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -143,7 +170,8 @@ pub fn run() {
             greet,
             sample_project,
             load_project,
-            save_project
+            save_project,
+            create_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mythos");
@@ -279,6 +307,26 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+fn safe_file_name(name: &str) -> Result<String, String> {
+    let safe = name
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '\0' => '-',
+            character if character.is_control() => '-',
+            character => character,
+        })
+        .collect::<String>()
+        .trim_matches([' ', '.', '-'])
+        .to_string();
+
+    if safe.is_empty() {
+        Err("Project name is required".into())
+    } else {
+        Ok(safe)
+    }
+}
+
 fn html_to_text(html: &str) -> String {
     html.replace("</p>", "\n\n")
         .replace("<br>", "\n")
@@ -369,5 +417,14 @@ mod tests {
 
         assert_eq!(normalized.documents[0].body, "One bright thread");
         assert_eq!(normalized.documents[0].word_count, 3);
+    }
+
+    #[test]
+    fn sanitizes_project_folder_names() {
+        assert_eq!(
+            safe_file_name("A/B: Strange\\World").expect("name should sanitize"),
+            "A-B- Strange-World"
+        );
+        assert!(safe_file_name(" / ").is_err());
     }
 }

@@ -155,11 +155,22 @@ export async function saveProject(path, project) {
   });
 }
 
+export async function createProject(parentDir, projectName, project) {
+  return invoke('create_project', { parentDir, projectName, project });
+}
+
 export async function chooseProjectToOpen() {
   return open({
     multiple: false,
     directory: false,
     filters: [MYTHOS_FILE_FILTER],
+  });
+}
+
+export async function chooseProjectParentDirectory() {
+  return open({
+    multiple: false,
+    directory: true,
   });
 }
 

@@ -10,9 +10,11 @@ import { WeaverScreen } from './screens/WeaverScreen.jsx';
 import { SettingsScreen } from './screens/SettingsScreen.jsx';
 import { FocusMode } from './screens/FocusMode.jsx';
 import {
+  chooseProjectParentDirectory,
   chooseProjectSavePath,
   chooseProjectToOpen,
   createBlankProject,
+  createProject,
   getSampleProject,
   loadProject,
   saveProject,
@@ -113,6 +115,75 @@ function TitleBar({
   );
 }
 
+function NewProjectModal({ open, onCancel, onCreate }) {
+  const [name, setName] = React.useState('Untitled Mythos Project');
+  const [parentDir, setParentDir] = React.useState('');
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    if (!open) return;
+    setName('Untitled Mythos Project');
+    setParentDir('');
+    setError('');
+  }, [open]);
+
+  if (!open) return null;
+
+  const chooseFolder = async () => {
+    try {
+      const selected = await chooseProjectParentDirectory();
+      if (!selected) return;
+      setParentDir(Array.isArray(selected) ? selected[0] : selected);
+      setError('');
+    } catch (error) {
+      setError(error.message || 'Could not choose folder');
+    }
+  };
+
+  const create = async () => {
+    if (!name.trim()) {
+      setError('Project name is required');
+      return;
+    }
+    if (!parentDir) {
+      setError('Choose a parent folder');
+      return;
+    }
+    try {
+      await onCreate({ name: name.trim(), parentDir });
+    } catch (error) {
+      setError(error.message || 'Could not create project');
+    }
+  };
+
+  return (
+    <div className="modal-scrim" role="presentation">
+      <section className="new-project-modal" role="dialog" aria-modal="true" aria-label="New project">
+        <div className="modal-head">
+          <Compass size={18}/>
+          <span>New Mythos Project</span>
+        </div>
+        <label className="modal-field">
+          <span>Project name</span>
+          <input value={name} onChange={event => setName(event.target.value)} autoFocus/>
+        </label>
+        <label className="modal-field">
+          <span>Location</span>
+          <div className="folder-row">
+            <input value={parentDir} readOnly placeholder="Choose a folder"/>
+            <button className="btn ghost" onClick={chooseFolder}>Browse</button>
+          </div>
+        </label>
+        {error && <div className="modal-error">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn gold" onClick={create}>Create</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 // Tweak defaults — the host (Mythos Studio editor) rewrites the JSON
 // between the markers when the user changes values in the Tweaks panel.
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -129,6 +200,7 @@ export function App() {
   const [projectPath, setProjectPath] = React.useState('');
   const [dirty, setDirty] = React.useState(false);
   const [projectStatus, setProjectStatus] = React.useState('Loading sample project');
+  const [newProjectOpen, setNewProjectOpen] = React.useState(false);
   const [route, setRoute] = React.useState(() => {
     try { return localStorage.getItem('mythos-route') || 'editor'; } catch { return 'editor'; }
   });
@@ -158,10 +230,27 @@ export function App() {
   }, []);
 
   const handleNewProject = React.useCallback(() => {
-    setLoadedProject(createBlankProject('Untitled Mythos Project'), '', true);
-    setProjectStatus('New unsaved project');
-    setRoute('editor');
+    setNewProjectOpen(true);
+  }, []);
+
+  const handleCreateProject = React.useCallback(async ({ name, parentDir }) => {
+    const project = createBlankProject(name);
+    try {
+      const path = await createProject(parentDir, name, project);
+      setLoadedProject(project, path);
+      setProjectStatus('Created project');
+      setNewProjectOpen(false);
+      setRoute('editor');
+    } catch (error) {
+      setProjectStatus(error.message || 'Create failed');
+      throw error;
+    }
   }, [setLoadedProject]);
+
+  const handleCancelNewProject = React.useCallback(() => {
+    setNewProjectOpen(false);
+    setRoute('editor');
+  }, []);
 
   const handleOpenProject = React.useCallback(async () => {
     try {
@@ -269,6 +358,11 @@ export function App() {
         <main className="screen">{screens[route]}</main>
       </div>
       {focusMode && <FocusMode onLeave={() => setFocusMode(false)}/>}
+      <NewProjectModal
+        open={newProjectOpen}
+        onCancel={handleCancelNewProject}
+        onCreate={handleCreateProject}
+      />
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Project"/>
