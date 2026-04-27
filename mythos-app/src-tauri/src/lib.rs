@@ -158,6 +158,14 @@ fn create_project(
     Ok(project_path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn import_text_document(path: String) -> Result<MythosDocument, String> {
+    let path = PathBuf::from(path);
+    let body = fs::read_to_string(&path)
+        .map_err(|err| format!("Could not read {}: {}", path.display(), err))?;
+    Ok(document_from_text_path(&path, body))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -171,7 +179,8 @@ pub fn run() {
             sample_project,
             load_project,
             save_project,
-            create_project
+            create_project,
+            import_text_document
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mythos");
@@ -235,6 +244,69 @@ fn entity(id: &str, name: &str, role: &str, glyph: Option<&str>) -> MythosEntity
 
 fn word_count(text: &str) -> usize {
     text.split_whitespace().count()
+}
+
+fn document_from_text_path(path: &std::path::Path, body: String) -> MythosDocument {
+    let title = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(humanize_file_stem)
+        .unwrap_or_else(|| "Imported Document".into());
+    let id = document_id_from_title(&title);
+    let project_path = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("Imported/{}", name))
+        .unwrap_or_else(|| format!("Imported/{}.md", id));
+    let word_count = word_count(&body);
+
+    MythosDocument {
+        id,
+        title,
+        path: project_path,
+        body,
+        content_html: "".into(),
+        word_count,
+    }
+}
+
+fn document_id_from_title(title: &str) -> String {
+    let slug = title
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if slug.is_empty() {
+        "imported-document".into()
+    } else {
+        slug
+    }
+}
+
+fn humanize_file_stem(stem: &str) -> String {
+    stem.replace(['_', '-'], " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn normalize_project(
@@ -426,5 +498,16 @@ mod tests {
             "A-B- Strange-World"
         );
         assert!(safe_file_name(" / ").is_err());
+    }
+
+    #[test]
+    fn creates_document_from_imported_text_path() {
+        let path = PathBuf::from("/tmp/chapter-one.md");
+        let document = document_from_text_path(&path, "One two three".into());
+
+        assert_eq!(document.id, "chapter-one");
+        assert_eq!(document.title, "Chapter One");
+        assert_eq!(document.path, "Imported/chapter-one.md");
+        assert_eq!(document.word_count, 3);
     }
 }

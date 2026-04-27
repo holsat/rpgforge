@@ -13,9 +13,11 @@ import {
   chooseProjectParentDirectory,
   chooseProjectSavePath,
   chooseProjectToOpen,
+  chooseDocumentToImport,
   createBlankProject,
   createProject,
   getSampleProject,
+  importTextDocument,
   loadProject,
   saveProject,
 } from './lib/projectBridge.js';
@@ -83,6 +85,7 @@ function TitleBar({
   status,
   onNewProject,
   onOpenProject,
+  onImportDocument,
   onSaveProject,
   onSaveProjectAs,
 }) {
@@ -102,6 +105,7 @@ function TitleBar({
         <div className="project-actions">
           <ProjectActionButton onClick={onNewProject}>New</ProjectActionButton>
           <ProjectActionButton onClick={onOpenProject}>Open</ProjectActionButton>
+          <ProjectActionButton onClick={onImportDocument}>Import</ProjectActionButton>
           <ProjectActionButton onClick={onSaveProject} disabled={!dirty && Boolean(projectPath)}>Save</ProjectActionButton>
           <ProjectActionButton onClick={onSaveProjectAs}>Save As</ProjectActionButton>
         </div>
@@ -266,6 +270,30 @@ export function App() {
     }
   }, [setLoadedProject]);
 
+  const handleImportDocument = React.useCallback(async () => {
+    if (!projectData) return;
+    try {
+      const selected = await chooseDocumentToImport();
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      const imported = await importTextDocument(path);
+      setProjectData(project => {
+        if (!project) return project;
+        const document = uniqueDocument(imported, project.documents);
+        return {
+          ...project,
+          activeDocumentId: document.id,
+          documents: [...project.documents, document],
+        };
+      });
+      setDirty(true);
+      setProjectStatus('Imported document');
+      setRoute('editor');
+    } catch (error) {
+      setProjectStatus(error.message || 'Import failed');
+    }
+  }, [projectData]);
+
   const handleSaveProjectAs = React.useCallback(async () => {
     if (!projectData) return;
     try {
@@ -350,6 +378,7 @@ export function App() {
         status={projectStatus}
         onNewProject={handleNewProject}
         onOpenProject={handleOpenProject}
+        onImportDocument={handleImportDocument}
         onSaveProject={handleSaveProject}
         onSaveProjectAs={handleSaveProjectAs}
       />
@@ -393,4 +422,22 @@ export function App() {
       </TweaksPanel>
     </div>
   );
+}
+
+function uniqueDocument(document, documents) {
+  const ids = new Set(documents.map(existing => existing.id));
+  if (!ids.has(document.id)) return document;
+
+  let suffix = 2;
+  let id = `${document.id}-${suffix}`;
+  while (ids.has(id)) {
+    suffix += 1;
+    id = `${document.id}-${suffix}`;
+  }
+
+  return {
+    ...document,
+    id,
+    title: `${document.title} ${suffix}`,
+  };
 }

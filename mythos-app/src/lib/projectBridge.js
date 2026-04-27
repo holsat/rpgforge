@@ -8,6 +8,11 @@ const MYTHOS_FILE_FILTER = {
   extensions: ['mythos'],
 };
 
+const IMPORT_DOCUMENT_FILTER = {
+  name: 'Markdown or Text',
+  extensions: ['md', 'markdown', 'txt'],
+};
+
 function wordCount(text = '') {
   return text.trim() ? text.trim().split(/\s+/).length : 0;
 }
@@ -159,11 +164,23 @@ export async function createProject(parentDir, projectName, project) {
   return invoke('create_project', { parentDir, projectName, project });
 }
 
+export async function importTextDocument(path) {
+  return invoke('import_text_document', { path });
+}
+
 export async function chooseProjectToOpen() {
   return open({
     multiple: false,
     directory: false,
     filters: [MYTHOS_FILE_FILTER],
+  });
+}
+
+export async function chooseDocumentToImport() {
+  return open({
+    multiple: false,
+    directory: false,
+    filters: [IMPORT_DOCUMENT_FILTER],
   });
 }
 
