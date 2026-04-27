@@ -1,0 +1,310 @@
+/* ================================================================
+   Mythos — App Shell + Screen styles
+   Dark, gold-accented, serif-forward writer's IDE
+   ================================================================ */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0A0A0A;
+  height: 100%;
+  overflow: hidden;
+}
+
+#root { height: 100vh; }
+
+/* ---------- App window chrome ---------- */
+/* Wrapper allows horizontal scroll only below the tablet layout floor. */
+html, body { background: #000; }
+body { overflow: auto; }
+#root { height: 100vh; min-width: 820px; }
+
+.app-shell {
+  position: relative;
+  width: 100%;
+  min-width: 820px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+
+.titlebar {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: linear-gradient(to bottom, #1F1F1F 0%, #161616 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  position: relative;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.traffic {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.traffic .light {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(0,0,0,0.2);
+}
+.traffic .red    { background: #FF5F57; }
+.traffic .yellow { background: #FEBC2E; }
+.traffic .green  { background: #28C840; }
+
+.titlebar-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mythos-gold);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.titlebar-title .compass {
+  width: 14px; height: 14px;
+  opacity: 0.85;
+}
+
+.titlebar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.titlebar-right .project {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-gold-faint);
+  background: rgba(212, 175, 55, 0.04);
+  color: var(--fg-1);
+}
+
+/* ---------- Body layout (rail + screen) ---------- */
+.app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------- Rail (left icon nav) ---------- */
+.rail {
+  width: 64px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 0 16px;
+  background: var(--mythos-void);
+  border-right: 1px solid rgba(255,255,255,0.04);
+  position: relative;
+  z-index: 10;
+}
+
+.rail-logo {
+  width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 18px;
+  color: var(--mythos-gold);
+}
+
+.rail-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  flex: 1;
+}
+
+.rail-item {
+  width: 44px; height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease-out);
+  position: relative;
+  border: 1px solid transparent;
+}
+.rail-item:hover {
+  color: var(--mythos-gold-deep);
+  background: rgba(212, 175, 55, 0.04);
+}
+.rail-item.active {
+  color: var(--mythos-gold);
+  background: rgba(212, 175, 55, 0.06);
+  border-color: var(--border-gold-med);
+  box-shadow: var(--shadow-inset-gold);
+}
+.rail-item .tip {
+  position: absolute;
+  left: 56px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mythos-gold);
+  background: rgba(20,20,20,0.96);
+  border: 1px solid var(--border-gold-faint);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
+  box-shadow: var(--shadow-md);
+  z-index: 100;
+}
+.rail-item:hover .tip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(4px);
+}
+
+.rail-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+/* ---------- Screen container ---------- */
+.screen {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+}
+
+/* ---------- Buttons (shared) ---------- */
+.btn {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-hair);
+  color: var(--fg-1);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--dur) var(--ease-out);
+}
+.btn:hover {
+  background: rgba(212,175,55,0.06);
+  border-color: var(--border-gold-faint);
+  color: var(--mythos-gold);
+}
+.btn.gold {
+  background: linear-gradient(180deg, #D4AF37 0%, #B8922E 100%);
+  color: #1A1A1A;
+  border-color: #B8922E;
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 1px 3px rgba(0,0,0,0.4);
+}
+.btn.gold:hover {
+  filter: brightness(1.08);
+  color: #0D0D0D;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: var(--border-gold-faint);
+  color: var(--mythos-gold-deep);
+}
+.btn.ghost:hover {
+  border-color: var(--mythos-gold);
+  color: var(--mythos-gold);
+}
+
+.label-caps {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+@media (max-width: 900px) {
+  .titlebar-right > span {
+    display: none;
+  }
+
+  .titlebar-right .project {
+    max-width: 220px;
+  }
+}
+
+/* ---------- Hairline + scrollbar ---------- */
+.hr-gold { border: none; border-top: 1px solid var(--border-gold-faint); margin: 16px 0; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(212,175,55,0.10);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(212,175,55,0.22); background-clip: padding-box; border: 2px solid transparent; }
+
+/* ---------- Variable token (gold pill) ---------- */
+.tok {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--mythos-gold);
+  background: rgba(212, 175, 55, 0.08);
+  border: 1px solid var(--border-gold-med);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.tok.style-bracket {
+  background: transparent;
+  border-color: transparent;
+  color: var(--mythos-gold-deep);
+  padding: 0;
+}
+.tok.style-bracket::before { content: '['; color: var(--mythos-gold); opacity: 0.6; }
+.tok.style-bracket::after  { content: ']'; color: var(--mythos-gold); opacity: 0.6; }
+.tok.style-inline {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dotted var(--border-gold-med);
+  border-radius: 0;
+  padding: 0 1px;
+  color: var(--mythos-gold);
+  font-family: inherit;
+  font-style: italic;
+}

@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+
+# Logs
+*.log
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/

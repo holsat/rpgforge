@@ -1,0 +1,228 @@
+/* ============================================================
+   Mythos Design System — Colors, Type, Spacing, Shadows
+   Tanuki Vision · Mythos for macOS
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  /* ---------- Core palette ---------- */
+  --mythos-canvas:          #1A1A1A; /* Deep charcoal — primary canvas */
+  --mythos-void:            #0D0D0D; /* Midnight — deeper wells */
+  --mythos-obsidian:        #141414; /* Card & panel fill */
+  --mythos-ink:             #202020; /* Stepped up card / hover fill */
+  --mythos-ink-2:           #2A2A2A; /* Borders-ish, input fill */
+
+  --mythos-gold:            #D4AF37; /* Metallic gold — THE accent */
+  --mythos-gold-deep:       #B8922E; /* Antique gold — resting / body gold */
+  --mythos-gold-bright:     #E8C547; /* Rare — only for the brightest focus/pulse peaks */
+  --mythos-gold-wash:       rgba(212, 175, 55, 0.08); /* Inner-glow fill */
+
+  --mythos-parchment:       #E8D9A8; /* Primary fg on dark */
+  --mythos-parchment-dim:   #A89878; /* Secondary fg */
+  --mythos-faded-ink:       #6B6359; /* Tertiary / captions */
+
+  /* Lumina (Focus Mode only) */
+  --mythos-lumina-hi:       #BFD7E8;
+  --mythos-lumina-mid:      #7FA9C9;
+  --mythos-lumina-lo:       #4A6B8A;
+  --mythos-lumina-glass:    rgba(255, 255, 255, 0.5);
+
+  /* Semantic (muted) */
+  --mythos-moss:            #6B8E4E; /* Success */
+  --mythos-oxblood:         #A8443A; /* Danger */
+  --mythos-amber:           #C98A2E; /* Warning */
+
+  /* ---------- Semantic fg / bg aliases ---------- */
+  --bg-0: var(--mythos-canvas);
+  --bg-1: var(--mythos-obsidian);
+  --bg-2: var(--mythos-ink);
+  --bg-3: var(--mythos-ink-2);
+  --bg-well: var(--mythos-void);
+
+  --fg-1: var(--mythos-parchment);
+  --fg-2: var(--mythos-parchment-dim);
+  --fg-3: var(--mythos-faded-ink);
+  --fg-accent: var(--mythos-gold);
+  --fg-accent-deep: var(--mythos-gold-deep);
+
+  --border-hair: rgba(255, 255, 255, 0.06);
+  --border-gold-faint: rgba(212, 175, 55, 0.12);
+  --border-gold-med:   rgba(212, 175, 55, 0.30);
+  --border-gold-strong:rgba(212, 175, 55, 0.60);
+
+  /* ---------- Type faces ---------- */
+  --font-display: 'Cinzel', 'Trajan Pro', 'Cormorant Garamond', Georgia, serif;
+  --font-serif:   'EB Garamond', 'Garamond', 'Cormorant Garamond', Georgia, serif;
+  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:    ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ---------- Type sizes (base 16px) ---------- */
+  --fs-display-xl: 56px;   /* Hero — MYTHOS wordmark */
+  --fs-display-lg: 40px;   /* Chapter title */
+  --fs-display-md: 28px;   /* Section heading in dossier */
+  --fs-display-sm: 20px;   /* Panel heading */
+
+  --fs-body-lg:    20px;   /* Manuscript body */
+  --fs-body:       17px;   /* Default body */
+  --fs-body-sm:    15px;   /* Secondary body */
+  --fs-label:      13px;   /* UI label */
+  --fs-caption:    12px;   /* Caption */
+  --fs-micro:      11px;   /* Tracked ALL CAPS label */
+
+  --lh-display:    1.15;
+  --lh-body:       1.55;
+  --lh-manuscript: 1.75;
+
+  --track-caps:    0.12em; /* ALL CAPS labels */
+  --track-display: 0.08em; /* Display headings */
+  --track-body:    0;
+
+  /* ---------- Spacing (8px grid) ---------- */
+  --sp-0:   0;
+  --sp-1:   4px;
+  --sp-2:   8px;
+  --sp-3:   12px;
+  --sp-4:   16px;
+  --sp-5:   20px;
+  --sp-6:   24px;
+  --sp-7:   32px;
+  --sp-8:   40px;
+  --sp-9:   56px;
+  --sp-10:  80px;
+
+  /* ---------- Radii ---------- */
+  --radius-xs: 4px;   /* Pills, badges */
+  --radius-sm: 6px;   /* Buttons, inputs */
+  --radius-md: 8px;   /* Cards */
+  --radius-lg: 12px;  /* Window, popovers */
+  --radius-xl: 14px;  /* Modals */
+  --radius-round: 999px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.7), 0 8px 16px rgba(0, 0, 0, 0.5);
+  --shadow-inset-gold: inset 0 0 24px rgba(212, 175, 55, 0.08);
+
+  /* Signature glows */
+  --glow-gold-sm: 0 0 8px rgba(212, 175, 55, 0.35);
+  --glow-gold-md: 0 0 16px rgba(212, 175, 55, 0.45);
+  --glow-gold-lg: 0 0 32px rgba(212, 175, 55, 0.5);
+  --ring-gold:    0 0 0 1px var(--mythos-gold);
+  --ring-focus:   0 0 0 1px var(--mythos-gold), 0 0 16px rgba(212, 175, 55, 0.35), inset 0 0 24px rgba(212, 175, 55, 0.08);
+
+  /* ---------- Motion ---------- */
+  --ease-out:    cubic-bezier(0.4, 0.0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0.0, 0.2, 1);
+  --dur-fast:   150ms;
+  --dur:        200ms;
+  --dur-med:    400ms;
+  --dur-slow:   800ms;
+}
+
+/* ============================================================
+   Semantic element styles — drop into any doc to get the vibe
+   ============================================================ */
+
+html, body {
+  background: var(--bg-0);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, .h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-display-lg);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--fg-accent);
+  line-height: var(--lh-display);
+  margin: 0;
+}
+h2, .h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--fs-display-md);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--fg-accent);
+  line-height: var(--lh-display);
+  margin: 0;
+}
+h3, .h3 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: var(--fs-display-sm);
+  color: var(--fg-1);
+  line-height: 1.25;
+  margin: 0;
+}
+h4, .h4, .label {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--fg-2);
+  margin: 0;
+}
+
+.manuscript {
+  font-family: var(--font-serif);
+  font-size: var(--fs-body-lg);
+  line-height: var(--lh-manuscript);
+  color: var(--fg-1);
+  font-variant-numeric: oldstyle-nums;
+}
+
+p {
+  margin: 0 0 var(--sp-4) 0;
+  color: var(--fg-1);
+}
+
+small, .caption {
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  color: var(--fg-3);
+}
+
+code, .mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--fg-accent-deep);
+}
+
+a {
+  color: var(--fg-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border-gold-med);
+  transition: color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
+}
+a:hover {
+  color: var(--mythos-gold-bright);
+  border-bottom-color: var(--mythos-gold);
+}
+
+/* The signature gold-glow pulse — use sparingly on active elements. */
+@keyframes mythos-pulse {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(212, 175, 55, 0.40)); }
+  50%      { filter: drop-shadow(0 0 16px rgba(212, 175, 55, 0.70)); }
+}
+.mythos-pulse { animation: mythos-pulse 2400ms var(--ease-in-out) infinite; }
+
+/* Variable token — the editor's [@ElaraVance] syntax. */
+.var-token {
+  font-family: var(--font-mono);
+  color: var(--fg-accent);
+  background: var(--mythos-gold-wash);
+  border: 1px solid var(--border-gold-med);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  font-size: 0.9em;
+}
