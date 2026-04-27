@@ -161,16 +161,50 @@ Add new commands by writing `#[tauri::command] fn my_thing(...)` and listing it 
 
 ## Roadmap (what to build next)
 
-This scaffold gets the design running natively. To make it a real product:
+This scaffold now has the first production-shaped project loop: `.mythos` project creation/open/save, document import, a TipTap manuscript editor, rich-text controls, variable token insertion, autosave for saved projects, and Rust-side project validation.
+
+## Verification
+
+Use the fast check during normal feature work:
+
+```bash
+npm run verify:fast
+```
+
+That runs the Vite production build plus Rust `cargo check` and `cargo test`.
+
+Dependency audit is separate:
+
+```bash
+npm run verify:audit
+```
+
+Only run the full bundle check when packaging/native behavior changed or when preparing a test build:
+
+```bash
+npm run verify:full
+```
+
+The full build creates macOS artifacts at:
+
+- `src-tauri/target/release/bundle/macos/Mythos.app`
+- `src-tauri/target/release/bundle/dmg/Mythos_0.1.0_aarch64.dmg`
+
+---
+
+## Roadmap (what to build next)
+
+The remaining work is to deepen the product behavior behind the UI:
 
 ### Persistence
-- [ ] Project storage — define a `.mythos` file format (probably SQLite or a folder bundle)
+- [x] Project storage — define a `.mythos` file format
+- [ ] Expand the folder bundle around each project for imported assets, exports, and local indexes
 - [ ] Wire `tauri-plugin-store` for user prefs (last-open project, window size, theme)
 - [ ] Replace localStorage in `App.jsx` (route memory) with the store plugin
 
 ### File I/O
-- [ ] "New / Open / Save" via `tauri-plugin-dialog`
-- [ ] Import: Markdown, plain text
+- [x] "New / Open / Save" via `tauri-plugin-dialog`
+- [x] Import: Markdown, plain text
 - [ ] Export: PDF, EPUB, DOCX (the `pulldown-cmark` + `printpdf` crates are good starting points)
 
 ### Real AI integration

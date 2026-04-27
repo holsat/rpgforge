@@ -7,6 +7,8 @@ cmake-build-*/
 *.swp
 *.swo
 crashinfo.txt
+.DS_Store
+/docs/mythos-app/
 
 # Generated icons (keep SVG source and final rpgforge.svg)
 icons/option*.png
