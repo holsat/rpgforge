@@ -206,6 +206,20 @@ export function App() {
     }
   }, [handleSaveProjectAs, projectData, projectPath]);
 
+  const handleDocumentChange = React.useCallback((documentId, patch) => {
+    setProjectData(project => {
+      if (!project) return project;
+      return {
+        ...project,
+        documents: project.documents.map(document => (
+          document.id === documentId ? { ...document, ...patch } : document
+        )),
+      };
+    });
+    setDirty(true);
+    setProjectStatus('Unsaved changes');
+  }, []);
+
   React.useEffect(() => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
@@ -229,7 +243,7 @@ export function App() {
 
   const projectName = projectData?.name || t.projectName;
   const screens = {
-    editor:    <EditorScreen tokenStyle={t.tokenStyle} project={projectName} projectData={projectData}/>,
+    editor:    <EditorScreen tokenStyle={t.tokenStyle} project={projectName} projectData={projectData} onDocumentChange={handleDocumentChange}/>,
     codex:     <CodexScreen projectData={projectData}/>,
     corkboard: <CorkboardScreen project={projectName}/>,
     timeline:  <TimelineScreen/>,

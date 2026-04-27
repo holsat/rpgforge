@@ -180,6 +180,44 @@
 .manuscript-body em { color: var(--fg-1); font-style: italic; }
 .manuscript-body .place { font-style: italic; color: var(--mythos-parchment-dim); }
 
+.tiptap-manuscript {
+  min-height: 480px;
+}
+.tiptap-manuscript .ProseMirror {
+  min-height: 480px;
+  outline: none;
+  caret-color: var(--mythos-gold);
+}
+.tiptap-manuscript .ProseMirror:focus {
+  outline: none;
+}
+.tiptap-manuscript .ProseMirror p.is-editor-empty:first-child::before {
+  content: 'Begin the thread...';
+  color: var(--fg-3);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.tiptap-token {
+  cursor: text;
+}
+.tiptap-token::after {
+  content: attr(data-kind);
+  display: none;
+}
+.editor[data-token-style="bracket"] .tiptap-token {
+  background: transparent;
+  border-color: transparent;
+  padding: 0 2px;
+}
+.editor[data-token-style="inline"] .tiptap-token {
+  background: rgba(212, 175, 55, 0.04);
+  border-color: transparent;
+  border-bottom: 1px solid var(--border-gold-med);
+  border-radius: 0;
+  padding: 0 1px;
+}
+
 /* Caret */
 .caret {
   display: inline-block;

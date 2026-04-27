@@ -1,15 +1,12 @@
 import React from 'react';
 import { Icon, Ember } from '../components/icons.jsx';
+import { MythosEditor } from '../components/MythosEditor.jsx';
 import { activeDocument, FALLBACK_PROJECT } from '../lib/projectBridge.js';
 
 // Mythos — Editor screen (Draft view)
 // Manuscript with variable autocomplete + inline AI menu + Muse sidebar
 
 const FALLBACK_VARIABLES = FALLBACK_PROJECT.variables;
-
-function Tok({ children, style = 'pill', onClick }) {
-  return <span className={`tok style-${style}`} onClick={onClick}>{children}</span>;
-}
 
 function VariableAutocomplete({ variables }) {
   const [active, setActive] = React.useState(0);
@@ -104,32 +101,6 @@ function MuseChat() {
   );
 }
 
-function renderManuscript(text, tokenStyle, variables) {
-  const tokenPattern = /\[@[A-Za-z0-9_]+\]?/g;
-
-  return text.split(/\n{2,}/).map((paragraph, paragraphIndex) => {
-    const parts = [];
-    let lastIndex = 0;
-    for (const match of paragraph.matchAll(tokenPattern)) {
-      if (match.index > lastIndex) {
-        parts.push(paragraph.slice(lastIndex, match.index));
-      }
-      const token = match[0];
-      parts.push(
-        <Tok key={`${paragraphIndex}-${match.index}`} style={tokenStyle}>
-          {token}
-        </Tok>
-      );
-      lastIndex = match.index + token.length;
-    }
-    if (lastIndex < paragraph.length) {
-      parts.push(paragraph.slice(lastIndex));
-    }
-
-    return <p key={paragraphIndex}>{parts}</p>;
-  });
-}
-
 function ProjectTree({ project, document, variables }) {
   return (
     <aside className="project-tree">
@@ -178,14 +149,18 @@ function ProjectTree({ project, document, variables }) {
   );
 }
 
-export function EditorScreen({ tokenStyle, project, projectData }) {
+export function EditorScreen({ tokenStyle, project, projectData, onDocumentChange }) {
   const [showAC, setShowAC] = React.useState(true);
   const [showAI, setShowAI] = React.useState(false);
   const document = activeDocument(projectData) || activeDocument(FALLBACK_PROJECT);
   const variables = projectData?.variables?.length ? projectData.variables : FALLBACK_VARIABLES;
+  const handleDocumentChange = React.useCallback((patch) => {
+    if (!document?.id) return;
+    onDocumentChange?.(document.id, patch);
+  }, [document?.id, onDocumentChange]);
 
   return (
-    <div className="editor">
+    <div className="editor" data-token-style={tokenStyle}>
       <ProjectTree project={project} document={document} variables={variables}/>
       <section className="ms-wrap">
         <div className="ms-breadcrumb">
@@ -217,7 +192,11 @@ export function EditorScreen({ tokenStyle, project, projectData }) {
               fontSize: 'var(--ms-font-size, 19px)',
               lineHeight: 'var(--ms-line-height, 1.78)',
             }}>
-              {renderManuscript(document?.body || '', tokenStyle, variables)}
+              <MythosEditor
+                document={document}
+                variables={variables}
+                onDocumentChange={handleDocumentChange}
+              />
               {showAC && (
                 <p style={{position:'relative'}}>
                   <span className="caret"/>
