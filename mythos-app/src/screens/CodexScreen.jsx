@@ -1,22 +1,8 @@
 import React from 'react';
 import { Icon, Ember } from '../components/icons.jsx';
+import { FALLBACK_PROJECT } from '../lib/projectBridge.js';
 
 // Mythos — Codex (character dossier)
-
-const CHARACTERS = [
-  { id:'lirael', name:'Lirael',   role:'Elven Warrior', glyph:'LI', active:true },
-  { id:'kaelen', name:'Kaelen',   role:'Shadowblade',   glyph:'KA' },
-  { id:'aria',   name:'Aria',     role:'Mage',          glyph:'AR' },
-  { id:'brom',   name:'Brom',     role:'Warrior',       glyph:'BR' },
-  { id:'rhion',  name:'Rhion',    role:'Oracle',        glyph:'RH' },
-  { id:'lyra',   name:'Lyra',     role:'Rogue',         glyph:'LY' },
-  { id:'silas',  name:'Silas',    role:'Warlock',       glyph:'SI' },
-];
-const LOCATIONS = [
-  { id:'aethelgard', name:'Aethelgard', role:'Capital City' },
-  { id:'highpass',   name:'Highpass Inn', role:'Crossroads' },
-  { id:'shadowvale', name:'Shadowvale', role:'Hidden Valley' },
-];
 
 function StatBar({ name, pct }) {
   return (
@@ -28,8 +14,12 @@ function StatBar({ name, pct }) {
   );
 }
 
-export function CodexScreen() {
-  const [active, setActive] = React.useState('lirael');
+export function CodexScreen({ projectData }) {
+  const characters = projectData?.characters?.length ? projectData.characters : FALLBACK_PROJECT.characters;
+  const locations = projectData?.locations?.length ? projectData.locations : FALLBACK_PROJECT.locations;
+  const [active, setActive] = React.useState(characters[0]?.id || 'lirael');
+  const activeCharacter = characters.find(character => character.id === active) || characters[0];
+
   return (
     <div className="codex">
       <aside className="codex-list">
@@ -39,12 +29,12 @@ export function CodexScreen() {
         </div>
 
         <div className="codex-cat">
-          <Icon name="users" size={11}/> Characters <span className="count">{CHARACTERS.length}</span>
+          <Icon name="users" size={11}/> Characters <span className="count">{characters.length}</span>
         </div>
-        {CHARACTERS.map(c => (
+        {characters.map(c => (
           <div key={c.id} className={'codex-entry' + (c.id === active ? ' active' : '')}
                onClick={() => setActive(c.id)}>
-            <div className="frame">{c.glyph}</div>
+            <div className="frame">{c.glyph || c.name.slice(0, 2).toUpperCase()}</div>
             <div className="info">
               <div className="name">{c.name}</div>
               <div className="role">{c.role}</div>
@@ -54,9 +44,9 @@ export function CodexScreen() {
         ))}
 
         <div className="codex-cat">
-          <Icon name="map" size={11}/> Locations <span className="count">{LOCATIONS.length}</span>
+          <Icon name="map" size={11}/> Locations <span className="count">{locations.length}</span>
         </div>
-        {LOCATIONS.map(l => (
+        {locations.map(l => (
           <div key={l.id} className="codex-entry">
             <div className="frame"><Icon name="pin" size={14}/></div>
             <div className="info">
@@ -72,7 +62,7 @@ export function CodexScreen() {
           <div className="crumb">
             The Codex <span style={{opacity:0.4, margin:'0 6px'}}>›</span>
             Characters <span style={{opacity:0.4, margin:'0 6px'}}>›</span>
-            <span className="here">Lirael</span>
+            <span className="here">{activeCharacter?.name || 'Lirael'}</span>
           </div>
           <div className="right">
             <button className="btn ghost"><Icon name="graph" size={12}/> Relationship Map</button>
@@ -103,7 +93,9 @@ export function CodexScreen() {
 
             <div className="dossier-header">
               <h1>DOSSIER</h1>
-              <div className="subtitle">Lirael of the Silverwood, Sworn Blade of the Verdant Court</div>
+              <div className="subtitle">
+                {activeCharacter?.name || 'Lirael'} · {activeCharacter?.role || 'Elven Warrior'}
+              </div>
 
               <div className="stats">
                 <StatBar name="Strength"     pct={85}/>

@@ -9,6 +9,7 @@ import { AtlasScreen } from './screens/AtlasScreen.jsx';
 import { WeaverScreen } from './screens/WeaverScreen.jsx';
 import { SettingsScreen } from './screens/SettingsScreen.jsx';
 import { FocusMode } from './screens/FocusMode.jsx';
+import { getSampleProject } from './lib/projectBridge.js';
 
 // Mythos — App shell, rail, route state, focus mode toggle
 
@@ -94,6 +95,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 export function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [projectData, setProjectData] = React.useState(null);
   const [route, setRoute] = React.useState(() => {
     try { return localStorage.getItem('mythos-route') || 'editor'; } catch { return 'editor'; }
   });
@@ -102,6 +104,14 @@ export function App() {
   React.useEffect(() => {
     try { localStorage.setItem('mythos-route', route); } catch {}
   }, [route]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    getSampleProject().then(project => {
+      if (!cancelled) setProjectData(project);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   React.useEffect(() => {
     const onKey = (e) => {
@@ -124,10 +134,11 @@ export function App() {
     r.style.setProperty('--ms-line-height', t.editorLineHeight);
   }, [t]);
 
+  const projectName = projectData?.name || t.projectName;
   const screens = {
-    editor:    <EditorScreen tokenStyle={t.tokenStyle} project={t.projectName}/>,
-    codex:     <CodexScreen/>,
-    corkboard: <CorkboardScreen project={t.projectName}/>,
+    editor:    <EditorScreen tokenStyle={t.tokenStyle} project={projectName} projectData={projectData}/>,
+    codex:     <CodexScreen projectData={projectData}/>,
+    corkboard: <CorkboardScreen project={projectName}/>,
     timeline:  <TimelineScreen/>,
     atlas:     <AtlasScreen/>,
     weaver:    <WeaverScreen/>,
@@ -136,7 +147,7 @@ export function App() {
 
   return (
     <div className="app-shell" data-screen-label={`Mythos · ${route}`}>
-      <TitleBar project={t.projectName}/>
+      <TitleBar project={projectName}/>
       <div className="app-body">
         <Rail route={route} setRoute={setRoute} onFocus={() => setFocusMode(true)}/>
         <main className="screen">{screens[route]}</main>

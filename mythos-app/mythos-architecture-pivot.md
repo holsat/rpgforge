@@ -26,6 +26,12 @@ To achieve native Apple performance and iPadOS support without discarding our ro
 
 ## Execution Phases
 
+### Current Implementation Status
+*   **Prototype shell:** React + Vite + Tauri builds successfully into a macOS `.app` and `.dmg`.
+*   **Project contract:** A first `.mythos` JSON shape is represented in Rust as `MythosProject`, with documents, variables, characters, and locations.
+*   **Bridge commands:** Tauri exposes `sample_project`, `load_project`, and `save_project` commands. The React app consumes the project contract through a browser-safe bridge, so the interface still renders in Vite without Tauri.
+*   **Next boundary:** Replace the static manuscript renderer with TipTap, then connect open/save dialogs to the project commands.
+
 ### Phase 1: The Core Decoupling
 *   Audit `src/` to identify tight coupling between UI (`QWidgets`, `QMainWindow`) and Data Services.
 *   Refactor `ProjectManager`, `LibrarianService`, and `LLMService` to emit agnostic signals/events rather than manipulating UI elements directly.

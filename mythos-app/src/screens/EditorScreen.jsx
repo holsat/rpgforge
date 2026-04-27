@@ -1,32 +1,26 @@
 import React from 'react';
 import { Icon, Ember } from '../components/icons.jsx';
+import { activeDocument, FALLBACK_PROJECT } from '../lib/projectBridge.js';
 
 // Mythos — Editor screen (Draft view)
 // Manuscript with variable autocomplete + inline AI menu + Muse sidebar
 
-const VARIABLES = [
-  { name: '[@ElaraVance]',  kind: 'Character' },
-  { name: '[@HighpassInn]', kind: 'Location' },
-  { name: '[@Aethelgard]',  kind: 'Location' },
-  { name: '[@DuskWar]',     kind: 'Concept' },
-  { name: '[@TheShard]',    kind: 'Artifact' },
-  { name: '[@Kaelen]',      kind: 'Character' },
-];
+const FALLBACK_VARIABLES = FALLBACK_PROJECT.variables;
 
 function Tok({ children, style = 'pill', onClick }) {
   return <span className={`tok style-${style}`} onClick={onClick}>{children}</span>;
 }
 
-function VariableAutocomplete({ tokenStyle }) {
+function VariableAutocomplete({ variables }) {
   const [active, setActive] = React.useState(0);
   return (
     <span className="autocomplete" style={{ left: '50%', top: '6px' }}>
       <span className="ac-list">
-        {VARIABLES.map((v, i) => (
-          <span key={v.name} className={'ac-row' + (i === active ? ' active' : '')}
+        {variables.map((v, i) => (
+          <span key={v.token} className={'ac-row' + (i === active ? ' active' : '')}
                onMouseEnter={() => setActive(i)}>
             <span className="num">{i + 1}.</span>
-            <span className="name">{v.name}</span>
+            <span className="name">{v.token}</span>
             <span className="kind">{v.kind}</span>
           </span>
         ))}
@@ -110,7 +104,33 @@ function MuseChat() {
   );
 }
 
-function ProjectTree({ project }) {
+function renderManuscript(text, tokenStyle, variables) {
+  const tokenPattern = /\[@[A-Za-z0-9_]+\]?/g;
+
+  return text.split(/\n{2,}/).map((paragraph, paragraphIndex) => {
+    const parts = [];
+    let lastIndex = 0;
+    for (const match of paragraph.matchAll(tokenPattern)) {
+      if (match.index > lastIndex) {
+        parts.push(paragraph.slice(lastIndex, match.index));
+      }
+      const token = match[0];
+      parts.push(
+        <Tok key={`${paragraphIndex}-${match.index}`} style={tokenStyle}>
+          {token}
+        </Tok>
+      );
+      lastIndex = match.index + token.length;
+    }
+    if (lastIndex < paragraph.length) {
+      parts.push(paragraph.slice(lastIndex));
+    }
+
+    return <p key={paragraphIndex}>{parts}</p>;
+  });
+}
+
+function ProjectTree({ project, document, variables }) {
   return (
     <aside className="project-tree">
       <div className="tree-section">
@@ -123,13 +143,13 @@ function ProjectTree({ project }) {
           <span className="ico"><Icon name="chevron-down" size={11}/></span>
           Drafts
         </div>
-        <div className="tree-row nested-2">Chapter 1.md</div>
-        <div className="tree-row nested-2">Chapter 2.md</div>
         <div className="tree-row nested-2 active">
           <span className="ico"><Icon name="feather" size={11}/></span>
-          Chapter 3.md
-          <span className="meta">1.2k</span>
+          {document?.title || 'Chapter 3.md'}
+          <span className="meta">{document?.wordCount || '1.2k'}</span>
         </div>
+        <div className="tree-row nested-2">Chapter 1.md</div>
+        <div className="tree-row nested-2">Chapter 2.md</div>
         <div className="tree-row nested">Research</div>
         <div className="tree-row nested">Assets</div>
         <div className="tree-row nested">Notes</div>
@@ -147,23 +167,26 @@ function ProjectTree({ project }) {
       </div>
 
       <div className="tree-section">
-        <h4>Variables <span className="add">{VARIABLES.length}</span></h4>
-        <div className="tree-row nested" style={{fontFamily:'var(--font-mono)',fontSize:11}}>[@ElaraVance]</div>
-        <div className="tree-row nested" style={{fontFamily:'var(--font-mono)',fontSize:11}}>[@HighpassInn]</div>
-        <div className="tree-row nested" style={{fontFamily:'var(--font-mono)',fontSize:11}}>[@Aethelgard]</div>
-        <div className="tree-row nested" style={{fontFamily:'var(--font-mono)',fontSize:11}}>[@DuskWar]</div>
+        <h4>Variables <span className="add">{variables.length}</span></h4>
+        {variables.slice(0, 6).map(variable => (
+          <div key={variable.id} className="tree-row nested" style={{fontFamily:'var(--font-mono)',fontSize:11}}>
+            {variable.token}
+          </div>
+        ))}
       </div>
     </aside>
   );
 }
 
-export function EditorScreen({ tokenStyle, project }) {
+export function EditorScreen({ tokenStyle, project, projectData }) {
   const [showAC, setShowAC] = React.useState(true);
   const [showAI, setShowAI] = React.useState(false);
+  const document = activeDocument(projectData) || activeDocument(FALLBACK_PROJECT);
+  const variables = projectData?.variables?.length ? projectData.variables : FALLBACK_VARIABLES;
 
   return (
     <div className="editor">
-      <ProjectTree project={project}/>
+      <ProjectTree project={project} document={document} variables={variables}/>
       <section className="ms-wrap">
         <div className="ms-breadcrumb">
           <Icon name="home" size={13}/>
@@ -171,9 +194,9 @@ export function EditorScreen({ tokenStyle, project }) {
           <span className="sep">/</span>
           <span>{project}</span>
           <span className="sep">/</span>
-          <span>Drafts</span>
+          <span>{document?.path?.split('/')[0] || 'Drafts'}</span>
           <span className="sep">/</span>
-          <span className="here">Chapter 3 — The Labyrinth</span>
+          <span className="here">{document?.title || 'Chapter 3 — The Labyrinth'}</span>
           <span className="right">
             <button className="btn" onClick={() => { setShowAC(false); setShowAI(s => !s); }}>
               <Icon name="sparkle" size={12}/> AI
@@ -187,27 +210,21 @@ export function EditorScreen({ tokenStyle, project }) {
             <div className="ms-eyebrow">Part I · The Call</div>
             <div className="ms-chapter-glyph">
               <span className="glyph"><Icon name="sigil-flame" size={28}/></span>
-              <h1 className="ms-chapter">Chapter III · The Labyrinth</h1>
+              <h1 className="ms-chapter">{document?.title || 'Chapter III · The Labyrinth'}</h1>
             </div>
 
             <div className="manuscript-body" style={{
               fontSize: 'var(--ms-font-size, 19px)',
               lineHeight: 'var(--ms-line-height, 1.78)',
             }}>
-              <p>
-                The cobblestones of Oakhaven were slick with evening rain.{' '}
-                <Tok style={tokenStyle}>[@ElaraVance]</Tok> pulled her cloak tighter, her eyes scanning the shadowy market stalls. Her goal lay beyond, in the mysterious <Tok style={tokenStyle}>[@HighpassInn]</Tok>. The air was thick with tension; the whispers of the looming <Tok style={tokenStyle}>[@DuskWar]</Tok> hung heavy upon every threshold.
-              </p>
-              <p style={{position:'relative'}}>
-                At the end of the alley, where a single lantern threw its small{' '}
-                <span className="selected-word">amber</span>{showAI && <InlineAIMenu onClose={() => setShowAI(false)}/>} circle against the wet stone, she paused. The cursor of memory hovered over a name she had not spoken aloud since <em>Aethel</em>: <Tok style={tokenStyle}>[@Highpass</Tok>{showAC && <span style={{position:'relative',display:'inline-block'}}><span className="caret"/><VariableAutocomplete tokenStyle={tokenStyle}/></span>}
-              </p>
-              <p>
-                She drew breath and stepped past the threshold. Inside, the firelight made an island of warmth amid the chill. <span className="place">Brom the innkeep</span> looked up, his eye catching the silver clasp at her throat — the same clasp her mother had pressed into her hand the night the <Tok style={tokenStyle}>[@DuskWar]</Tok> began.
-              </p>
-              <p>
-                <em>Heading Stalls.</em> She ordered ale she would not drink and watched the door. The <Tok style={tokenStyle}>[@TheShard]</Tok> was here, somewhere — bound, she suspected, to the corner table where a hooded figure sat with their back to the room. She had crossed three kingdoms for this moment. She would not waste it on hesitation.
-              </p>
+              {renderManuscript(document?.body || '', tokenStyle, variables)}
+              {showAC && (
+                <p style={{position:'relative'}}>
+                  <span className="caret"/>
+                  <VariableAutocomplete variables={variables}/>
+                </p>
+              )}
+              {showAI && <InlineAIMenu onClose={() => setShowAI(false)}/>}
             </div>
           </div>
         </div>
@@ -215,7 +232,7 @@ export function EditorScreen({ tokenStyle, project }) {
         <div className="statusbar">
           <span className="gold">The Ledger</span>
           <span className="sep">|</span>
-          <span className="word-count">1,224 words</span>
+          <span className="word-count">{document?.wordCount || 0} words</span>
           <span className="sep">|</span>
           <span>Exploration: <span className="gold">The Shattered Isles</span></span>
           <span className="right">
