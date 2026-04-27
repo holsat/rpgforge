@@ -1,5 +1,5 @@
 <!DOCTYPE gui SYSTEM "kpartgui.dtd">
-<gui name="rpgforge" version="3">
+<gui name="rpgforge" version="4">
   <MenuBar>
     <Menu name="file">
       <text>&amp;File</text>
@@ -33,6 +33,9 @@
       <Action name="toggle_preview"/>
       <Action name="project_preview_mode"/>
       <Action name="focus_mode"/>
+      <Separator/>
+      <Action name="view_entity_graph"/>
+      <Action name="nav_goto_entity"/>
     </Menu>
     <Menu name="ai">
       <text>&amp;AI Assistant</text>
@@ -59,6 +62,8 @@
     <Separator/>
     <Action name="toggle_preview"/>
     <Action name="project_preview_mode"/>
+    <Separator/>
+    <Action name="view_entity_graph"/>
     <Separator/>
     <Action name="focus_mode"/>
     <Spacer/>
