@@ -544,23 +544,84 @@ void LibrarianService::extractSemantic(const QString &filePath)
     QString content = in.readAll();
     file.close();
 
+    // Extended prompt for the relationship-graph work. The model is asked to
+    // emit a richer payload than the legacy {entity, type, attributes}: it
+    // also provides a one-line summary, common aliases, tags, an optional
+    // containment parent, an optional era, and typed relationships to other
+    // named entities. The librarian then does a three-pass write so that
+    // relationship targets resolve correctly across documents that introduce
+    // entities in different orders.
+    //
+    // The "type" vocabulary is the user-approved scope:
+    //   character, place, time, concept, rule, myth, magic
+    // (legacy categories like Monster/Item/Class/Spell are still accepted
+    // and stored verbatim — graph filters use whatever the LLM emits).
     QString prompt = QStringLiteral(
-        "You are the Librarian Agent for RPG Forge. Your task is to extract structured game design data from the following text.\n"
-        "Identify Entities (Monsters, Items, Classes, Spells, etc.) and their Attributes (Stats, costs, descriptions).\n"
-        "Return the data in a strict JSON array of objects format: \n"
-        "[{\"entity\": \"Name\", \"type\": \"Category\", \"attributes\": {\"key\": \"value\"}}]\n\n"
+        "You are the Librarian Agent for RPG Forge. Extract a relationship graph "
+        "from the supplied text. Output ONLY a JSON array — no markdown fences, "
+        "no commentary.\n\n"
+        "Each array element describes one named entity:\n"
+        "  - entity         : the canonical name (string, required).\n"
+        "  - type           : one of: character, place, time, concept, rule, myth, "
+        "magic. Required.\n"
+        "  - summary        : ONE short sentence (≤ 25 words) describing this entity. Required.\n"
+        "  - aliases        : array of nicknames, titles, alternate spellings (e.g. "
+        "[\"Ryz\", \"Captain Ryzen\"]). Optional; empty array if none.\n"
+        "  - tags           : array of secondary descriptors (e.g. [\"protagonist\", "
+        "\"sailor\"]). Optional.\n"
+        "  - parent         : name of the containing entity (a Place inside a Region, "
+        "a Sub-rule inside a Rule). Use null when no containment applies.\n"
+        "  - era            : the in-world era / period this entity belongs to. Use "
+        "null when irrelevant.\n"
+        "  - attributes     : object of free-form key→value descriptive properties.\n"
+        "  - relationships  : array of {\"target\": \"Name\", \"type\": \"verb_phrase\"} "
+        "objects. Use existing entity names as targets. Examples: \"friend\", "
+        "\"member_of\", \"located_in\", \"rules\", \"manifests\", \"opposes\".\n\n"
+        "Schema example:\n"
+        "[{\n"
+        "  \"entity\": \"Ryzen\", \"type\": \"character\",\n"
+        "  \"summary\": \"A young sailor whose journey leads him into the Phoenix Cult's orbit.\",\n"
+        "  \"aliases\": [\"Ryz\"], \"tags\": [\"protagonist\", \"sailor\"],\n"
+        "  \"parent\": null, \"era\": null,\n"
+        "  \"attributes\": {\"role\": \"sailor\"},\n"
+        "  \"relationships\": [\n"
+        "    {\"target\": \"Sah'mokhan\", \"type\": \"friend\"},\n"
+        "    {\"target\": \"Phoenix Cult\", \"type\": \"member_of\"}\n"
+        "  ]\n"
+        "}]\n\n"
+        "Rules:\n"
+        " - Do not invent entities not implied by the text.\n"
+        " - Reuse the same canonical name for repeat mentions; list nicknames as aliases.\n"
+        " - When a relationship's target is not also an entity in your output, still "
+        "include it — it may resolve against an entity from a previous document.\n\n"
         "Text to analyze:\n"
     ) + content;
 
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
-    LLMProvider provider = static_cast<LLMProvider>(settings.value(QStringLiteral("librarian/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt());
-    QString model = settings.value(QStringLiteral("librarian/model"), (provider == LLMProvider::Ollama ? QStringLiteral("llama3") : QString())).toString();
+    // Settings dialog (AI Services tab) writes the librarian provider
+    // and model under librarian/librarian_provider and
+    // librarian/librarian_model — that is the keyPrefix/id_property
+    // pattern used by every agent row. Reading librarian/provider /
+    // librarian/model (legacy keys) silently ignored every change the
+    // user made in Settings. Fall back to the legacy keys ONLY if the
+    // new keys are absent so existing user values aren't lost.
+    const int provIdx = settings.value(
+        QStringLiteral("librarian/librarian_provider"),
+        settings.value(QStringLiteral("librarian/provider"),
+                       settings.value(QStringLiteral("llm/provider"), 0))).toInt();
+    LLMProvider provider = static_cast<LLMProvider>(provIdx);
+    QString model = settings.value(
+        QStringLiteral("librarian/librarian_model"),
+        settings.value(QStringLiteral("librarian/model"),
+                       provider == LLMProvider::Ollama
+                           ? QStringLiteral("llama3")
+                           : QString())).toString();
 
     LLMRequest request;
     request.provider = provider;
     request.model = model;
     request.serviceName = i18n("Librarian Agent");
-    request.settingsKey = QStringLiteral("librarian/model");
+    request.settingsKey = QStringLiteral("librarian/librarian_model");
     request.messages << LLMMessage{QStringLiteral("system"), QStringLiteral("You extract structured RPG data as JSON.")};
     request.messages << LLMMessage{QStringLiteral("user"), prompt};
     request.stream = false;
@@ -576,25 +637,112 @@ void LibrarianService::extractSemantic(const QString &filePath)
                 doc = QJsonDocument::fromJson(response.mid(start, end - start + 1).toUtf8());
             }
         }
+        if (!doc.isArray()) return;
 
-        if (doc.isArray()) {
-            QJsonArray entities = doc.array();
-            for (const QJsonValue &val : entities) {
-                QJsonObject obj = val.toObject();
-                QString name = obj.value(QStringLiteral("entity")).toString();
-                QString type = obj.value(QStringLiteral("type")).toString();
-                QJsonObject attrs = obj.value(QStringLiteral("attributes")).toObject();
+        const QJsonArray entities = doc.array();
+        LibrarianDatabase *db = weakThis->m_db;
 
-                if (!name.isEmpty()) {
-                    qint64 id = weakThis->m_db->addEntity(name, type, filePath);
-                    for (auto it = attrs.begin(); it != attrs.end(); ++it) {
-                        weakThis->m_db->setAttribute(id, it.key(), it.value().toVariant());
-                    }
-                    Q_EMIT weakThis->entityUpdated(id);
+        // Pass 1: upsert each entity (reuse existing by canonical name when
+        // present so repeat mentions across files don't fragment), set
+        // summary / era / attributes, register the canonical name + aliases.
+        // We collect per-element ids so passes 2 and 3 don't have to re-resolve.
+        QVector<qint64> elementIds(entities.size(), -1);
+
+        for (int i = 0; i < entities.size(); ++i) {
+            const QJsonObject obj = entities[i].toObject();
+            const QString name = obj.value(QStringLiteral("entity")).toString().trimmed();
+            const QString type = obj.value(QStringLiteral("type")).toString().trimmed();
+            if (name.isEmpty()) continue;
+
+            // Dedupe by name across documents. The first document to mention
+            // an entity creates the row; subsequent mentions reuse it. The
+            // alias index (which addEntity populates with the canonical name)
+            // makes this a single index hit.
+            qint64 id = db->resolveEntityByName(name);
+            if (id < 0) {
+                id = db->addEntity(name, type, filePath);
+                if (id < 0) continue;
+            } else if (!type.isEmpty() && db->getEntityType(id).isEmpty()) {
+                // Patch in the type if the original creator left it blank.
+                db->updateEntity(id, name, type);
+            }
+            elementIds[i] = id;
+
+            const QString summary = obj.value(QStringLiteral("summary")).toString().trimmed();
+            if (!summary.isEmpty()) db->setEntitySummary(id, summary);
+            const QString era = obj.value(QStringLiteral("era")).toString().trimmed();
+            if (!era.isEmpty()) db->setEntityEra(id, era);
+
+            const QJsonObject attrs = obj.value(QStringLiteral("attributes")).toObject();
+            for (auto it = attrs.begin(); it != attrs.end(); ++it) {
+                db->setAttribute(id, it.key(), it.value().toVariant());
+            }
+        }
+
+        // Pass 2: aliases + tags. Done after pass 1 so that an entity
+        // referenced as a relationship target by its alias can still be
+        // resolved during pass 3.
+        for (int i = 0; i < entities.size(); ++i) {
+            const qint64 id = elementIds[i];
+            if (id < 0) continue;
+            const QJsonObject obj = entities[i].toObject();
+
+            const QJsonArray aliases = obj.value(QStringLiteral("aliases")).toArray();
+            for (const QJsonValue &av : aliases) {
+                const QString a = av.toString().trimmed();
+                if (!a.isEmpty()) db->addAlias(id, a, /*isPrimary=*/false);
+            }
+
+            const QJsonArray tags = obj.value(QStringLiteral("tags")).toArray();
+            for (const QJsonValue &tv : tags) {
+                const QString t = tv.toString().trimmed();
+                if (!t.isEmpty()) db->addTag(id, t);
+            }
+        }
+
+        // Pass 3: containment + peer relationships. Both go through the
+        // alias index. Targets that don't resolve get logged + skipped —
+        // they'll typically resolve when the document that introduces
+        // them gets processed.
+        for (int i = 0; i < entities.size(); ++i) {
+            const qint64 id = elementIds[i];
+            if (id < 0) continue;
+            const QJsonObject obj = entities[i].toObject();
+
+            const QString parentName = obj.value(QStringLiteral("parent")).toString().trimmed();
+            if (!parentName.isEmpty()) {
+                const qint64 parentId = db->resolveEntityByName(parentName);
+                if (parentId > 0) {
+                    db->setEntityParent(id, parentId);
+                } else {
+                    qDebug() << "Librarian: parent" << parentName
+                              << "for entity" << db->getEntityName(id)
+                              << "not yet known; will retry on next pass";
                 }
             }
-            weakThis->scanFile(filePath); 
+
+            const QJsonArray rels = obj.value(QStringLiteral("relationships")).toArray();
+            for (const QJsonValue &rv : rels) {
+                const QJsonObject ro = rv.toObject();
+                const QString targetName = ro.value(QStringLiteral("target")).toString().trimmed();
+                const QString relType = ro.value(QStringLiteral("type")).toString().trimmed();
+                if (targetName.isEmpty() || relType.isEmpty()) continue;
+
+                qint64 targetId = db->resolveEntityByName(targetName);
+                if (targetId < 0) {
+                    qDebug() << "Librarian: relationship target" << targetName
+                              << "(from" << db->getEntityName(id)
+                              << ") not yet known; will retry on next pass";
+                    continue;
+                }
+                if (targetId == id) continue;     // self-loop — drop
+                db->upsertRelationship(id, targetId, relType, filePath, /*line=*/0, /*strength=*/0.7);
+            }
+
+            Q_EMIT weakThis->entityUpdated(id);
         }
+
+        weakThis->scanFile(filePath);
     });
 }
 

@@ -70,17 +70,20 @@ struct ContextSource {
 /**
  * \brief Synthesis depth. Controls whether the service does a single
  * retrieval-plus-generation pass, or a multi-hop pass that drafts an
- * initial answer, extracts gaps, and retrieves again before producing
- * the final output.
+ * initial answer, extracts gaps, retrieves again, and may iterate
+ * further until the model declares the gaps closed or the hop budget
+ * runs out.
  *
- * Comprehensive mode roughly doubles the LLM cost per request; it is
- * intended for synthesis-heavy use cases like LoreKeeper dossier
- * generation where breadth matters more than latency. Quick mode is
- * the default for interactive chat.
+ * Comprehensive mode multiplies the LLM cost per request by the number
+ * of hops actually taken (1 + draft cost per hop + 1 final synthesis).
+ * Bounded by RagAssistRequest::maxRetrievalHops. It is intended for
+ * synthesis-heavy use cases like LoreKeeper dossier generation where
+ * breadth matters more than latency. Quick mode is the default for
+ * interactive chat.
  */
 enum class SynthesisDepth {
     Quick,          // single retrieval, single generation
-    Comprehensive,  // expand -> retrieve -> draft+gaps -> retrieve -> final
+    Comprehensive,  // expand -> retrieve -> [draft+gaps -> retrieve]* -> final
 };
 
 /**
@@ -145,6 +148,13 @@ struct RagAssistRequest {
     // --- Pipeline mode ---
     SynthesisDepth depth = SynthesisDepth::Quick;
 
+    // Maximum number of gap-driven retrieval rounds in Comprehensive
+    // mode. The first hop is always taken (it is the original draft +
+    // gap pass); subsequent hops are taken only if the previous hop
+    // produced a non-empty INFORMATION GAPS list. Capped at 3 so the
+    // worst case is bounded. Ignored in Quick mode.
+    int maxRetrievalHops = 3;
+
     // Active file path (optional) — excluded from RAG retrieval so the
     // service doesn't send a file we already included as an extraSource.
     QString activeFilePath;
@@ -196,6 +206,22 @@ public:
                      const RagAssistCallbacks &callbacks);
 
     /**
+     * \brief Strip out (path/file.md) and [SOURCE: path/file.md]
+     * citations whose path doesn't actually exist in the project tree.
+     *
+     * Small or local LLMs occasionally hallucinate citations like
+     * "(manuscript.md)" that weren't in the supplied [SOURCE: ...]
+     * headers — this validator removes those before the user sees
+     * them. Citations pointing to real files are left untouched, so
+     * attribution to genuine sources is preserved.
+     *
+     * Public + static so unit tests and ProjectQAService can use the
+     * same canonical implementation.
+     */
+    static QString stripInvalidCitations(const QString &text,
+                                          const QString &projectPath);
+
+    /**
      * \brief Test-only injection seam for swapping in a mock LLMService.
      *
      * Production code uses LLMService::instance() — pass nullptr to
@@ -235,13 +261,24 @@ private:
                          const QString &expandedQuery,
                          std::function<void(QList<SearchResult>)> onDone);
 
-    // Comprehensive mode: retrieve → draft + gap-list → retrieve gaps →
-    // final. Two extra LLM calls versus Quick. Falls back to the same
-    // code path as Quick if the draft phase fails or produces no gaps.
+    // Comprehensive mode entry point: kicks off the iterative
+    // draft-gaps-retrieve loop with hop=1 and the initial passages.
     void runComprehensive(const RagAssistRequest &request,
                           const QList<SearchResult> &firstPassages,
                           const RagAssistCallbacks &callbacks,
                           const QString &requestId);
+
+    // One iteration of the gap-detection loop. Sends a draft+gaps prompt
+    // with the currently-accumulated passages; on a non-empty gap list,
+    // retrieves more passages, merges, and recurses with hop+1; on an
+    // empty gap list (or after maxRetrievalHops is reached, or on any
+    // failure) falls through to dispatchGeneration() with whatever
+    // passages have been accumulated so far.
+    void runIterativeHop(const RagAssistRequest &request,
+                         QList<SearchResult> accumulated,
+                         const RagAssistCallbacks &callbacks,
+                         const QString &requestId,
+                         int hop);
 
     LLMService* llmService() const;
 

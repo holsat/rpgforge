@@ -433,6 +433,21 @@ QWidget* SettingsDialog::createAgentsTab()
     scrollArea->setWidget(container);
     layout->addWidget(scrollArea);
 
+    // Behavior toggles that apply across the AI services tab. Currently
+    // just the Writing Assistant's default depth (Quick vs Comprehensive
+    // multi-hop). Adding a sub-section here keeps it in the user's line
+    // of sight when configuring per-service models above.
+    m_chatDeepSearchCheck = new QCheckBox(
+        i18n("Default to Deep Search in Writing Assistant (multi-hop retrieval)"),
+        this);
+    m_chatDeepSearchCheck->setToolTip(i18n(
+        "When enabled, the Writing Assistant chat starts every new request "
+        "in Deep Search mode (drafts an answer, identifies information "
+        "gaps, retrieves more, refines — up to 3 hops). Slower and uses "
+        "more tokens. The toolbar toggle on the chat panel always wins for "
+        "any single request."));
+    layout->addWidget(m_chatDeepSearchCheck);
+
     auto *testBtn = new QPushButton(i18n("Test All Agent Connections"), this);
     layout->addWidget(testBtn);
     connect(testBtn, &QPushButton::clicked, this, [this]() {
@@ -725,6 +740,10 @@ void SettingsDialog::load()
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     m_typewriterScrollingCheck->setChecked(settings.value(QStringLiteral("editor/typewriterScrolling"), false).toBool());
+    if (m_chatDeepSearchCheck) {
+        m_chatDeepSearchCheck->setChecked(
+            settings.value(QStringLiteral("chat/deep_search"), false).toBool());
+    }
 
     // Model fields: no hardcoded defaults — empty means "not configured yet"
     // Placeholder text in the widget gives the user a hint without seeding QSettings.
@@ -914,6 +933,10 @@ void SettingsDialog::save()
 {
     QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
     settings.setValue(QStringLiteral("editor/typewriterScrolling"), m_typewriterScrollingCheck->isChecked());
+    if (m_chatDeepSearchCheck) {
+        settings.setValue(QStringLiteral("chat/deep_search"),
+                          m_chatDeepSearchCheck->isChecked());
+    }
 
     // Derive the "active provider" (legacy llm/provider key, still read as
     // a fallback by many agents) from the top row of the draggable
@@ -1000,6 +1023,15 @@ void SettingsDialog::save()
         obj[item->text()] = item->data(Qt::UserRole).toString();
     }
     settings.setValue(QStringLiteral("llm/prompts"), QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+
+    // Force the QSettings backend to flush before any listener tries
+    // to read; otherwise a same-process consumer may see stale values.
+    settings.sync();
+
+    // Notify all UI components that cache model/provider state so they
+    // refresh from QSettings rather than continuing to send requests
+    // with their old combo-box selection.
+    LLMService::instance().notifySettingsChanged();
 }
 
 void SettingsDialog::setupEnginePromptRow(QFormLayout *layout, const QString &id, const QString &label)

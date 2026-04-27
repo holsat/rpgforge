@@ -74,6 +74,14 @@ add_library(rpgforge_core STATIC
     src/debuglog.h
     src/ragassistservice.cpp
     src/ragassistservice.h
+    src/projectqaservice.cpp
+    src/projectqaservice.h
+    src/entitygraphmodel.cpp
+    src/entitygraphmodel.h
+    src/entitygraphpanel.cpp
+    src/entitygraphpanel.h
+    src/entitycommunitydetector.cpp
+    src/entitycommunitydetector.h
     src/inlineaiinvoker.cpp
     src/inlineaiinvoker.h
     src/inlineaicompletionmodel.cpp
@@ -316,6 +324,31 @@ add_test(NAME lorekeeper_smoke_test COMMAND test_lorekeeper_smoke)
 add_executable(test_ragassistservice tests/test_ragassistservice.cpp)
 target_link_libraries(test_ragassistservice rpgforge_core Qt6::Test)
 add_test(NAME rag_assist_service_test COMMAND test_ragassistservice)
+
+add_executable(test_ragquality tests/test_ragquality.cpp)
+target_link_libraries(test_ragquality rpgforge_core Qt6::Test)
+add_test(NAME rag_quality_test COMMAND test_ragquality)
+
+add_executable(test_relationshipgraph_data tests/test_relationshipgraph_data.cpp)
+target_link_libraries(test_relationshipgraph_data rpgforge_core Qt6::Test)
+add_test(NAME relationship_graph_data_test COMMAND test_relationshipgraph_data)
+
+add_executable(test_entitygraphmodel tests/test_entitygraphmodel.cpp)
+target_link_libraries(test_entitygraphmodel rpgforge_core Qt6::Test)
+add_test(NAME entity_graph_model_test COMMAND test_entitygraphmodel)
+
+add_executable(test_entitycommunitydetector tests/test_entitycommunitydetector.cpp)
+target_link_libraries(test_entitycommunitydetector rpgforge_core Qt6::Test)
+add_test(NAME entity_community_detector_test COMMAND test_entitycommunitydetector)
+
+# Phase 1-5 verification harness — runs against a real Kabal-shaped
+# project DB to confirm the migrations apply, the alias backfill ran,
+# the chunk linker finds entity mentions in real prose, and community
+# detection completes on real-scale input. Not registered with ctest;
+# invoked manually with the project root as argv[1].
+add_executable(verify_kabal /tmp/verify_kabal.cpp)
+target_include_directories(verify_kabal PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(verify_kabal rpgforge_core Qt6::Core Qt6::Sql)
 
 add_executable(test_projecttreemodel tests/test_projecttreemodel.cpp)
 target_link_libraries(test_projecttreemodel rpgforge_core Qt6::Test)

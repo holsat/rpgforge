@@ -147,6 +147,33 @@ public:
     KTextEditor::View* activeView() const;
     KTextEditor::Document* activeDocument() const;
 
+    /// Accessor for the D-Bus surface — lets the rpgforge.dbus
+    /// interface drive the entity graph view directly for end-to-end
+    /// tests. Returns nullptr if no project is open.
+    class EntityGraphPanel *entityGraphPanel() const { return m_entityGraphPanel; }
+    /// Switches the central view to the entity graph panel and triggers
+    /// a refresh from the librarian DB. No-op if no project is open.
+    void showEntityGraph();
+
+    /// Phase 4 navigation — resolves the entity by name (or alias) and
+    /// opens its dossier file. Returns true on success. The dossier
+    /// search uses the same lorekeeper/research roots the entity-graph
+    /// panel's openDossier handler walks. Driven by Ctrl+E "Go to
+    /// entity" and the corresponding D-Bus endpoint.
+    bool navigateToEntityDossier(const QString &entityName);
+
+private:
+    /// Post-extraction maintenance chain. Called automatically after
+    /// either the KnowledgeBase finishes indexing or the LibrarianService
+    /// finishes a scan — those are the two events that can leave
+    /// chunk_entities, mention_count, or community membership stale.
+    /// Runs idempotent re-link + aggregate refresh + (Phase 5) community
+    /// detection. Communities are an internal index used by retrieval;
+    /// the user never triggers this directly and never sees the result.
+    void runEntityIndexMaintenance();
+
+public:
+
     /**
      * @brief Returns the KTextEditor document currently open in the main editor,
      *        or nullptr if no document is loaded. Used by the DBus adaptor.
@@ -256,6 +283,7 @@ private:
     VariablesPanel *m_variablesPanel = nullptr;
     ChatPanel *m_chatPanel = nullptr;
     ProblemsPanel *m_problemsPanel = nullptr;
+    class EntityGraphPanel *m_entityGraphPanel = nullptr;
     SimulationPanel *m_simulationPanel = nullptr;
     QLabel *m_diagnosticsStatus = nullptr;
     QLabel *m_wordCountStatus = nullptr;

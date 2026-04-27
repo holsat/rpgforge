@@ -24,6 +24,7 @@
 
 class QTableWidget;
 class QComboBox;
+class QCheckBox;
 
 /**
  * @brief Bottom dock panel displaying project-wide diagnostics.
@@ -36,6 +37,16 @@ public:
     explicit ProblemsPanel(QWidget *parent = nullptr);
     ~ProblemsPanel() override;
 
+public Q_SLOTS:
+    /**
+     * @brief Tell the panel which document is currently open in the
+     * editor. Diagnostics for this path are sorted to the top of the
+     * list, and (if "Show only current document" is checked) other
+     * diagnostics are hidden. Pass an empty string when no document is
+     * open.
+     */
+    void setCurrentDocument(const QString &filePath);
+
 Q_SIGNALS:
     void issueActivated(const QString &filePath, int line);
     void statsChanged(int errors, int warnings, int infos);
@@ -45,16 +56,27 @@ private Q_SLOTS:
     void onItemClicked(int row, int column);
     void onItemDoubleClicked(int row, int column);
     void onFilterChanged();
+    void onCurrentOnlyToggled(bool checked);
+    void persistColumnWidth(int logicalIndex, int oldSize, int newSize);
 
 private:
     void setupUi();
     void refreshTable();
+    void loadColumnWidths();
 
     QTableWidget *m_table;
     QComboBox *m_filterCombo;
+    // When checked, refreshTable() filters out diagnostics whose
+    // filePath does not equal m_currentDocumentPath. State is persisted
+    // in QSettings under "analyzer/show_current_only".
+    QCheckBox *m_currentOnlyCheck = nullptr;
 
     // Maps file path -> list of diagnostics
     QMap<QString, QList<Diagnostic>> m_diagnosticsMap;
+
+    // Absolute path of the document currently open in the editor.
+    // Empty when no document is open. Used for sort-priority + filter.
+    QString m_currentDocumentPath;
 };
 
 #endif // PROBLEMSPANEL_H

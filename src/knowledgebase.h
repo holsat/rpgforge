@@ -51,7 +51,38 @@ public:
 
     void indexFile(const QString &filePath);
     void reindexProject();
+
+    /**
+     * @brief Walks every chunk in the vector store and links it to any
+     * entity whose canonical name or alias appears in the chunk text.
+     * Writes to chunk_entities. Idempotent (INSERT OR IGNORE).
+     *
+     * The alias index is loaded from the librarian DB at
+     * `<project>/.rpgforge.db` (sorted by alias length descending so
+     * "Captain Ryzen" matches before "Ryzen"). Word-boundary aware so
+     * "Ryz" doesn't false-match inside "Ryzen".
+     *
+     * Returns the total number of (chunk, entity) links created or
+     * already-present after the pass. 0 when there are no entities to
+     * link against (project hasn't been librarian-scanned yet).
+     */
+    int rebuildChunkEntityLinks();
     void search(const QString &queryText, int topK, const QString &excludeFile, std::function<void(const QList<SearchResult>&)> callback);
+    /// Hybrid retrieval: runs the existing vector search in parallel with a
+    /// ripgrep literal-match search across the project's markdown corpus, then
+    /// merges and de-duplicates the results. Vector search ranks by cosine
+    /// similarity; ripgrep results are ranked by hit count + extracted chunk
+    /// length and surfaced as additional SearchResults. The caller's callback
+    /// receives at most `topK` merged results.
+    ///
+    /// Why: pure embedding-based RAG misses on proper-noun queries — fiction
+    /// is full of made-up names ("Vål'naden", "Sifacsi") that the embedding
+    /// model has never seen, so they collapse to near-identical low-info
+    /// vectors. Literal grep catches those exact mentions reliably.
+    ///
+    /// Falls back to vector-only when `rg` is not on PATH.
+    void hybridSearch(const QString &queryText, int topK, const QString &excludeFile,
+                      std::function<void(const QList<SearchResult>&)> callback);
 
     void pause();
     void resume();
@@ -66,6 +97,28 @@ public:
      */
     void generateEmbeddingWithFallback(const QString &text,
                                        std::function<void(const QVector<float>&)> callback);
+
+    /**
+     * @brief Extract proper-noun-style keywords from a free-form query.
+     * Strips interrogatives (who/how/why/...), short auxiliaries
+     * (is/are/was/were/...) and a list of generic prose tokens before
+     * picking up to 5 capitalised, non-ASCII, or 5+ char tokens. The
+     * stopword list is what makes "Who is Ryzen?" yield ["Ryzen"]
+     * rather than ["Who","Ryzen"] — the latter drowns ripgrep with
+     * common-word matches before any proper-noun candidate is reached.
+     * Public for unit testing of the retrieval-quality regression
+     * suite; production callers go through hybridSearch().
+     */
+    static QStringList extractKeywordTokens(const QString &query);
+
+    /**
+     * @brief Sentence-aware sliding-window subdivision of a long text
+     * into overlapping chunks. Snaps cut points to "\n\n" or ". "
+     * boundaries within the overlap region; falls back to a hard cut
+     * if no boundary is found. Texts at or under maxChars are returned
+     * as a single-element list. Public for unit testing.
+     */
+    static QStringList subdivideChunk(const QString &text, int maxChars, int overlap);
 
 Q_SIGNALS:
     void indexingProgress(int current, int total);

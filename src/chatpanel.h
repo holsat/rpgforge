@@ -93,6 +93,18 @@ private:
     QPushButton *m_sendBtn;
     QPushButton *m_cancelBtn;
     QPushButton *m_clearBtn;
+    // Toggle: when checked, the chat dispatches Comprehensive-depth
+    // requests (multi-hop draft+gaps+retrieve loop) instead of the
+    // default single-pass Quick mode. State is persisted across
+    // sessions in QSettings under "chat/deep_search".
+    QPushButton *m_deepSearchBtn;
+    // Toggle: when checked, the next user prompt is dispatched
+    // through ProjectQAService (whole-corpus MAP/REDUCE) instead of
+    // RagAssistService. Mutually meaningful with Deep Search — when
+    // both are on, Ask Project wins because it doesn't use the
+    // RagAssistService pipeline at all. Persisted in QSettings under
+    // "chat/ask_project".
+    QPushButton *m_askProjectBtn;
     QProgressBar *m_progressBar;
 
     QString m_currentAiResponse;

@@ -285,6 +285,89 @@ QList<SearchResult> dedupAgainstSources(const QList<SearchResult> &results,
     return kept;
 }
 
+} // namespace
+
+// Strip out any inline source citations whose path doesn't actually
+// exist in the project. Small/local LLMs occasionally hallucinate
+// citations like "(manuscript.md)" or "(notes/world.md)" that weren't
+// in the supplied [SOURCE: ...] headers — this post-processor catches
+// those before the user sees them. Citations pointing to real files
+// in the project tree are left untouched, so attribution to genuine
+// sources is preserved.
+//
+// Recognised citation forms:
+//   (path/to/file.md)
+//   (path/to/file.md#anchor)        — anchor stripped before existence check
+//   [SOURCE: path/to/file.md]       — model-echoed input header
+//
+// On miss: the entire match is removed, plus a single leading space if
+// the prose would otherwise have a double space ("the foo  was…" → "the foo was…").
+QString RagAssistService::stripInvalidCitations(const QString &text, const QString &projectPath)
+{
+    if (projectPath.isEmpty()) return text;
+    if (text.isEmpty()) return text;
+
+    QDir projectDir(projectPath);
+    QString out = text;
+    int stripped = 0;
+
+    auto pathExists = [&](const QString &raw) {
+        QString path = raw.trimmed();
+        // Strip an optional anchor / fragment and leading "./".
+        const int hash = path.indexOf(QLatin1Char('#'));
+        if (hash >= 0) path = path.left(hash);
+        if (path.startsWith(QStringLiteral("./"))) path = path.mid(2);
+        path = path.trimmed();
+        if (path.isEmpty()) return false;
+        const QString abs = projectDir.absoluteFilePath(path);
+        return QFileInfo::exists(abs);
+    };
+
+    auto stripPattern = [&](const QRegularExpression &re) {
+        // Iterate matches from the end of the string backward so we
+        // can splice the source without the index of later matches
+        // shifting under us.
+        QList<QRegularExpressionMatch> hits;
+        auto it = re.globalMatch(out);
+        while (it.hasNext()) hits.append(it.next());
+        for (int i = hits.size() - 1; i >= 0; --i) {
+            const auto &m = hits[i];
+            const QString cited = m.captured(1);
+            if (pathExists(cited)) continue;
+            int start = m.capturedStart();
+            int end = m.capturedEnd();
+            // Eat one preceding space if the surrounding prose would
+            // otherwise gain a double-space gap.
+            if (start > 0 && out.at(start - 1) == QLatin1Char(' ')
+                && end < out.size() && out.at(end) == QLatin1Char(' ')) {
+                --start;
+            }
+            out.remove(start, end - start);
+            ++stripped;
+        }
+    };
+
+    // (path) — the format the system prompt asks the model to emit.
+    // The path must contain a slash AND a .md / .markdown extension to
+    // avoid matching ordinary parenthetical prose like "(see chapter 3)".
+    static const QRegularExpression parenRe(
+        QStringLiteral(R"(\(([A-Za-z0-9_./\-' ]+\.(?:md|markdown)(?:#[^)]*)?)\))"));
+    stripPattern(parenRe);
+
+    // [SOURCE: path] — same shape as the input header, occasionally
+    // copied verbatim by smaller models.
+    static const QRegularExpression sourceTagRe(
+        QStringLiteral(R"(\[SOURCE:\s*([A-Za-z0-9_./\-' ]+\.(?:md|markdown)(?:#[^\]]*)?)\])"));
+    stripPattern(sourceTagRe);
+
+    if (stripped > 0) {
+        RPGFORGE_DLOG("RAG") << "stripped" << stripped << "invalid citation(s) from response";
+    }
+    return out;
+}
+
+namespace {
+
 // Assemble the user-message body: extraSources in priority order, then
 // RAG passages with citation headers, then the userPrompt.
 //
@@ -476,7 +559,7 @@ void RagAssistService::retrieveAndRank(const RagAssistRequest &request,
                                         std::function<void(QList<SearchResult>)> onDone)
 {
     QPointer<RagAssistService> weakThis(this);
-    KnowledgeBase::instance().search(
+    KnowledgeBase::instance().hybridSearch(
         expandedQuery, request.topK, request.activeFilePath,
         [weakThis, request, onDone](const QList<SearchResult> &raw) {
             if (!weakThis) { onDone({}); return; }
@@ -494,12 +577,41 @@ void RagAssistService::runComprehensive(const RagAssistRequest &request,
                                          const RagAssistCallbacks &callbacks,
                                          const QString &requestId)
 {
+    // Iterative entry point: hop 1 sees the initial passages from the
+    // pipeline's first retrieval. Subsequent hops are spawned recursively
+    // by runIterativeHop when the model reports remaining gaps.
+    runIterativeHop(request, firstPassages, callbacks, requestId, /*hop=*/1);
+}
+
+void RagAssistService::runIterativeHop(const RagAssistRequest &request,
+                                        QList<SearchResult> accumulated,
+                                        const RagAssistCallbacks &callbacks,
+                                        const QString &requestId,
+                                        int hop)
+{
+    // Hard cap: never run more than 3 hops regardless of caller setting,
+    // so a misconfigured client cannot blow the token budget.
+    const int hopBudget = std::min(std::max(request.maxRetrievalHops, 1), 3);
+    const int passageCap = request.finalK * 3;
+
+    // If we've already exhausted the hop budget, skip straight to final
+    // synthesis — the accumulated passages from previous hops are the
+    // best context we have to work with.
+    if (hop > hopBudget) {
+        RPGFORGE_DLOG("RAG") << "iterative: hop budget exhausted, dispatching final"
+                              << "passages=" << accumulated.size()
+                              << "id=" << requestId;
+        dispatchGeneration(request, accumulated, callbacks, requestId);
+        return;
+    }
+
     // Phase A: draft + gap-list. A non-streaming call with a modest
     // output budget — we only need a draft and a short bullet list.
     LLMRequest draft;
     draft.provider = request.provider;
     draft.model = request.model;
-    draft.serviceName = request.serviceName + QStringLiteral(" (Draft)");
+    draft.serviceName = request.serviceName
+        + i18n(" (Draft hop %1/%2)", hop, hopBudget);
     draft.settingsKey = request.settingsKey;
     draft.maxTokens = 2048;
     draft.temperature = request.temperature;
@@ -511,66 +623,90 @@ void RagAssistService::runComprehensive(const RagAssistRequest &request,
         "follow-up questions whose answers would improve the draft by "
         "filling in missing context from the project. List them under the "
         "heading INFORMATION GAPS: (one question per line, each as a "
-        "bullet). Use this exact output format:\n\n"
+        "bullet). If the supplied context already answers the user's "
+        "request fully, output exactly INFORMATION GAPS: NONE on a single "
+        "line — do not invent gaps to fill quota. Use this exact output "
+        "format:\n\n"
         "DRAFT:\n<your draft here>\n\n"
         "INFORMATION GAPS:\n- <question 1>\n- <question 2>\n");
-    const QString user = assembleUserMessage(request, firstPassages);
+    const QString user = assembleUserMessage(request, accumulated);
 
     draft.messages << LLMMessage{QStringLiteral("system"), system};
     for (const LLMMessage &m : request.priorTurns) draft.messages << m;
     draft.messages << LLMMessage{QStringLiteral("user"), user};
 
-    RPGFORGE_DLOG("RAG") << "comprehensive: draft dispatch id=" << requestId;
+    RPGFORGE_DLOG("RAG") << "iterative: hop=" << hop << "/" << hopBudget
+                          << "passages=" << accumulated.size()
+                          << "id=" << requestId;
 
     QPointer<RagAssistService> weakThis(this);
     llmService()->sendNonStreamingRequest(draft,
-        [weakThis, request, callbacks, requestId, firstPassages]
-        (const QString &draftResponse) {
+        [weakThis, request, callbacks, requestId, accumulated, hop, hopBudget, passageCap]
+        (const QString &draftResponse) mutable {
             if (!weakThis) return;
 
-            const QStringList gaps = parseGaps(draftResponse);
-            RPGFORGE_DLOG("RAG") << "comprehensive: gaps=" << gaps.size()
+            // "INFORMATION GAPS: NONE" sentinel short-circuits the loop:
+            // the model has explicitly told us no more retrieval will help.
+            static const QRegularExpression noneSentinel(
+                QStringLiteral("information\\s*gaps\\s*:\\s*none\\b"),
+                QRegularExpression::CaseInsensitiveOption);
+            const bool noneSignaled = noneSentinel.match(draftResponse).hasMatch();
+            const QStringList gaps = noneSignaled ? QStringList{}
+                                                   : parseGaps(draftResponse);
+
+            RPGFORGE_DLOG("RAG") << "iterative: hop=" << hop
+                                  << "gaps=" << gaps.size()
+                                  << (noneSignaled ? "(none-sentinel)" : "")
                                   << "id=" << requestId;
 
-            if (gaps.isEmpty()) {
-                // No gaps identified (or the draft call failed). Fall
-                // back to a single-pass generation with the original
-                // passages.
-                weakThis->dispatchGeneration(request, firstPassages, callbacks, requestId);
+            // Terminate the loop on: empty gap list, NONE sentinel, draft
+            // failure (parseGaps returned empty), or final-hop reached.
+            if (gaps.isEmpty() || hop >= hopBudget) {
+                weakThis->dispatchGeneration(request, accumulated, callbacks, requestId);
                 return;
             }
 
-            // Phase B: one more retrieval, this time driven by the
-            // concatenated gap questions. Single round — we don't chain
-            // further hops. The merged passages feed the final pass.
+            // Otherwise: drive another retrieval keyed on the gap
+            // questions, merge into accumulated, recurse with hop+1.
             const QString gapQuery = gaps.join(QStringLiteral(" | "));
             weakThis->retrieveAndRank(request, gapQuery,
-                [weakThis, request, callbacks, requestId, firstPassages]
-                (QList<SearchResult> gapPassages) {
+                [weakThis, request, callbacks, requestId, accumulated, hop, passageCap]
+                (QList<SearchResult> gapPassages) mutable {
                     if (!weakThis) return;
 
-                    // Merge passages from both rounds, deduping by
-                    // filePath + heading so we don't double-count the
-                    // same section if retrieval returned it twice.
-                    QList<SearchResult> merged = firstPassages;
+                    // Dedupe gap-passages against everything we already
+                    // have, by (filePath | heading) — same key the
+                    // previous one-shot path used.
                     QSet<QString> seen;
-                    for (const SearchResult &p : firstPassages) {
+                    for (const SearchResult &p : accumulated) {
                         seen.insert(p.filePath + QLatin1Char('|') + p.heading);
                     }
+                    int added = 0;
                     for (const SearchResult &p : gapPassages) {
                         const QString key = p.filePath + QLatin1Char('|') + p.heading;
-                        if (!seen.contains(key)) {
-                            merged.append(p);
-                            seen.insert(key);
-                        }
+                        if (seen.contains(key)) continue;
+                        accumulated.append(p);
+                        seen.insert(key);
+                        ++added;
                     }
-                    // Cap at 2× finalK to keep the window bounded.
-                    const int cap = request.finalK * 2;
-                    if (merged.size() > cap) merged = merged.mid(0, cap);
+                    if (accumulated.size() > passageCap) {
+                        accumulated = accumulated.mid(0, passageCap);
+                    }
 
-                    RPGFORGE_DLOG("RAG") << "comprehensive: merged passages="
-                                          << merged.size() << "id=" << requestId;
-                    weakThis->dispatchGeneration(request, merged, callbacks, requestId);
+                    RPGFORGE_DLOG("RAG") << "iterative: hop=" << hop
+                                          << "added=" << added
+                                          << "total=" << accumulated.size()
+                                          << "id=" << requestId;
+
+                    // No new passages this round → no point in another
+                    // gap pass on identical context; jump to final.
+                    if (added == 0) {
+                        weakThis->dispatchGeneration(request, accumulated, callbacks, requestId);
+                        return;
+                    }
+
+                    weakThis->runIterativeHop(request, accumulated, callbacks,
+                                               requestId, hop + 1);
                 });
         });
 }
@@ -634,7 +770,15 @@ void RagAssistService::dispatchGeneration(const RagAssistRequest &request,
         *finishConn = connect(llm, &LLMService::responseFinished, this,
             [chunkConn, finishConn, errorConn, callbacks, requestId]
             (const QString &, const QString &full) {
-                if (callbacks.onComplete) callbacks.onComplete(requestId, full);
+                // Validate citations against the project tree before
+                // emitting the final text — the streaming chunks the
+                // caller already painted may contain bad citations,
+                // but the onComplete payload is what gets re-rendered
+                // by markdown-aware UIs (e.g. ChatPanel) so this is
+                // where the cleanup lands.
+                const QString cleaned = stripInvalidCitations(
+                    full, ProjectManager::instance().projectPath());
+                if (callbacks.onComplete) callbacks.onComplete(requestId, cleaned);
                 QObject::disconnect(*chunkConn);
                 QObject::disconnect(*finishConn);
                 QObject::disconnect(*errorConn);
@@ -668,7 +812,9 @@ void RagAssistService::dispatchGeneration(const RagAssistRequest &request,
                     }
                     return;
                 }
-                if (callbacks.onComplete) callbacks.onComplete(requestId, response);
+                const QString cleaned = stripInvalidCitations(
+                    response, ProjectManager::instance().projectPath());
+                if (callbacks.onComplete) callbacks.onComplete(requestId, cleaned);
             });
     }
 }

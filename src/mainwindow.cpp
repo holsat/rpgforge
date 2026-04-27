@@ -1,5 +1,6 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
+#include <numeric>
 /*
     RPG Forge
     Copyright (C) 2026  Sheldon Lee Wen
@@ -52,6 +53,8 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
+#include "entitygraphpanel.h"
+#include "entitycommunitydetector.h"
 #include "lorekeeperservice.h"
 #include "agentgatekeeper.h"
 #include <QComboBox>
@@ -312,6 +315,24 @@ void MainWindow::setupEditor()
 
     connect(&AnalyzerService::instance(), &AnalyzerService::diagnosticsUpdated, this, &MainWindow::onDiagnosticsUpdated);
 
+    // Trigger the post-extraction maintenance chain after EITHER the
+    // KnowledgeBase finishes indexing OR the LibrarianService finishes
+    // a scan. Either event can leave chunk_entities, mention_count, or
+    // community membership stale. The helper itself is idempotent and
+    // cheap when nothing has changed.
+    //
+    // Wired ONCE at startup — Qt::UniqueConnection cannot be used here
+    // because lambdas have no comparable identity for dedupe, so an
+    // attempt with that flag triggers a fatal assert. The lambdas
+    // re-read services each invocation so they remain correct across
+    // project switches.
+    connect(&KnowledgeBase::instance(), &KnowledgeBase::indexingFinished,
+            this, [this]() { runEntityIndexMaintenance(); });
+    if (m_librarianService) {
+        connect(m_librarianService, &LibrarianService::scanningFinished,
+                this, [this]() { runEntityIndexMaintenance(); });
+    }
+
     // Connect signals
     auto connectDocSignals = [this](KTextEditor::Document *doc) {
         connect(doc, &KTextEditor::Document::documentUrlChanged, this, &MainWindow::updateTitle);
@@ -319,6 +340,16 @@ void MainWindow::setupEditor()
     };
     connectDocSignals(m_document);
     connectDocSignals(m_researchDocument);
+
+    // Notify the Analyzer panel which document is currently open so it
+    // can sort diagnostics for that document to the top of the list
+    // (and optionally filter to it). Only the main editor's URL counts
+    // — the research pane is auxiliary.
+    connect(m_document, &KTextEditor::Document::documentUrlChanged, this, [this]() {
+        if (m_problemsPanel) {
+            m_problemsPanel->setCurrentDocument(m_document->url().toLocalFile());
+        }
+    });
 
     // Step 1: Seamless Version Control (Auto-Sync)
     auto setupAutoSync = [this](KTextEditor::Document *doc) {
@@ -566,12 +597,45 @@ void MainWindow::setupSidebar()
     });
     m_pdfViewer = new QWebEngineView(this);
 
+    // Entity graph view — Phase 2 of the relationship-graph work. The
+    // panel is created with a null DB pointer here; setProjectPath
+    // wires it up when a project opens (see projectOpened handler).
+    m_entityGraphPanel = new EntityGraphPanel(/*db=*/nullptr, this);
+    connect(m_entityGraphPanel, &EntityGraphPanel::openDossierRequested,
+            this, [this](const QString &entityName) {
+        if (entityName.isEmpty()) return;
+        // Best-effort dossier resolution: look in lorekeeper/Characters/,
+        // lorekeeper/Settings/, etc. Falls back to the project search
+        // if no canonical dossier exists yet. The detailed search is
+        // delegated to ProjectManager — same path the LoreKeeper UI uses.
+        const QString projectDir = ProjectManager::instance().projectPath();
+        if (projectDir.isEmpty()) return;
+        const QStringList searchRoots = {
+            QStringLiteral("lorekeeper/Characters"),
+            QStringLiteral("lorekeeper/Settings"),
+            QStringLiteral("lorekeeper"),
+            QStringLiteral("research/Characters"),
+            QStringLiteral("research"),
+        };
+        for (const QString &root : searchRoots) {
+            const QString candidate = QDir(projectDir).absoluteFilePath(
+                root + QStringLiteral("/") + entityName + QStringLiteral(".md"));
+            if (QFileInfo::exists(candidate)) {
+                m_document->openUrl(QUrl::fromLocalFile(candidate));
+                showCentralView(m_editorSplitter);
+                return;
+            }
+        }
+        qInfo() << "Entity graph: no dossier file found for" << entityName;
+    });
+
     m_centralViewLayout->addWidget(m_editorSplitter);
     m_centralViewLayout->addWidget(m_corkboardView);
     m_centralViewLayout->addWidget(m_imagePreview);
     m_centralViewLayout->addWidget(m_imageDiffView);
     m_centralViewLayout->addWidget(m_diffView);
     m_centralViewLayout->addWidget(m_pdfViewer);
+    m_centralViewLayout->addWidget(m_entityGraphPanel);
 
     // Only show the editor view initially; hide the rest
     showCentralView(m_editorSplitter);
@@ -782,12 +846,28 @@ void MainWindow::setupSidebar()
         if (m_corkboardView) m_corkboardView->setFolder(QString());
         QString projectDir = ProjectManager::instance().projectPath();
         KnowledgeBase::instance().initForProject(projectDir);
+        // Open the analyzer's per-project cache and replay any stored
+        // diagnostics into the UI before the KB reindex below kicks
+        // off — that way a fresh launch shows what was already
+        // analyzed without waiting for the LLM. The background scan
+        // queues anything whose on-disk hash differs from the cache
+        // (or that has no cache row yet).
+        AnalyzerService::instance().initForProject(projectDir);
+        AnalyzerService::instance().kickBackgroundScan();
         LoreKeeperService::instance().setProjectPath(projectDir);
         // Also wire the librarian (variable extractor). Previously this was
         // only called from the openProject() menu handler — so session
         // restore never set it up, leaving dbOpen=false for the entire
         // session and silently dropping every extraction.
         if (m_librarianService) m_librarianService->setProjectPath(projectDir);
+
+        // Bind the entity graph panel to this project's librarian DB so
+        // its model can reload from a real connection. Phase 2 of the
+        // relationship-graph work — refresh() pulls entities + edges
+        // when the librarian has populated something.
+        if (m_entityGraphPanel && m_librarianService) {
+            m_entityGraphPanel->setDatabase(m_librarianService->database());
+        }
 
         // RESUME ALL AGENTS
         AgentGatekeeper::instance().resumeAll();
@@ -796,6 +876,7 @@ void MainWindow::setupSidebar()
         updateProjectStats();
         SynopsisService::instance().scanProject();
         KnowledgeBase::instance().reindexProject();
+
 
         // Explorations panel
         m_explorationsPanel->setRootPath(projectDir);
@@ -977,6 +1058,37 @@ void MainWindow::setupActions()
     connect(compileAct, &QAction::triggered, this, &MainWindow::compileToPdf);
 
     KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
+
+    // Entity graph view — Phase 2 of the relationship-graph work.
+    auto *showEntityGraphAct = new QAction(this);
+    showEntityGraphAct->setText(i18n("Show Entity Graph"));
+    showEntityGraphAct->setIcon(QIcon::fromTheme(QStringLiteral("view-pim-tasks")));
+    actionCollection()->addAction(QStringLiteral("view_entity_graph"), showEntityGraphAct);
+    connect(showEntityGraphAct, &QAction::triggered, this, &MainWindow::showEntityGraph);
+
+    // Phase 4 — "Go to entity dossier". Ctrl+E opens a small input
+    // dialog; the user types an entity name (or alias) and it opens
+    // the matching LoreKeeper dossier file.
+    auto *gotoEntityAct = new QAction(this);
+    gotoEntityAct->setText(i18n("Go to Entity Dossier..."));
+    gotoEntityAct->setIcon(QIcon::fromTheme(QStringLiteral("go-jump")));
+    actionCollection()->addAction(QStringLiteral("nav_goto_entity"), gotoEntityAct);
+    actionCollection()->setDefaultShortcut(gotoEntityAct, Qt::CTRL | Qt::Key_E);
+    connect(gotoEntityAct, &QAction::triggered, this, [this]() {
+        if (!ProjectManager::instance().isProjectOpen()) return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, i18n("Go to Entity Dossier"),
+            i18n("Entity name (or alias):"),
+            QLineEdit::Normal, QString(), &ok);
+        if (!ok || name.trimmed().isEmpty()) return;
+        if (!navigateToEntityDossier(name)) {
+            QMessageBox::information(this,
+                i18n("Entity Not Found"),
+                i18n("No dossier found for \"%1\". Run the Librarian "
+                     "to extract entities from the project first.", name));
+        }
+    });
 
     m_togglePreviewAction = new QAction(this);
     m_togglePreviewAction->setText(i18n("Show Preview"));
@@ -1550,6 +1662,92 @@ void MainWindow::updateTitle()
     }
     setWindowTitle(title);
 }
+void MainWindow::runEntityIndexMaintenance()
+{
+    if (!ProjectManager::instance().isProjectOpen()) return;
+    if (!m_librarianService) return;
+    LibrarianDatabase *db = m_librarianService->database();
+    if (!db) return;
+
+    // 1. Link every chunk to the entities the librarian currently knows
+    //    about. Idempotent — INSERT OR IGNORE on (chunk_id, entity_id).
+    const int links = KnowledgeBase::instance().rebuildChunkEntityLinks();
+    if (links <= 0) {
+        // Nothing to do — either no chunks indexed yet or no entities
+        // recognized in any chunk. Skip aggregates + community detection;
+        // they'd produce empty results.
+        return;
+    }
+
+    // 2. Refresh mention_count + first/last_appearance from
+    //    chunk_entities. Cached for cheap graph-render lookups.
+    db->refreshAggregatesFromVectorDb(
+        QDir(ProjectManager::instance().projectPath())
+            .absoluteFilePath(QStringLiteral(".rpgforge-vectors.db")));
+
+    // 3. Phase 5: recompute communities. This is an INTERNAL index — no
+    //    UI surfaces it directly. Retrieval (graph-augmented hybrid
+    //    search, future hierarchical summaries) uses community_id as a
+    //    grouping key. Running on every librarian re-extraction keeps
+    //    it fresh without the user ever knowing it exists.
+    EntityCommunityDetector(db).detectAndPersist();
+
+    // 4. Reload the entity graph panel so any visual state (counts in
+    //    tooltips, neighborhood expansion) reflects the new data.
+    if (m_entityGraphPanel) m_entityGraphPanel->refresh();
+}
+
+void MainWindow::showEntityGraph()
+{
+    if (!m_entityGraphPanel) return;
+    if (!ProjectManager::instance().isProjectOpen()) {
+        qInfo() << "MainWindow::showEntityGraph: no project open — ignoring";
+        return;
+    }
+    m_entityGraphPanel->refresh();
+    showCentralView(m_entityGraphPanel);
+}
+
+bool MainWindow::navigateToEntityDossier(const QString &entityName)
+{
+    if (entityName.trimmed().isEmpty()) return false;
+    const QString projectDir = ProjectManager::instance().projectPath();
+    if (projectDir.isEmpty()) return false;
+
+    // Resolve aliases through the librarian so "Ryz" finds the
+    // Ryzen.md dossier — keeps the user's mental model consistent
+    // with how the entity graph and graph-augmented retrieval already
+    // resolve names.
+    QString canonicalName = entityName.trimmed();
+    if (m_librarianService && m_librarianService->database()) {
+        const qint64 id = m_librarianService->database()->resolveEntityByName(canonicalName);
+        if (id > 0) {
+            const QString resolved = m_librarianService->database()->getEntityName(id);
+            if (!resolved.isEmpty()) canonicalName = resolved;
+        }
+    }
+
+    const QStringList searchRoots = {
+        QStringLiteral("lorekeeper/Characters"),
+        QStringLiteral("lorekeeper/Settings"),
+        QStringLiteral("lorekeeper"),
+        QStringLiteral("research/Characters"),
+        QStringLiteral("research"),
+    };
+    for (const QString &root : searchRoots) {
+        const QString candidate = QDir(projectDir).absoluteFilePath(
+            root + QStringLiteral("/") + canonicalName + QStringLiteral(".md"));
+        if (QFileInfo::exists(candidate)) {
+            m_document->openUrl(QUrl::fromLocalFile(candidate));
+            showCentralView(m_editorSplitter);
+            return true;
+        }
+    }
+    qInfo() << "MainWindow::navigateToEntityDossier: no dossier found for"
+             << canonicalName;
+    return false;
+}
+
 void MainWindow::showCentralView(QWidget *widget)
 {
     // The editor splitter is what's actually parented in the stacked layout — if
@@ -1601,6 +1799,9 @@ QString MainWindow::currentViewId() const
     }
     if (m_pdfViewer && m_pdfViewer->isVisible()) {
         return QStringLiteral("pdf");
+    }
+    if (m_entityGraphPanel && m_entityGraphPanel->isVisible()) {
+        return QStringLiteral("entity_graph");
     }
     if (m_editorSplitter && m_editorSplitter->isVisible()) {
         return QStringLiteral("editor");
@@ -1956,6 +2157,30 @@ void MainWindow::restoreSession()
 
     if (m_vSplitter && settings.contains(QStringLiteral("vSplitter"))) {
         m_vSplitter->restoreState(settings.value(QStringLiteral("vSplitter")).toByteArray());
+        // Defensive: if a previous (likely crashed) session saved
+        // degenerate sizes that collapse the editor pane to ~0, the
+        // user opens the app to a window full of just the Problems
+        // panel and no editor / sidebar — and has to drag the splitter
+        // by feel to recover. Force sane sizes when the top pane
+        // (editor area) was restored below a minimum threshold.
+        QList<int> sizes = m_vSplitter->sizes();
+        if (sizes.size() >= 2 && sizes[0] < 80) {
+            const int total = sizes[0] + sizes[1];
+            const int problemsHeight = qMin(sizes[1], qMax(120, total / 4));
+            m_vSplitter->setSizes({total - problemsHeight, problemsHeight});
+        }
+    }
+    if (m_mainSplitter && settings.contains(QStringLiteral("mainSplitter"))) {
+        // Same defensive clamp on the horizontal splitter — if the
+        // sidebar pane is collapsed to ~0 a corrupted state would hide
+        // the project tree as well.
+        QList<int> sizes = m_mainSplitter->sizes();
+        if (sizes.size() >= 2 && sizes[1] < 200) {
+            const int total = std::accumulate(sizes.begin(), sizes.end(), 0);
+            const int sidebar = qBound(180, sizes.value(0, 250), 320);
+            const int preview = sizes.value(2, 0);
+            m_mainSplitter->setSizes({sidebar, qMax(400, total - sidebar - preview), preview});
+        }
     }
 
     // Restore active sidebar panel

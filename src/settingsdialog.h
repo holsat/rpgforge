@@ -68,6 +68,12 @@ private:
     // Editor settings
     QCheckBox *m_typewriterScrollingCheck = nullptr;
 
+    // AI Services tab — when checked, the Writing Assistant chat
+    // dispatches Comprehensive-depth requests by default. Mirrors the
+    // toolbar toggle on ChatPanel; both bind to QSettings key
+    // "chat/deep_search".
+    QCheckBox *m_chatDeepSearchCheck = nullptr;
+
     // Each provider's settings block is wrapped in a composite row widget
     // (grip icon | group box | toggle switch) and added to a plain
     // QVBoxLayout inside a scrollable container. DragHandle moves rows

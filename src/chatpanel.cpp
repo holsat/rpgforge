@@ -18,6 +18,7 @@
 
 #include "chatpanel.h"
 #include "ragassistservice.h"
+#include "projectqaservice.h"
 #include "markdownparser.h"
 #include "mainwindow.h"
 #include <KTextEditor/Document>
@@ -63,6 +64,29 @@ ChatPanel::ChatPanel(QWidget *parent)
     // through errorOccurred and should still land in the chat panel so
     // the user sees them.
     connect(&LLMService::instance(), &LLMService::errorOccurred, this, &ChatPanel::onError);
+
+    // Re-read the configured provider/model when the global Settings
+    // dialog persists changes. Without this, edits in Settings → AI
+    // Services land in QSettings but our combo boxes keep showing the
+    // pre-edit selection — and that stale selection is what gets sent
+    // in every subsequent request, so the new model never takes effect
+    // until the panel is reconstructed.
+    connect(&LLMService::instance(), &LLMService::settingsChanged, this, [this]() {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        const int savedProvider = s.value(QStringLiteral("llm/chat_provider"),
+                                          s.value(QStringLiteral("llm/provider"), 0)).toInt();
+        for (int i = 0; i < m_providerCombo->count(); ++i) {
+            if (m_providerCombo->itemData(i).toInt() == savedProvider) {
+                if (m_providerCombo->currentIndex() != i) {
+                    m_providerCombo->setCurrentIndex(i);
+                }
+                break;
+            }
+        }
+        // updateModelList re-fetches the provider's catalog and selects
+        // whatever llm/chat_model now points at.
+        updateModelList();
+    });
 }
 
 ChatPanel::~ChatPanel() = default;
@@ -118,6 +142,56 @@ void ChatPanel::setupUi()
     toolbar->addWidget(m_refreshModelsBtn);
 
     toolbar->addStretch();
+
+    // Deep Search toggle. When on, the assistant runs the Comprehensive
+    // synthesis pipeline (draft → gap detection → up to 3 retrieval
+    // hops → final synthesis). Slower and more expensive than the
+    // default Quick path; useful for multi-hop questions where a single
+    // retrieval misses cross-cutting context.
+    m_deepSearchBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("edit-find")),
+                                       i18n("Deep Search"), this);
+    m_deepSearchBtn->setCheckable(true);
+    m_deepSearchBtn->setToolTip(i18n(
+        "Multi-hop retrieval: draft an answer, identify information "
+        "gaps, retrieve more, and refine. Slower and costs more tokens; "
+        "useful for cross-cutting questions like \"how does X relate to Y?\"."));
+    m_deepSearchBtn->setAccessibleName(i18n("Toggle Deep Search"));
+    {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        m_deepSearchBtn->setChecked(s.value(QStringLiteral("chat/deep_search"), false).toBool());
+    }
+    connect(m_deepSearchBtn, &QPushButton::toggled, this, [](bool on) {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        s.setValue(QStringLiteral("chat/deep_search"), on);
+    });
+    toolbar->addWidget(m_deepSearchBtn);
+
+    // Ask Project — whole-corpus MAP/REDUCE. Reads every project
+    // markdown file via a cheap-model relevance pass, then synthesises
+    // the result. Higher token cost than Deep Search; appropriate for
+    // questions whose evidence is distributed across the corpus
+    // ("list every named character", "find every contradiction in
+    // the geography").
+    m_askProjectBtn = new QPushButton(
+        QIcon::fromTheme(QStringLiteral("system-search")),
+        i18n("Ask Project"), this);
+    m_askProjectBtn->setCheckable(true);
+    m_askProjectBtn->setToolTip(i18n(
+        "Whole-project synthesis: scan every markdown file, extract "
+        "what's relevant to your question, then synthesise an answer. "
+        "Slower and uses many more tokens than Deep Search — best for "
+        "questions like \"list every named character\" or \"find every "
+        "contradiction in the geography\"."));
+    m_askProjectBtn->setAccessibleName(i18n("Toggle Ask Project"));
+    {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        m_askProjectBtn->setChecked(s.value(QStringLiteral("chat/ask_project"), false).toBool());
+    }
+    connect(m_askProjectBtn, &QPushButton::toggled, this, [](bool on) {
+        QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+        s.setValue(QStringLiteral("chat/ask_project"), on);
+    });
+    toolbar->addWidget(m_askProjectBtn);
 
     m_clearBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("edit-clear")), QString(), this);
     m_clearBtn->setToolTip(i18n("Clear Chat"));
@@ -409,6 +483,60 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
     m_currentAiResponse.clear();
     appendMessageToView(QStringLiteral("assistant"), i18n("AI is thinking..."), QString());
 
+    // Ask Project mode short-circuits the RagAssistService pipeline
+    // entirely and runs the whole-corpus MAP/REDUCE flow instead.
+    // Returns once dispatched — the rest of askAI is the Deep Search /
+    // Quick path.
+    if (m_askProjectBtn && m_askProjectBtn->isChecked()) {
+        ProjectQAService::Request preq;
+        preq.provider = currentProvider();
+        preq.model = m_modelCombo->currentText().trimmed();
+        preq.serviceName = actualServiceName;
+        preq.settingsKey = LLMService::providerSettingsKey(preq.provider) + QStringLiteral("/model");
+        preq.question = userPrompt;
+        preq.stream = true;
+
+        m_history.append({QStringLiteral("user"), userPrompt});
+
+        QPointer<ChatPanel> weakThis(this);
+        ProjectQAService::Callbacks pcb;
+        pcb.onProgress = [weakThis](int processed, int total, const QString &currentFile) {
+            if (!weakThis) return;
+            // Live progress in the assistant placeholder until the
+            // synthesis stream starts replacing it with real content.
+            const QString status = currentFile.isEmpty()
+                ? i18n("Synthesising answer from %1 documents...", total)
+                : i18n("Scanning %1 / %2: %3", processed, total, currentFile);
+            weakThis->updateLastMessageInView(status, QString());
+        };
+        pcb.onChunk = [weakThis](const QString &chunk) {
+            if (!weakThis) return;
+            weakThis->m_currentAiResponse += chunk;
+            MarkdownParser p;
+            weakThis->updateLastMessageInView(p.renderHtml(weakThis->m_currentAiResponse),
+                                              weakThis->m_currentAiResponse);
+        };
+        pcb.onComplete = [weakThis](const QString &fullText) {
+            if (!weakThis) return;
+            weakThis->m_progressBar->hide();
+            weakThis->m_sendBtn->setEnabled(true);
+            weakThis->m_cancelBtn->setEnabled(false);
+            weakThis->m_history.append({QStringLiteral("assistant"), fullText});
+            MarkdownParser p;
+            weakThis->updateLastMessageInView(p.renderHtml(fullText), fullText);
+        };
+        pcb.onError = [weakThis](const QString &message) {
+            if (!weakThis) return;
+            weakThis->m_progressBar->hide();
+            weakThis->m_sendBtn->setEnabled(true);
+            weakThis->m_cancelBtn->setEnabled(false);
+            weakThis->onError(message);
+        };
+
+        ProjectQAService::instance().ask(preq, pcb);
+        return;
+    }
+
     // Pull the active document + path from MainWindow so we can send the
     // whole file when it's short, or let the service RAG-search when it's
     // long. Either way the service dedups against the active file path.
@@ -445,6 +573,9 @@ void ChatPanel::askAI(const QString &userPrompt, const QString &serviceName)
     req.activeFilePath = activeFilePath;
     req.stream = true;
     req.requireCitations = true;
+    req.depth = (m_deepSearchBtn && m_deepSearchBtn->isChecked())
+        ? SynthesisDepth::Comprehensive
+        : SynthesisDepth::Quick;
 
     // Short active doc goes in as context but at a LOWER priority than
     // RAG retrievals would be (conceptually). The doc is "what the user
