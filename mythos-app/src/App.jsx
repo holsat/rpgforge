@@ -205,6 +205,8 @@ export function App() {
   const [dirty, setDirty] = React.useState(false);
   const [projectStatus, setProjectStatus] = React.useState('Loading sample project');
   const [newProjectOpen, setNewProjectOpen] = React.useState(false);
+  const [changeVersion, setChangeVersion] = React.useState(0);
+  const changeVersionRef = React.useRef(0);
   const [route, setRoute] = React.useState(() => {
     try { return localStorage.getItem('mythos-route') || 'editor'; } catch { return 'editor'; }
   });
@@ -231,6 +233,11 @@ export function App() {
     setProjectData(project);
     setProjectPath(path);
     setDirty(isDirty);
+    setChangeVersion(version => {
+      const next = isDirty ? version + 1 : version;
+      changeVersionRef.current = next;
+      return next;
+    });
   }, []);
 
   const handleNewProject = React.useCallback(() => {
@@ -287,12 +294,17 @@ export function App() {
         };
       });
       setDirty(true);
+      setChangeVersion(version => {
+        const next = version + 1;
+        changeVersionRef.current = next;
+        return next;
+      });
       setProjectStatus('Imported document');
       setRoute('editor');
     } catch (error) {
       setProjectStatus(error.message || 'Import failed');
     }
-  }, [projectData]);
+  }, [changeVersion, projectData]);
 
   const handleSaveProjectAs = React.useCallback(async () => {
     if (!projectData) return;
@@ -302,6 +314,7 @@ export function App() {
       await saveProject(path, projectData);
       setProjectPath(path);
       setDirty(false);
+      changeVersionRef.current = changeVersion;
       setProjectStatus('Saved project');
     } catch (error) {
       setProjectStatus(error.message || 'Save failed');
@@ -317,11 +330,12 @@ export function App() {
     try {
       await saveProject(projectPath, projectData);
       setDirty(false);
+      changeVersionRef.current = changeVersion;
       setProjectStatus('Saved project');
     } catch (error) {
       setProjectStatus(error.message || 'Save failed');
     }
-  }, [handleSaveProjectAs, projectData, projectPath]);
+  }, [changeVersion, handleSaveProjectAs, projectData, projectPath]);
 
   const handleDocumentChange = React.useCallback((documentId, patch) => {
     setProjectData(project => {
@@ -334,8 +348,44 @@ export function App() {
       };
     });
     setDirty(true);
+    setChangeVersion(version => {
+      const next = version + 1;
+      changeVersionRef.current = next;
+      return next;
+    });
     setProjectStatus('Unsaved changes');
   }, []);
+
+  React.useEffect(() => {
+    if (!dirty || !projectPath || !projectData) return undefined;
+
+    const snapshot = projectData;
+    const versionAtSchedule = changeVersion;
+    const timer = window.setTimeout(async () => {
+      setProjectStatus('Autosaving...');
+      try {
+        await saveProject(projectPath, snapshot);
+        if (changeVersionRef.current === versionAtSchedule) {
+          setDirty(false);
+          setProjectStatus('Autosaved');
+        }
+      } catch (error) {
+        setProjectStatus(error.message || 'Autosave failed');
+      }
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [changeVersion, dirty, projectData, projectPath]);
+
+  React.useEffect(() => {
+    const warnIfDirty = (event) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnIfDirty);
+    return () => window.removeEventListener('beforeunload', warnIfDirty);
+  }, [dirty]);
 
   React.useEffect(() => {
     const onKey = (e) => {
