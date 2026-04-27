@@ -113,6 +113,7 @@ body { overflow: auto; }
   color: var(--fg-2);
   font: inherit;
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 .titlebar-action:hover:not(:disabled) {
   border-color: var(--border-gold-faint);
@@ -286,13 +287,15 @@ body { overflow: auto; }
 .modal-scrim {
   position: fixed;
   inset: 38px 0 0;
-  z-index: 250;
+  z-index: 2147483645;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 13vh;
   background: rgba(0,0,0,0.52);
   backdrop-filter: blur(10px);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .new-project-modal {
@@ -305,6 +308,8 @@ body { overflow: auto; }
   box-shadow: var(--shadow-lg), 0 0 42px rgba(212,175,55,0.14);
   padding: 18px;
   color: var(--fg-1);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .modal-head {
