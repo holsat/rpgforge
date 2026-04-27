@@ -89,6 +89,41 @@ body { overflow: auto; }
   color: var(--fg-2);
 }
 
+.project-status {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.62;
+}
+
+.project-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-action {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.035);
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+.titlebar-action:hover:not(:disabled) {
+  border-color: var(--border-gold-faint);
+  color: var(--mythos-gold);
+  background: rgba(212, 175, 55, 0.06);
+}
+.titlebar-action:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
 .titlebar-right .project {
   display: flex;
   align-items: center;
@@ -98,6 +133,7 @@ body { overflow: auto; }
   border: 1px solid var(--border-gold-faint);
   background: rgba(212, 175, 55, 0.04);
   color: var(--fg-1);
+  -webkit-app-region: no-drag;
 }
 
 /* ---------- Body layout (rail + screen) ---------- */
@@ -258,6 +294,10 @@ body { overflow: auto; }
 
 @media (max-width: 900px) {
   .titlebar-right > span {
+    display: none;
+  }
+
+  .project-actions {
     display: none;
   }
 

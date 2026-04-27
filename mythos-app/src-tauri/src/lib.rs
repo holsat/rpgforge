@@ -13,40 +13,73 @@ pub struct AppInfo {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MythosVariable {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub token: String,
+    #[serde(default)]
     pub label: String,
+    #[serde(default)]
     pub kind: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MythosEntity {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub role: String,
+    #[serde(default)]
     pub glyph: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MythosDocument {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub path: String,
+    #[serde(default)]
     pub body: String,
+    #[serde(default)]
     pub word_count: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct MythosMetadata {
+    #[serde(default = "now_iso")]
+    pub created_at: String,
+    #[serde(default = "now_iso")]
+    pub updated_at: String,
+    #[serde(default = "app_version")]
+    pub app_version: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct MythosProject {
+    #[serde(default = "schema_version")]
     pub schema_version: u32,
+    #[serde(default)]
     pub name: String,
+    #[serde(default = "default_metadata")]
+    pub metadata: MythosMetadata,
+    #[serde(default)]
     pub active_document_id: String,
+    #[serde(default)]
     pub documents: Vec<MythosDocument>,
+    #[serde(default)]
     pub variables: Vec<MythosVariable>,
+    #[serde(default)]
     pub characters: Vec<MythosEntity>,
+    #[serde(default)]
     pub locations: Vec<MythosEntity>,
 }
 
@@ -77,8 +110,9 @@ fn load_project(path: String) -> Result<MythosProject, String> {
     let path = PathBuf::from(path);
     let raw = fs::read_to_string(&path)
         .map_err(|err| format!("Could not read {}: {}", path.display(), err))?;
-    serde_json::from_str(&raw)
-        .map_err(|err| format!("Could not parse {}: {}", path.display(), err))
+    let project = serde_json::from_str(&raw)
+        .map_err(|err| format!("Could not parse {}: {}", path.display(), err))?;
+    normalize_project(project, false)
 }
 
 #[tauri::command]
@@ -89,10 +123,10 @@ fn save_project(path: String, project: MythosProject) -> Result<(), String> {
             .map_err(|err| format!("Could not create {}: {}", parent.display(), err))?;
     }
 
+    let project = normalize_project(project, true)?;
     let raw = serde_json::to_string_pretty(&project)
         .map_err(|err| format!("Could not serialize project: {}", err))?;
-    fs::write(&path, raw)
-        .map_err(|err| format!("Could not write {}: {}", path.display(), err))
+    fs::write(&path, raw).map_err(|err| format!("Could not write {}: {}", path.display(), err))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -119,6 +153,7 @@ fn default_project() -> MythosProject {
     MythosProject {
         schema_version: 1,
         name: "The Sunstone Cycle".into(),
+        metadata: default_metadata(),
         active_document_id: "chapter-3".into(),
         documents: vec![MythosDocument {
             id: "chapter-3".into(),
@@ -169,4 +204,124 @@ fn entity(id: &str, name: &str, role: &str, glyph: Option<&str>) -> MythosEntity
 
 fn word_count(text: &str) -> usize {
     text.split_whitespace().count()
+}
+
+fn normalize_project(
+    mut project: MythosProject,
+    touch_updated_at: bool,
+) -> Result<MythosProject, String> {
+    if project.schema_version != 1 {
+        return Err(format!(
+            "Unsupported Mythos schema version {}",
+            project.schema_version
+        ));
+    }
+
+    if project.name.trim().is_empty() {
+        project.name = "Untitled Mythos Project".into();
+    }
+
+    for (index, document) in project.documents.iter_mut().enumerate() {
+        if document.id.trim().is_empty() {
+            document.id = format!("document-{}", index + 1);
+        }
+        if document.title.trim().is_empty() {
+            document.title = format!("Untitled {}", index + 1);
+        }
+        if document.path.trim().is_empty() {
+            document.path = format!("Drafts/{}.md", document.title);
+        }
+        document.word_count = word_count(&document.body);
+    }
+
+    if !project
+        .documents
+        .iter()
+        .any(|document| document.id == project.active_document_id)
+    {
+        project.active_document_id = project
+            .documents
+            .first()
+            .map(|document| document.id.clone())
+            .unwrap_or_default();
+    }
+
+    if touch_updated_at {
+        project.metadata.updated_at = now_iso();
+    }
+    Ok(project)
+}
+
+fn schema_version() -> u32 {
+    1
+}
+
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").into()
+}
+
+fn default_metadata() -> MythosMetadata {
+    let timestamp = now_iso();
+    MythosMetadata {
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+        app_version: app_version(),
+    }
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_missing_project_fields() {
+        let project = MythosProject {
+            schema_version: 1,
+            name: "".into(),
+            metadata: default_metadata(),
+            active_document_id: "missing".into(),
+            documents: vec![MythosDocument {
+                id: "".into(),
+                title: "".into(),
+                path: "".into(),
+                body: "One two three".into(),
+                word_count: 0,
+            }],
+            variables: vec![],
+            characters: vec![],
+            locations: vec![],
+        };
+
+        let normalized = normalize_project(project, false).expect("project should normalize");
+
+        assert_eq!(normalized.name, "Untitled Mythos Project");
+        assert_eq!(normalized.active_document_id, "document-1");
+        assert_eq!(normalized.documents[0].title, "Untitled 1");
+        assert_eq!(normalized.documents[0].word_count, 3);
+    }
+
+    #[test]
+    fn rejects_unsupported_schema_versions() {
+        let project = MythosProject {
+            schema_version: 99,
+            name: "Future Project".into(),
+            metadata: default_metadata(),
+            active_document_id: "".into(),
+            documents: vec![],
+            variables: vec![],
+            characters: vec![],
+            locations: vec![],
+        };
+
+        let error = match normalize_project(project, false) {
+            Ok(_) => panic!("schema should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("Unsupported Mythos schema version 99"));
+    }
 }

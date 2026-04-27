@@ -9,7 +9,14 @@ import { AtlasScreen } from './screens/AtlasScreen.jsx';
 import { WeaverScreen } from './screens/WeaverScreen.jsx';
 import { SettingsScreen } from './screens/SettingsScreen.jsx';
 import { FocusMode } from './screens/FocusMode.jsx';
-import { getSampleProject } from './lib/projectBridge.js';
+import {
+  chooseProjectSavePath,
+  chooseProjectToOpen,
+  createBlankProject,
+  getSampleProject,
+  loadProject,
+  saveProject,
+} from './lib/projectBridge.js';
 
 // Mythos — App shell, rail, route state, focus mode toggle
 
@@ -59,7 +66,24 @@ function Rail({ route, setRoute, onFocus }) {
   );
 }
 
-function TitleBar({ project }) {
+function ProjectActionButton({ children, onClick, disabled }) {
+  return (
+    <button className="titlebar-action" onClick={onClick} disabled={disabled}>
+      {children}
+    </button>
+  );
+}
+
+function TitleBar({
+  project,
+  projectPath,
+  dirty,
+  status,
+  onNewProject,
+  onOpenProject,
+  onSaveProject,
+  onSaveProjectAs,
+}) {
   return (
     <div className="titlebar">
       <div className="traffic">
@@ -72,10 +96,16 @@ function TitleBar({ project }) {
         <span>Mythos</span>
       </div>
       <div className="titlebar-right">
-        <span style={{opacity:0.5}}>Project</span>
+        <span className="project-status">{status}</span>
+        <div className="project-actions">
+          <ProjectActionButton onClick={onNewProject}>New</ProjectActionButton>
+          <ProjectActionButton onClick={onOpenProject}>Open</ProjectActionButton>
+          <ProjectActionButton onClick={onSaveProject} disabled={!dirty && Boolean(projectPath)}>Save</ProjectActionButton>
+          <ProjectActionButton onClick={onSaveProjectAs}>Save As</ProjectActionButton>
+        </div>
         <div className="project">
           <Icon name="book" size={12}/>
-          <span>{project}</span>
+          <span>{project}{dirty ? ' *' : ''}</span>
           <Icon name="chevron-down" size={12}/>
         </div>
       </div>
@@ -96,6 +126,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 export function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [projectData, setProjectData] = React.useState(null);
+  const [projectPath, setProjectPath] = React.useState('');
+  const [dirty, setDirty] = React.useState(false);
+  const [projectStatus, setProjectStatus] = React.useState('Loading sample project');
   const [route, setRoute] = React.useState(() => {
     try { return localStorage.getItem('mythos-route') || 'editor'; } catch { return 'editor'; }
   });
@@ -108,10 +141,70 @@ export function App() {
   React.useEffect(() => {
     let cancelled = false;
     getSampleProject().then(project => {
-      if (!cancelled) setProjectData(project);
+      if (!cancelled) {
+        setProjectData(project);
+        setProjectStatus('Sample project');
+      }
+    }).catch(error => {
+      if (!cancelled) setProjectStatus(error.message || 'Could not load sample');
     });
     return () => { cancelled = true; };
   }, []);
+
+  const setLoadedProject = React.useCallback((project, path = '', isDirty = false) => {
+    setProjectData(project);
+    setProjectPath(path);
+    setDirty(isDirty);
+  }, []);
+
+  const handleNewProject = React.useCallback(() => {
+    setLoadedProject(createBlankProject('Untitled Mythos Project'), '', true);
+    setProjectStatus('New unsaved project');
+    setRoute('editor');
+  }, [setLoadedProject]);
+
+  const handleOpenProject = React.useCallback(async () => {
+    try {
+      const selected = await chooseProjectToOpen();
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      const project = await loadProject(path);
+      setLoadedProject(project, path);
+      setProjectStatus('Opened project');
+      setRoute('editor');
+    } catch (error) {
+      setProjectStatus(error.message || 'Open failed');
+    }
+  }, [setLoadedProject]);
+
+  const handleSaveProjectAs = React.useCallback(async () => {
+    if (!projectData) return;
+    try {
+      const path = await chooseProjectSavePath(projectData.name);
+      if (!path) return;
+      await saveProject(path, projectData);
+      setProjectPath(path);
+      setDirty(false);
+      setProjectStatus('Saved project');
+    } catch (error) {
+      setProjectStatus(error.message || 'Save failed');
+    }
+  }, [projectData]);
+
+  const handleSaveProject = React.useCallback(async () => {
+    if (!projectData) return;
+    if (!projectPath) {
+      await handleSaveProjectAs();
+      return;
+    }
+    try {
+      await saveProject(projectPath, projectData);
+      setDirty(false);
+      setProjectStatus('Saved project');
+    } catch (error) {
+      setProjectStatus(error.message || 'Save failed');
+    }
+  }, [handleSaveProjectAs, projectData, projectPath]);
 
   React.useEffect(() => {
     const onKey = (e) => {
@@ -147,7 +240,16 @@ export function App() {
 
   return (
     <div className="app-shell" data-screen-label={`Mythos · ${route}`}>
-      <TitleBar project={projectName}/>
+      <TitleBar
+        project={projectName}
+        projectPath={projectPath}
+        dirty={dirty}
+        status={projectStatus}
+        onNewProject={handleNewProject}
+        onOpenProject={handleOpenProject}
+        onSaveProject={handleSaveProject}
+        onSaveProjectAs={handleSaveProjectAs}
+      />
       <div className="app-body">
         <Rail route={route} setRoute={setRoute} onFocus={() => setFocusMode(true)}/>
         <main className="screen">{screens[route]}</main>
