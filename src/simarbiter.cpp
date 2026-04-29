@@ -88,12 +88,18 @@ void SimulationArbiter::finalizeOutcome(const QString &rulesContext, const QStri
     // 1. Try agent-specific setting
     // 2. Try legacy analyzer setting
     // 3. Fallback to global default
-    int defaultProv = settings.value(QStringLiteral("analyzer/provider"), settings.value(QStringLiteral("llm/provider"), 0)).toInt();
+    // analyzer/analyzer_provider is the canonical key written by the
+    // Settings dialog AI Services tab; analyzer/provider is the legacy
+    // pre-tab key kept only as a defensive fallback.
+    int defaultProv = settings.value(QStringLiteral("analyzer/analyzer_provider"),
+                                      settings.value(QStringLiteral("analyzer/provider"),
+                                                     settings.value(QStringLiteral("llm/provider"), 0))).toInt();
     req.provider = static_cast<LLMProvider>(settings.value(QStringLiteral("simulation/sim_arbiter_provider"), defaultProv).toInt());
-    
+
     req.model = settings.value(QStringLiteral("simulation/sim_arbiter_model")).toString();
     if (req.model.isEmpty()) {
-        req.model = settings.value(QStringLiteral("analyzer/model")).toString();
+        req.model = settings.value(QStringLiteral("analyzer/analyzer_model"),
+                                    settings.value(QStringLiteral("analyzer/model"))).toString();
         if (req.model.isEmpty()) {
             switch(req.provider) {
                 case LLMProvider::OpenAI: req.model = settings.value(QStringLiteral("llm/openai/model")).toString(); break;

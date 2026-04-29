@@ -44,7 +44,27 @@
 #include <QDateTime>
 #include <QDir>
 #include <QMutex>
+#include <QSocketNotifier>
 #include <QStandardPaths>
+
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+// Self-pipe for trapping SIGTERM/SIGINT. The signal handler is restricted to
+// async-signal-safe functions (write(2)); the actual quit work happens on
+// the main thread through a QSocketNotifier wired to the read end of the
+// pipe. Without this, kill on the process bypasses both the QThreadPool
+// drain and LibrarianDatabase::close()'s WAL checkpoint, which has been
+// observed to corrupt .rpgforge.db. See:
+// https://doc.qt.io/qt-6/unix-signals.html
+static int s_sigFd[2] = { -1, -1 };
+
+static void unixSignalHandler(int)
+{
+    char c = 1;
+    ::write(s_sigFd[0], &c, sizeof(c));
+}
 
 // Custom message handler to log to file and console
 static QTextStream *logStream = nullptr;
@@ -106,6 +126,36 @@ int main(int argc, char *argv[])
     }
 
     QApplication app(argc, argv);
+
+    // Trap SIGTERM/SIGINT and route them through QApplication::closeAllWindows()
+    // so the canonical shutdown ceremony in MainWindow::closeEvent runs (doc
+    // save → service pause → thread-pool drain → librarian WAL checkpoint).
+    // With quitOnLastWindowClosed=true (Qt default) the last window's close
+    // triggers app.exec() to return naturally. The handler itself only does
+    // async-signal-safe work; the QSocketNotifier on the read end dispatches
+    // closeAllWindows() on the main thread. See bugfix-registry entry
+    // "2026-04-28 — Unified graceful-shutdown path (UI + signal)".
+    // SOCK_CLOEXEC keeps the signal-pipe fds out of any subprocess we spawn
+    // (Pandoc, Git, etc.). Without it, a child can inherit the pipe ends
+    // and silently keep them open after the parent's notifier has closed
+    // its view of them.
+    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s_sigFd) != 0) {
+        qWarning("Could not create signal socketpair; SIGTERM will not be handled gracefully");
+    } else {
+        auto *sn = new QSocketNotifier(s_sigFd[1], QSocketNotifier::Read, &app);
+        QObject::connect(sn, &QSocketNotifier::activated, &app, [sn]() {
+            sn->setEnabled(false);
+            char tmp;
+            ::read(s_sigFd[1], &tmp, sizeof(tmp));
+            QApplication::closeAllWindows();
+        });
+        struct sigaction sa{};
+        sa.sa_handler = unixSignalHandler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        ::sigaction(SIGTERM, &sa, nullptr);
+        ::sigaction(SIGINT,  &sa, nullptr);
+    }
 
     // Setup logging. Historically this wrote to the current working
     // directory, which fails silently when the app is launched from a
@@ -184,6 +234,12 @@ int main(int argc, char *argv[])
     }
 
     auto *window = new MainWindow();
+    // Self-delete on close so MainWindow's destructor (and therefore
+    // ~LibrarianService, ~KnowledgeBase, etc.) actually runs after
+    // closeEvent accepts. Qt schedules the delete via a deferred-delete
+    // event during the same exec loop, so destruction completes before
+    // app.exec() returns.
+    window->setAttribute(Qt::WA_DeleteOnClose);
     window->show();
 
 #ifdef RPGFORGE_DBUS_TESTING

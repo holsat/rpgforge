@@ -23,6 +23,9 @@
 #include "mainwindow.h"
 #include "projectmanager.h"
 #include "ragassistservice.h"
+#include "entitygraphpanel.h"
+#include "entitycommunitydetector.h"
+#include "librarianservice.h"
 #include "sidebar.h"
 
 #include <KTextEditor/Document>
@@ -958,4 +961,140 @@ QString RpgForgeDBus::ragGenerate(const QString &systemPrompt,
     // Neither fired → timed out.
     m_ragLastError = QStringLiteral("timeout");
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// Entity graph (Phase 2 of relationship-graph work)
+// ---------------------------------------------------------------------------
+
+bool RpgForgeDBus::entityGraphShow()
+{
+    if (!projectOpen()) return false;
+    if (!m_window) return false;
+    m_window->showEntityGraph();
+    return true;
+}
+
+bool RpgForgeDBus::entityGraphRefresh()
+{
+    if (!m_window) return false;
+    auto *panel = m_window->entityGraphPanel();
+    if (!panel) return false;
+    panel->refresh();
+    return true;
+}
+
+QStringList RpgForgeDBus::entityGraphAllNames() const
+{
+    if (!m_window) return {};
+    auto *panel = m_window->entityGraphPanel();
+    return panel ? panel->allNodeNames() : QStringList();
+}
+
+QStringList RpgForgeDBus::entityGraphFilteredNames() const
+{
+    if (!m_window) return {};
+    auto *panel = m_window->entityGraphPanel();
+    return panel ? panel->filteredNodeNames() : QStringList();
+}
+
+int RpgForgeDBus::entityGraphFilteredNodeCount() const
+{
+    if (!m_window) return 0;
+    auto *panel = m_window->entityGraphPanel();
+    return panel ? panel->filteredNodeCount() : 0;
+}
+
+int RpgForgeDBus::entityGraphFilteredEdgeCount() const
+{
+    if (!m_window) return 0;
+    auto *panel = m_window->entityGraphPanel();
+    return panel ? panel->filteredEdgeCount() : 0;
+}
+
+bool RpgForgeDBus::entityGraphSetTypeFilter(const QStringList &allowed)
+{
+    if (!m_window) return false;
+    auto *panel = m_window->entityGraphPanel();
+    if (!panel) return false;
+    panel->setTypeFilterFromList(allowed);
+    return true;
+}
+
+bool RpgForgeDBus::entityGraphSetSearch(const QString &query)
+{
+    if (!m_window) return false;
+    auto *panel = m_window->entityGraphPanel();
+    if (!panel) return false;
+    panel->setSearchQueryString(query);
+    return true;
+}
+
+bool RpgForgeDBus::entityGraphFocusOnEntity(const QString &entityName, int hops)
+{
+    if (!m_window) return false;
+    auto *panel = m_window->entityGraphPanel();
+    if (!panel) return false;
+    const int before = panel->filteredNodeCount();
+    panel->setNeighborhoodFocusByName(entityName, hops);
+    // setNeighborhoodFocusByName silently no-ops on unresolved names; if
+    // the visible-node count didn't change at all, treat as failure so
+    // tests get a clear signal.
+    return panel->filteredNodeCount() != before
+        || panel->filteredNodeCount() > 0;
+}
+
+bool RpgForgeDBus::entityGraphClearFocus()
+{
+    if (!m_window) return false;
+    auto *panel = m_window->entityGraphPanel();
+    if (!panel) return false;
+    panel->clearFocus();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: cross-doc navigation
+// ---------------------------------------------------------------------------
+
+bool RpgForgeDBus::navigateToEntityDossier(const QString &entityName)
+{
+    if (!m_window) return false;
+    return m_window->navigateToEntityDossier(entityName);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: community detection
+// ---------------------------------------------------------------------------
+
+int RpgForgeDBus::communitiesDetectAndPersist()
+{
+    if (!m_window || !m_window->librarianService()) return 0;
+    LibrarianDatabase *db = m_window->librarianService()->database();
+    if (!db) return 0;
+    EntityCommunityDetector detector(db);
+    EntityCommunityDetector::Result r = detector.detectAndPersist();
+    return r.communityCount;
+}
+
+QStringList RpgForgeDBus::communityMembers(qint64 communityId) const
+{
+    if (!m_window || !m_window->librarianService()) return {};
+    LibrarianDatabase *db = m_window->librarianService()->database();
+    if (!db) return {};
+    QStringList out;
+    for (qint64 id : db->findEntitiesByCommunity(communityId)) {
+        out.append(db->getEntityName(id));
+    }
+    return out;
+}
+
+qint64 RpgForgeDBus::communityIdOf(const QString &entityName) const
+{
+    if (!m_window || !m_window->librarianService()) return -1;
+    LibrarianDatabase *db = m_window->librarianService()->database();
+    if (!db) return -1;
+    const qint64 entityId = db->resolveEntityByName(entityName);
+    if (entityId < 0) return -1;
+    return db->getEntityCommunityId(entityId);
 }

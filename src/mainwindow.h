@@ -56,6 +56,7 @@ class QLabel;
 class QFrame;
 class QProgressBar;
 class QLineEdit;
+class QCloseEvent;
 #include <QPair>
 #include <QList>
 #include <QUrl>
@@ -83,6 +84,19 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+
+    /**
+     * @brief Single chokepoint for the application's shutdown ceremony.
+     *
+     * Runs on every quit path: window close (X), File→Quit, and SIGTERM/SIGINT
+     * (which routes through QApplication::closeAllWindows()). Performs a
+     * best-effort silent save of all documents, pauses long-running services,
+     * drains the global thread pool, and explicitly closes the librarian
+     * database so the WAL checkpoint runs before SQLite tears connections
+     * down. See bugfix-registry.md "2026-04-28 — Unified graceful-shutdown
+     * path (UI + signal)" for the binding invariants.
+     */
+    void closeEvent(QCloseEvent *event) override;
 
 private Q_SLOTS:
     void newFile();
@@ -147,6 +161,33 @@ public:
     KTextEditor::View* activeView() const;
     KTextEditor::Document* activeDocument() const;
 
+    /// Accessor for the D-Bus surface — lets the rpgforge.dbus
+    /// interface drive the entity graph view directly for end-to-end
+    /// tests. Returns nullptr if no project is open.
+    class EntityGraphPanel *entityGraphPanel() const { return m_entityGraphPanel; }
+    /// Switches the central view to the entity graph panel and triggers
+    /// a refresh from the librarian DB. No-op if no project is open.
+    void showEntityGraph();
+
+    /// Phase 4 navigation — resolves the entity by name (or alias) and
+    /// opens its dossier file. Returns true on success. The dossier
+    /// search uses the same lorekeeper/research roots the entity-graph
+    /// panel's openDossier handler walks. Driven by Ctrl+E "Go to
+    /// entity" and the corresponding D-Bus endpoint.
+    bool navigateToEntityDossier(const QString &entityName);
+
+private:
+    /// Post-extraction maintenance chain. Called automatically after
+    /// either the KnowledgeBase finishes indexing or the LibrarianService
+    /// finishes a scan — those are the two events that can leave
+    /// chunk_entities, mention_count, or community membership stale.
+    /// Runs idempotent re-link + aggregate refresh + (Phase 5) community
+    /// detection. Communities are an internal index used by retrieval;
+    /// the user never triggers this directly and never sees the result.
+    void runEntityIndexMaintenance();
+
+public:
+
     /**
      * @brief Returns the KTextEditor document currently open in the main editor,
      *        or nullptr if no document is loaded. Used by the DBus adaptor.
@@ -208,6 +249,16 @@ public:
 
 private Q_SLOTS:
     void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
+    /**
+     * @brief Apply saved splitter sizes after the window has a real geometry.
+     *
+     * Scheduled via QTimer::singleShot(0, ...) at the end of restoreSession()
+     * so that QSplitter::restoreState consults laid-out widget sizes rather
+     * than the unsized splitters present during MainWindow construction.
+     * Without this deferral the proportional split applied against an
+     * unsized splitter starves the editor pane on startup.
+     */
+    void restoreSplittersDeferred();
 
 private:
     void setupEditor();
@@ -256,6 +307,7 @@ private:
     VariablesPanel *m_variablesPanel = nullptr;
     ChatPanel *m_chatPanel = nullptr;
     ProblemsPanel *m_problemsPanel = nullptr;
+    class EntityGraphPanel *m_entityGraphPanel = nullptr;
     SimulationPanel *m_simulationPanel = nullptr;
     QLabel *m_diagnosticsStatus = nullptr;
     QLabel *m_wordCountStatus = nullptr;

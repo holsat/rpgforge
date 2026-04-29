@@ -24,7 +24,11 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QDebug>
 #include <QRegularExpression>
 #include <QCryptographicHash>
@@ -234,6 +238,21 @@ bool KnowledgeBase::setupDatabase()
         qWarning() << "KnowledgeBase: Failed to create schema:" << query.lastError().text();
         return false;
     }
+
+    // Phase 1 of the entity-graph work: chunk↔entity linkage. Index lives
+    // in the vector DB so a single SQL JOIN can pull "all chunks linked to
+    // any entity in this set" during graph-augmented retrieval (Phase 3).
+    if (!query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS chunk_entities ("
+                              "chunk_id INTEGER NOT NULL,"
+                              "entity_id INTEGER NOT NULL,"
+                              "PRIMARY KEY (chunk_id, entity_id),"
+                              "FOREIGN KEY(chunk_id) REFERENCES chunks(id) ON DELETE CASCADE)"))) {
+        qWarning() << "KnowledgeBase: Failed to create chunk_entities:"
+                   << query.lastError().text();
+        return false;
+    }
+    query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_chunkent_entity "
+                               "ON chunk_entities(entity_id)"));
     return true;
 }
 
@@ -344,6 +363,14 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         }
     }
 
+    // Soft cap and overlap for sentence-aware sub-division of long
+    // sections. ~1500 chars stays comfortably inside the 512-token
+    // window used by mainstream embedding models. 200-char overlap
+    // is enough to keep a sentence that straddles a boundary
+    // (~3 short sentences) fully indexed in at least one chunk.
+    constexpr int kMaxChunkChars = 1500;
+    constexpr int kChunkOverlap  = 200;
+
     QPointer<KnowledgeBase> weakThis(this);
     for (const QString &chunkText : rawChunks) {
         QString trimmed = chunkText.trimmed();
@@ -354,20 +381,28 @@ void KnowledgeBase::chunkAndEmbed(const QString &filePath, const QString &conten
         else if (trimmed.startsWith(QLatin1String("## "))) heading = trimmed.section(QLatin1Char('\n'), 0, 0).mid(3).trimmed();
         else heading = i18n("General");
 
-        m_pendingEmbeddings++;
-        Q_EMIT indexingProgress(0, m_pendingEmbeddings);
+        // Break long sections into overlapping sub-chunks. Short
+        // sections come out as a single-element list so the existing
+        // heading-bounded behaviour is preserved.
+        const QStringList subChunks =
+            subdivideChunk(trimmed, kMaxChunkChars, kChunkOverlap);
 
-        generateEmbeddingWithFallback(trimmed, [weakThis, filePath, heading, trimmed, currentHash](const QVector<float> &embedding) {
-            if (!weakThis) return;
-            if (!embedding.isEmpty()) {
-                weakThis->storeChunk(filePath, heading, trimmed, embedding, currentHash);
-            }
-            weakThis->m_pendingEmbeddings--;
-            if (weakThis->m_pendingEmbeddings <= 0) {
-                weakThis->m_pendingEmbeddings = 0;
-                Q_EMIT weakThis->indexingFinished();
-            }
-        });
+        for (const QString &sub : subChunks) {
+            m_pendingEmbeddings++;
+            Q_EMIT indexingProgress(0, m_pendingEmbeddings);
+
+            generateEmbeddingWithFallback(sub, [weakThis, filePath, heading, sub, currentHash](const QVector<float> &embedding) {
+                if (!weakThis) return;
+                if (!embedding.isEmpty()) {
+                    weakThis->storeChunk(filePath, heading, sub, embedding, currentHash);
+                }
+                weakThis->m_pendingEmbeddings--;
+                if (weakThis->m_pendingEmbeddings <= 0) {
+                    weakThis->m_pendingEmbeddings = 0;
+                    Q_EMIT weakThis->indexingFinished();
+                }
+            });
+        }
     }
 }
 
@@ -523,6 +558,448 @@ void KnowledgeBase::search(const QString &queryText, int topK, const QString &ex
     });
 }
 
+QStringList KnowledgeBase::subdivideChunk(const QString &text, int maxChars, int overlap)
+{
+    QStringList out;
+    if (text.size() <= maxChars) {
+        out.append(text);
+        return out;
+    }
+    int start = 0;
+    while (start < text.size()) {
+        int end = qMin(text.size(), start + maxChars);
+        if (end < text.size()) {
+            const int searchFloor = qMax(start + maxChars - overlap, start + 1);
+            const int paraEnd = text.lastIndexOf(QStringLiteral("\n\n"), end);
+            const int sentEnd = text.lastIndexOf(QStringLiteral(". "), end);
+            const int boundary = qMax(paraEnd, sentEnd);
+            if (boundary >= searchFloor) {
+                end = boundary + 1;
+            }
+        }
+        out.append(text.mid(start, end - start));
+        if (end >= text.size()) break;
+        start = qMax(end - overlap, start + 1);
+    }
+    return out;
+}
+
+QStringList KnowledgeBase::extractKeywordTokens(const QString &query)
+{
+    QStringList keywords;
+
+    // Quoted phrases first.
+    static const QRegularExpression quoteRe(QStringLiteral("\"([^\"]+)\""));
+    auto quoteIt = quoteRe.globalMatch(query);
+    while (quoteIt.hasNext()) {
+        const auto m = quoteIt.next();
+        const QString phrase = m.captured(1).trimmed();
+        if (!phrase.isEmpty()) keywords.append(phrase);
+    }
+
+    static const QSet<QString> stopWords = {
+        // Interrogatives — these match a huge fraction of an English
+        // corpus and drown out rare proper nouns when OR-joined into a
+        // single ripgrep pattern.
+        QStringLiteral("who"),   QStringLiteral("whom"),  QStringLiteral("whose"),
+        QStringLiteral("what"),  QStringLiteral("when"),  QStringLiteral("where"),
+        QStringLiteral("which"), QStringLiteral("why"),   QStringLiteral("how"),
+        // Common short verbs / auxiliaries — same problem as the
+        // interrogatives. The 3-char minimum already drops "is/be/to/of"
+        // but capitalized forms (start of sentence) would still leak
+        // through; explicit listing handles that.
+        QStringLiteral("are"),   QStringLiteral("was"),   QStringLiteral("were"),
+        QStringLiteral("has"),   QStringLiteral("had"),   QStringLiteral("does"),
+        QStringLiteral("did"),   QStringLiteral("can"),   QStringLiteral("will"),
+        QStringLiteral("may"),   QStringLiteral("might"), QStringLiteral("shall"),
+        QStringLiteral("must"),  QStringLiteral("been"),  QStringLiteral("being"),
+        QStringLiteral("said"),  QStringLiteral("says"),  QStringLiteral("get"),
+        QStringLiteral("got"),   QStringLiteral("make"),  QStringLiteral("made"),
+        // Determiners / conjunctions / generic prose words.
+        QStringLiteral("tell"),  QStringLiteral("about"), QStringLiteral("with"),
+        QStringLiteral("this"),  QStringLiteral("that"),  QStringLiteral("there"),
+        QStringLiteral("these"), QStringLiteral("those"), QStringLiteral("they"),
+        QStringLiteral("them"),  QStringLiteral("their"), QStringLiteral("here"),
+        QStringLiteral("have"),  QStringLiteral("would"), QStringLiteral("could"),
+        QStringLiteral("should"),QStringLiteral("from"),  QStringLiteral("into"),
+        QStringLiteral("some"),  QStringLiteral("more"),  QStringLiteral("most"),
+        QStringLiteral("each"),  QStringLiteral("just"),  QStringLiteral("also"),
+        QStringLiteral("then"),  QStringLiteral("only"),  QStringLiteral("very"),
+        QStringLiteral("real"),  QStringLiteral("create"),QStringLiteral("examples"),
+        QStringLiteral("example"),QStringLiteral("scenarios"),
+        QStringLiteral("characters"), QStringLiteral("everything"),
+        QStringLiteral("test"),
+    };
+
+    // PCRE2 (Qt's regex engine) does not accept "\uXXXX"; it requires
+    // "\x{XXXX}" for explicit hex codepoints. The previous "À"
+    // form silently invalidated the entire pattern, so this iterator
+    // produced ZERO tokens — meaning the ripgrep grep arm of
+    // hybridSearch never actually ran. Caught by test_ragquality.
+    static const QRegularExpression tokenRe(QStringLiteral("[\\w\\x{00C0}-\\x{FFFF}']+"));
+    auto tokIt = tokenRe.globalMatch(query);
+    while (tokIt.hasNext() && keywords.size() < 5) {
+        const QString tok = tokIt.next().captured(0);
+        if (tok.size() < 3) continue;
+        const QString lower = tok.toLower();
+        if (stopWords.contains(lower)) continue;
+
+        bool hasNonAscii = false;
+        for (QChar c : tok) {
+            if (c.unicode() > 127) { hasNonAscii = true; break; }
+        }
+        const bool capitalized = tok[0].isUpper();
+        const bool longEnough = tok.size() >= 5;
+        if (!(capitalized || hasNonAscii || longEnough)) continue;
+        if (keywords.contains(tok, Qt::CaseInsensitive)) continue;
+        keywords.append(tok);
+    }
+
+    return keywords;
+}
+
+namespace {
+
+// Run ripgrep against the project's markdown root for any of `tokens`.
+// Returns absolute paths of matching files. ripgrep prints one line per
+// match by default; we collapse to unique file paths and cap matches
+// per file via -m 3 so a single highly-repeated keyword doesn't blow
+// the output buffer.
+QStringList runRipgrepFiles(const QStringList &tokens, const QString &projectRoot,
+                            int maxFiles)
+{
+    if (tokens.isEmpty() || projectRoot.isEmpty()) return {};
+    static const QString rgPath = QStandardPaths::findExecutable(QStringLiteral("rg"));
+    if (rgPath.isEmpty()) return {};
+
+    // Build OR pattern: "(token1|token2|...)". Use QRegularExpression's
+    // built-in escape so proper nouns containing punctuation (e.g.
+    // "Vål'naden", "Ryz-Ka") match literally rather than getting
+    // interpreted as metacharacters by ripgrep's regex engine.
+    QStringList escaped;
+    for (const QString &t : tokens) {
+        escaped.append(QRegularExpression::escape(t));
+    }
+    const QString pattern = QStringLiteral("(") + escaped.join(QLatin1Char('|')) + QStringLiteral(")");
+
+    QProcess proc;
+    proc.start(rgPath, {
+        QStringLiteral("-l"),                  // file paths only
+        QStringLiteral("-i"),                  // case-insensitive
+        QStringLiteral("--type"), QStringLiteral("md"),
+        QStringLiteral("--no-messages"),
+        pattern,
+        projectRoot,
+    });
+    if (!proc.waitForStarted(2000)) return {};
+    if (!proc.waitForFinished(5000)) {
+        proc.kill();
+        proc.waitForFinished(500);
+        return {};
+    }
+    if (proc.exitStatus() != QProcess::NormalExit) return {};
+
+    const QString stdoutText = QString::fromUtf8(proc.readAllStandardOutput());
+    QStringList paths = stdoutText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (QString &p : paths) p = p.trimmed();
+    paths.removeAll(QString());
+    if (paths.size() > maxFiles) paths = paths.mid(0, maxFiles);
+    return paths;
+}
+
+// Read `filePath`, find the first occurrence of any of `tokens` (case-
+// insensitive), and extract a ~window-char snippet around it. Returns
+// (snippet, headingHint) — heading is the closest preceding markdown
+// heading, or the file's basename if none found.
+struct GrepSnippet {
+    QString content;
+    QString heading;
+};
+GrepSnippet extractGrepSnippet(const QString &filePath, const QStringList &tokens,
+                               int window = 1200)
+{
+    GrepSnippet out;
+    out.heading = QFileInfo(filePath).completeBaseName();
+
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly)) return out;
+    const QString text = QString::fromUtf8(f.readAll());
+    f.close();
+    if (text.isEmpty()) return out;
+
+    int hitIdx = -1;
+    for (const QString &t : tokens) {
+        const int idx = text.indexOf(t, 0, Qt::CaseInsensitive);
+        if (idx < 0) continue;
+        if (hitIdx < 0 || idx < hitIdx) hitIdx = idx;
+    }
+    if (hitIdx < 0) {
+        // No token actually matched in this file (rg-l said it did, but maybe
+        // a pattern flag mismatch). Return the file head as a weak fallback.
+        out.content = text.left(window);
+        return out;
+    }
+
+    // Walk back to find the closest preceding heading line for the heading
+    // hint (so the LLM has section context).
+    static const QRegularExpression headingRe(QStringLiteral("^(#{1,6})\\s+(.*)$"),
+                                              QRegularExpression::MultilineOption);
+    auto headIt = headingRe.globalMatch(text.left(hitIdx));
+    QString lastHeading;
+    while (headIt.hasNext()) {
+        const auto m = headIt.next();
+        lastHeading = m.captured(2).trimmed();
+    }
+    if (!lastHeading.isEmpty()) out.heading = lastHeading;
+
+    const int start = qMax(0, hitIdx - window / 4);
+    const int end = qMin(text.size(), hitIdx + (window * 3) / 4);
+    out.content = text.mid(start, end - start);
+    return out;
+}
+
+} // namespace
+
+void KnowledgeBase::hybridSearch(const QString &queryText, int topK,
+                                 const QString &excludeFile,
+                                 std::function<void(const QList<SearchResult>&)> callback)
+{
+    // Capture state we need on the worker side; project path is read on the
+    // main thread before we hop to a worker.
+    const QString projectRoot = m_projectPath;
+    QPointer<KnowledgeBase> weak(this);
+
+    // Phase 1: vector search via existing async path. Phase 2 (ripgrep)
+    // runs after the vector search returns so its tokens have a callback to
+    // hop back into. ripgrep itself runs on a worker thread to avoid
+    // blocking the UI when the corpus is large.
+    search(queryText, topK, excludeFile,
+           [weak, queryText, topK, excludeFile, projectRoot, callback]
+           (const QList<SearchResult> &vectorResults) {
+        if (!weak) return;
+        const QStringList tokens = extractKeywordTokens(queryText);
+        if (tokens.isEmpty() || projectRoot.isEmpty()) {
+            // Nothing useful for grep — return vector results as-is.
+            if (callback) callback(vectorResults);
+            return;
+        }
+
+        const QString vecDbPath = weak ? weak->m_dbPath : QString();
+        auto future = QtConcurrent::run([tokens, projectRoot, excludeFile, vecDbPath]() {
+            QList<SearchResult> grepResults;
+            const QStringList markdownRoots = {
+                QDir(projectRoot).absoluteFilePath(QStringLiteral("manuscript")),
+                QDir(projectRoot).absoluteFilePath(QStringLiteral("lorekeeper")),
+                QDir(projectRoot).absoluteFilePath(QStringLiteral("research")),
+            };
+            QStringList allFiles;
+            for (const QString &root : markdownRoots) {
+                if (!QFileInfo::exists(root)) continue;
+                allFiles += runRipgrepFiles(tokens, root, /*maxFiles=*/10);
+            }
+            allFiles.removeDuplicates();
+            const QString excludeAbs = excludeFile.isEmpty()
+                ? QString()
+                : QDir(projectRoot).absoluteFilePath(excludeFile);
+            for (const QString &filePath : allFiles) {
+                if (!excludeAbs.isEmpty() && filePath == excludeAbs) continue;
+                const GrepSnippet snip = extractGrepSnippet(filePath, tokens);
+                if (snip.content.isEmpty()) continue;
+                SearchResult r;
+                // Store project-relative path to match the vector path shape.
+                r.filePath = QDir(projectRoot).relativeFilePath(filePath);
+                r.heading = snip.heading;
+                r.content = snip.content;
+                // Score grep hits at 0.9 — above all but the strongest
+                // vector matches. Reasoning: a literal-match for a token
+                // the user typed is a STRONGER recall signal than a
+                // semantic similarity to a topically-related passage.
+                // Made-up proper nouns from fiction (character names,
+                // place names) collapse to near-identical low-info
+                // vectors during embedding, so the ranking has to favour
+                // the grep arm to surface them at all.
+                r.score = 0.9f;
+                grepResults.append(r);
+            }
+
+            // ---- Phase 3: graph traversal arm. -------------------------
+            // Resolve query tokens to entity ids via the librarian's
+            // alias index, traverse 1 hop in relationships, then pull
+            // every chunk linked to any entity in the neighborhood.
+            //
+            // Score 0.85 — between vector (~0.7-0.85) and grep (0.9).
+            // Rationale: a chunk that doesn't literally mention the
+            // queried name but is linked via a relationship is high-
+            // confidence supplementary context — better than a weak
+            // vector hit, but a literal mention is still stronger.
+            const QString libDbPath = QDir(projectRoot).absoluteFilePath(
+                QStringLiteral(".rpgforge.db"));
+            const bool haveDbs = QFileInfo::exists(libDbPath)
+                                 && !vecDbPath.isEmpty()
+                                 && QFileInfo::exists(vecDbPath);
+            if (haveDbs) {
+                QSet<qint64> seedIds;
+                {
+                    const QString conn = QStringLiteral("kb_graph_lib_%1")
+                        .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+                    QSqlDatabase lib = QSqlDatabase::contains(conn)
+                        ? QSqlDatabase::database(conn)
+                        : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                    lib.setDatabaseName(libDbPath);
+                    if (lib.open()) {
+                        QSqlQuery q(lib);
+                        for (const QString &t : tokens) {
+                            q.prepare(QStringLiteral(
+                                "SELECT entity_id FROM entity_aliases "
+                                "WHERE alias = :a COLLATE NOCASE LIMIT 1"));
+                            q.bindValue(QStringLiteral(":a"), t);
+                            if (q.exec() && q.next()) seedIds.insert(q.value(0).toLongLong());
+                        }
+                        // 1-hop expansion: add every direct neighbor of
+                        // each seed via the relationships table. Two
+                        // queries (outgoing + incoming) since edges are
+                        // directed but membership is symmetric for
+                        // retrieval purposes.
+                        QSet<qint64> neighborhood = seedIds;
+                        if (!seedIds.isEmpty()) {
+                            QStringList placeholders;
+                            for (int i = 0; i < seedIds.size(); ++i) {
+                                placeholders.append(QStringLiteral("?"));
+                            }
+                            const QString inList = placeholders.join(QStringLiteral(","));
+                            const QString sqlOut = QStringLiteral(
+                                "SELECT target_id FROM relationships WHERE source_id IN (")
+                                + inList + QStringLiteral(")");
+                            const QString sqlIn = QStringLiteral(
+                                "SELECT source_id FROM relationships WHERE target_id IN (")
+                                + inList + QStringLiteral(")");
+                            QSqlQuery qo(lib);
+                            qo.prepare(sqlOut);
+                            for (qint64 id : seedIds) qo.addBindValue(id);
+                            if (qo.exec()) while (qo.next()) neighborhood.insert(qo.value(0).toLongLong());
+                            QSqlQuery qi(lib);
+                            qi.prepare(sqlIn);
+                            for (qint64 id : seedIds) qi.addBindValue(id);
+                            if (qi.exec()) while (qi.next()) neighborhood.insert(qi.value(0).toLongLong());
+                            // Also include containment hierarchy via parent_id.
+                            QSqlQuery qp(lib);
+                            qp.prepare(QStringLiteral(
+                                "SELECT id, parent_id FROM entities "
+                                "WHERE parent_id IS NOT NULL"));
+                            if (qp.exec()) {
+                                while (qp.next()) {
+                                    const qint64 c = qp.value(0).toLongLong();
+                                    const qint64 p = qp.value(1).toLongLong();
+                                    if (seedIds.contains(c)) neighborhood.insert(p);
+                                    if (seedIds.contains(p)) neighborhood.insert(c);
+                                }
+                            }
+                        }
+                        seedIds = neighborhood;
+                        lib.close();
+                    }
+                    QSqlDatabase::removeDatabase(conn);
+                }
+
+                if (!seedIds.isEmpty()) {
+                    // Open the vector DB and pull chunks for entities
+                    // in the neighborhood. SELECT joins chunk_entities
+                    // against chunks so we get the full snippet payload
+                    // in one query.
+                    const QString conn = QStringLiteral("kb_graph_vec_%1")
+                        .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+                    QSqlDatabase vec = QSqlDatabase::contains(conn)
+                        ? QSqlDatabase::database(conn)
+                        : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                    vec.setDatabaseName(vecDbPath);
+                    if (vec.open()) {
+                        QStringList ids;
+                        for (qint64 id : seedIds) ids.append(QString::number(id));
+                        QSqlQuery q(vec);
+                        // Inline the id list — values come from a
+                        // private QSet<qint64>, no user input, so SQL
+                        // injection isn't a concern. ce.entity_id IN
+                        // (…) bounded by the neighborhood size.
+                        const QString sql = QStringLiteral(
+                            "SELECT DISTINCT c.file_path, c.heading, c.content "
+                            "FROM chunk_entities ce "
+                            "JOIN chunks c ON c.id = ce.chunk_id "
+                            "WHERE ce.entity_id IN (") + ids.join(QLatin1Char(',')) +
+                            QStringLiteral(") LIMIT 60");
+                        if (q.exec(sql)) {
+                            while (q.next()) {
+                                SearchResult r;
+                                r.filePath = q.value(0).toString();
+                                r.heading = q.value(1).toString();
+                                r.content = q.value(2).toString();
+                                r.score = 0.85f;
+                                grepResults.append(r);
+                            }
+                        }
+                        vec.close();
+                    }
+                    QSqlDatabase::removeDatabase(conn);
+                }
+            }
+
+            return grepResults;
+        });
+
+        // Hop back to the main thread to merge + invoke the user callback.
+        // QFutureWatcher is the canonical Qt6 marshaller; using the more
+        // compact lambda form to avoid the watcher member.
+        auto *watcher = new QFutureWatcher<QList<SearchResult>>();
+        QObject::connect(watcher, &QFutureWatcher<QList<SearchResult>>::finished,
+                         weak, [weak, watcher, vectorResults, topK, callback]() {
+            const QList<SearchResult> grepResults = watcher->result();
+            watcher->deleteLater();
+            if (!weak) return;
+
+            // Merge: union vector + grep results. Vector may have
+            // multiple chunks per file (different sections); we keep
+            // those because a long file can have multiple relevant
+            // passages. For grep, we add the literal-match snippet
+            // alongside, even if the same file already has vector
+            // chunks — the grep snippet is anchored on the proper-noun
+            // hit, which is often a section the embedding pass missed.
+            //
+            // Downstream MMR diversification in RagAssistService will
+            // collapse near-duplicates by content similarity, so we do
+            // not need to dedupe by filePath here.
+            QList<SearchResult> merged = vectorResults;
+            merged.append(grepResults);
+
+            // Sort by score descending so high-confidence grep hits
+            // (literal proper-noun matches at 0.9) outrank weak vector
+            // hits and survive the rerank+trim stage.
+            std::sort(merged.begin(), merged.end(),
+                      [](const SearchResult &a, const SearchResult &b) {
+                          return a.score > b.score;
+                      });
+            // Cap to topK + small overflow so the rerank stage has
+            // working room without blowing the LLM context window.
+            const int cap = topK + 5;
+            if (merged.size() > cap) merged = merged.mid(0, cap);
+
+            // grepResults now contains both literal-match (score 0.9)
+            // and graph-traversal (score 0.85) augmented hits — the
+            // single list is the simplest carrier across the worker
+            // boundary. Count each tier separately for diagnostics.
+            int grepHits = 0, graphHits = 0;
+            for (const auto &r : grepResults) {
+                if (r.score >= 0.89f) ++grepHits; else ++graphHits;
+            }
+            qInfo().noquote()
+                << "KnowledgeBase::hybridSearch: vector=" << vectorResults.size()
+                << "grep=" << grepHits
+                << "graph=" << graphHits
+                << "merged=" << merged.size();
+            if (callback) callback(merged);
+        });
+        watcher->setFuture(future);
+    });
+}
+
 void KnowledgeBase::reindexProject()
 {
     if (m_projectPath.isEmpty()) {
@@ -551,4 +1028,141 @@ void KnowledgeBase::reindexProject()
     }
     qWarning().noquote() << "KnowledgeBase::reindexProject: queued" << mdFiles
                           << "markdown files for embedding";
+}
+
+int KnowledgeBase::rebuildChunkEntityLinks()
+{
+    if (m_projectPath.isEmpty()) return 0;
+
+    // ---- Step 1: load the alias index from the librarian DB. -----------
+    // Open a private connection (separate from the librarian's per-thread
+    // connection naming so we don't clash). Read-only — we never mutate
+    // .rpgforge.db from here.
+    const QString libDbPath = QDir(m_projectPath).absoluteFilePath(
+        QStringLiteral(".rpgforge.db"));
+    if (!QFileInfo::exists(libDbPath)) {
+        qInfo().noquote() << "KnowledgeBase::rebuildChunkEntityLinks: "
+                              "librarian DB does not exist yet — skipping";
+        return 0;
+    }
+
+    struct AliasEntry { QString alias; QString lower; qint64 entityId; };
+    QList<AliasEntry> aliases;
+    {
+        const QString conn = QStringLiteral("kb_alias_loader_%1")
+            .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+        QSqlDatabase libDb = QSqlDatabase::contains(conn)
+            ? QSqlDatabase::database(conn)
+            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        libDb.setDatabaseName(libDbPath);
+        if (!libDb.open()) {
+            qWarning() << "KnowledgeBase::rebuildChunkEntityLinks: "
+                          "failed to open librarian DB:" << libDb.lastError().text();
+            return 0;
+        }
+        QSqlQuery q(libDb);
+        if (q.exec(QStringLiteral(
+                "SELECT alias, entity_id FROM entity_aliases"))) {
+            while (q.next()) {
+                AliasEntry e;
+                e.alias    = q.value(0).toString();
+                e.entityId = q.value(1).toLongLong();
+                e.lower    = e.alias.toLower();
+                if (!e.alias.isEmpty()) aliases.append(e);
+            }
+        }
+        libDb.close();
+        QSqlDatabase::removeDatabase(conn);
+    }
+
+    if (aliases.isEmpty()) {
+        qInfo().noquote() << "KnowledgeBase::rebuildChunkEntityLinks: "
+                              "no entities indexed yet — skipping";
+        return 0;
+    }
+
+    // Sort longest-first so "Captain Ryzen" matches before "Ryzen" matches
+    // before "Ryz". This is the rule that lets us mask out shorter overlaps
+    // after a longer match has been recorded.
+    std::sort(aliases.begin(), aliases.end(),
+              [](const AliasEntry &a, const AliasEntry &b) {
+                  return a.alias.size() > b.alias.size();
+              });
+
+    // ---- Step 2: walk every chunk and find matches. --------------------
+    QSqlDatabase db = database();
+    if (!db.isOpen()) return 0;
+
+    QSqlQuery scan(db);
+    if (!scan.exec(QStringLiteral("SELECT id, content FROM chunks"))) {
+        qWarning() << "KnowledgeBase::rebuildChunkEntityLinks: "
+                       "chunk scan failed:" << scan.lastError().text();
+        return 0;
+    }
+
+    int totalLinks = 0;
+    int chunksProcessed = 0;
+    db.transaction();
+
+    QSqlQuery ins(db);
+    ins.prepare(QStringLiteral("INSERT OR IGNORE INTO chunk_entities "
+                                "(chunk_id, entity_id) VALUES (:c, :e)"));
+
+    while (scan.next()) {
+        const qint64 chunkId = scan.value(0).toLongLong();
+        const QString content = scan.value(1).toString();
+        if (content.isEmpty()) continue;
+        const QString lowerContent = content.toLower();
+        ++chunksProcessed;
+
+        // Mask: tracks character indices already consumed by a longer
+        // alias match, so "Ryz" inside "Ryzen" doesn't double-link.
+        QVector<bool> consumed(content.size(), false);
+        QSet<qint64> linkedEntities;
+
+        for (const AliasEntry &a : aliases) {
+            if (a.lower.size() < 3) continue;     // skip 1-2 char aliases (false positives)
+            int from = 0;
+            while (true) {
+                const int hit = lowerContent.indexOf(a.lower, from);
+                if (hit < 0) break;
+                from = hit + 1;
+                const int end = hit + a.lower.size();
+
+                // Word-boundary check: the char before/after must not be a
+                // letter/digit, otherwise we'd false-match "Ryz" inside
+                // "Ryzen". '_' and apostrophes count as word chars (so
+                // names like "Vål'naden" stay intact).
+                auto isWordChar = [](QChar c) {
+                    return c.isLetterOrNumber() || c == QLatin1Char('_')
+                        || c == QLatin1Char('\'');
+                };
+                if (hit > 0 && isWordChar(content.at(hit - 1))) continue;
+                if (end < content.size() && isWordChar(content.at(end))) continue;
+
+                // Mask check: any char in [hit, end) already consumed by a
+                // longer match? Skip if so.
+                bool overlaps = false;
+                for (int i = hit; i < end; ++i) {
+                    if (consumed[i]) { overlaps = true; break; }
+                }
+                if (overlaps) continue;
+                for (int i = hit; i < end; ++i) consumed[i] = true;
+
+                if (linkedEntities.contains(a.entityId)) continue;
+                linkedEntities.insert(a.entityId);
+
+                ins.bindValue(QStringLiteral(":c"), chunkId);
+                ins.bindValue(QStringLiteral(":e"), a.entityId);
+                if (ins.exec()) ++totalLinks;
+            }
+        }
+    }
+
+    db.commit();
+    qInfo().noquote() << "KnowledgeBase::rebuildChunkEntityLinks:"
+                       << "scanned" << chunksProcessed << "chunks,"
+                       << "wrote" << totalLinks << "links across"
+                       << aliases.size() << "aliases";
+    return totalLinks;
 }

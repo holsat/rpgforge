@@ -346,6 +346,61 @@ public Q_SLOTS:
      *  retrieval returned no passages or no ragGenerate has run. */
     QStringList ragLastRetrievalSources() const { return m_ragLastRetrievalSources; }
 
+    // ---------------- Entity graph (Phase 2 of relationship-graph work) ----------------
+    /** \brief Switches the central view to the entity graph tab and
+     *  triggers a refresh from the librarian DB. Returns false if no
+     *  project is open. */
+    bool entityGraphShow();
+    /** \brief Forces a model reload from the librarian DB. Useful in
+     *  tests after a librarian extraction so the graph reflects the
+     *  freshly-extracted entities. */
+    bool entityGraphRefresh();
+    /** \brief Returns every entity name the graph knows about,
+     *  unfiltered. Empty when no project is open. */
+    QStringList entityGraphAllNames() const;
+    /** \brief Returns the entity names currently visible in the graph
+     *  after the active filters (type / search / focus) have been
+     *  applied. */
+    QStringList entityGraphFilteredNames() const;
+    /** \brief Total count of nodes / edges in the filtered graph.
+     *  Convenience accessors for tests. */
+    int entityGraphFilteredNodeCount() const;
+    int entityGraphFilteredEdgeCount() const;
+    /** \brief Restricts the graph to entities with one of the given
+     *  type strings. Pass empty list = no type filter ("all types"). */
+    bool entityGraphSetTypeFilter(const QStringList &allowed);
+    /** \brief Restricts the graph to nodes whose name or alias contains
+     *  the query. Empty string clears the search. Direct neighbors of
+     *  matches are also kept so the result graph stays connected. */
+    bool entityGraphSetSearch(const QString &query);
+    /** \brief Restricts the graph to the named entity and its N-hop
+     *  neighborhood. Returns false if the name doesn't resolve. */
+    bool entityGraphFocusOnEntity(const QString &entityName, int hops);
+    /** \brief Removes the neighborhood-focus filter. Type and search
+     *  filters are unaffected. */
+    bool entityGraphClearFocus();
+
+    // ---------------- Cross-doc navigation (Phase 4) ----------------
+    /** \brief Resolve the entity name (or alias) and open its dossier
+     *  file in the editor. Returns true if a dossier was found and
+     *  opened, false on no project / unresolved name / no dossier on
+     *  disk. */
+    bool navigateToEntityDossier(const QString &entityName);
+
+    // ---------------- Community detection (Phase 5) ----------------
+    /** \brief Run modularity-greedy community detection over the
+     *  entity-relationship graph and persist community_id back to
+     *  every entity. Returns the number of distinct communities found,
+     *  or 0 if no project is open or there are no entities/edges yet. */
+    int communitiesDetectAndPersist();
+    /** \brief List entity names in the given community id. Empty list
+     *  if the community doesn't exist or detection has not been run. */
+    QStringList communityMembers(qint64 communityId) const;
+    /** \brief Returns the community id for the given entity name (or
+     *  alias), or -1 when the name doesn't resolve or the entity has
+     *  no community assignment yet. */
+    qint64 communityIdOf(const QString &entityName) const;
+
 private:
     MainWindow *m_window;
     QList<ReconciliationEntry> m_pendingReconciliation;

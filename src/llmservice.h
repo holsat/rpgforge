@@ -232,6 +232,13 @@ public:
     void clearCooldown(LLMProvider provider, const QString &model);
 
     /**
+     * @brief Fires the settingsChanged() signal. Called by SettingsDialog
+     * after save() persists configuration so that UI components which
+     * cache model/provider state can refresh from QSettings.
+     */
+    void notifySettingsChanged() { Q_EMIT settingsChanged(); }
+
+    /**
      * @brief Returns true if the user has enough of the given provider's
      * settings filled in for a request to have any chance of succeeding.
      *
@@ -268,6 +275,15 @@ Q_SIGNALS:
      * Connect to this to show a model selection UI, then call retryWithModel().
      */
     void modelNotFound(LLMProvider provider, const QString &invalidModel, const QStringList &available, const QString &serviceName);
+
+    /**
+     * @brief Broadcast after the global Settings dialog persists changes.
+     * UI components that cache model/provider state (e.g. ChatPanel's
+     * combos) should listen and re-read from QSettings, otherwise their
+     * cached widget state diverges from the persisted settings until
+     * the next app restart.
+     */
+    void settingsChanged();
 
 protected:
     explicit LLMService(QObject *parent = nullptr);
