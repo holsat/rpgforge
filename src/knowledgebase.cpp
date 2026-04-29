@@ -842,61 +842,67 @@ void KnowledgeBase::hybridSearch(const QString &queryText, int topK,
                 {
                     const QString conn = QStringLiteral("kb_graph_lib_%1")
                         .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
-                    QSqlDatabase lib = QSqlDatabase::contains(conn)
-                        ? QSqlDatabase::database(conn)
-                        : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
-                    lib.setDatabaseName(libDbPath);
-                    if (lib.open()) {
-                        QSqlQuery q(lib);
-                        for (const QString &t : tokens) {
-                            q.prepare(QStringLiteral(
-                                "SELECT entity_id FROM entity_aliases "
-                                "WHERE alias = :a COLLATE NOCASE LIMIT 1"));
-                            q.bindValue(QStringLiteral(":a"), t);
-                            if (q.exec() && q.next()) seedIds.insert(q.value(0).toLongLong());
-                        }
-                        // 1-hop expansion: add every direct neighbor of
-                        // each seed via the relationships table. Two
-                        // queries (outgoing + incoming) since edges are
-                        // directed but membership is symmetric for
-                        // retrieval purposes.
-                        QSet<qint64> neighborhood = seedIds;
-                        if (!seedIds.isEmpty()) {
-                            QStringList placeholders;
-                            for (int i = 0; i < seedIds.size(); ++i) {
-                                placeholders.append(QStringLiteral("?"));
+                    // Inner scope: the QSqlDatabase local AND every
+                    // QSqlQuery built on it MUST destruct before
+                    // removeDatabase, otherwise Qt warns "connection X
+                    // is still in use" and silently leaks the handle.
+                    {
+                        QSqlDatabase lib = QSqlDatabase::contains(conn)
+                            ? QSqlDatabase::database(conn)
+                            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                        lib.setDatabaseName(libDbPath);
+                        if (lib.open()) {
+                            QSqlQuery q(lib);
+                            for (const QString &t : tokens) {
+                                q.prepare(QStringLiteral(
+                                    "SELECT entity_id FROM entity_aliases "
+                                    "WHERE alias = :a COLLATE NOCASE LIMIT 1"));
+                                q.bindValue(QStringLiteral(":a"), t);
+                                if (q.exec() && q.next()) seedIds.insert(q.value(0).toLongLong());
                             }
-                            const QString inList = placeholders.join(QStringLiteral(","));
-                            const QString sqlOut = QStringLiteral(
-                                "SELECT target_id FROM relationships WHERE source_id IN (")
-                                + inList + QStringLiteral(")");
-                            const QString sqlIn = QStringLiteral(
-                                "SELECT source_id FROM relationships WHERE target_id IN (")
-                                + inList + QStringLiteral(")");
-                            QSqlQuery qo(lib);
-                            qo.prepare(sqlOut);
-                            for (qint64 id : seedIds) qo.addBindValue(id);
-                            if (qo.exec()) while (qo.next()) neighborhood.insert(qo.value(0).toLongLong());
-                            QSqlQuery qi(lib);
-                            qi.prepare(sqlIn);
-                            for (qint64 id : seedIds) qi.addBindValue(id);
-                            if (qi.exec()) while (qi.next()) neighborhood.insert(qi.value(0).toLongLong());
-                            // Also include containment hierarchy via parent_id.
-                            QSqlQuery qp(lib);
-                            qp.prepare(QStringLiteral(
-                                "SELECT id, parent_id FROM entities "
-                                "WHERE parent_id IS NOT NULL"));
-                            if (qp.exec()) {
-                                while (qp.next()) {
-                                    const qint64 c = qp.value(0).toLongLong();
-                                    const qint64 p = qp.value(1).toLongLong();
-                                    if (seedIds.contains(c)) neighborhood.insert(p);
-                                    if (seedIds.contains(p)) neighborhood.insert(c);
+                            // 1-hop expansion: add every direct neighbor of
+                            // each seed via the relationships table. Two
+                            // queries (outgoing + incoming) since edges are
+                            // directed but membership is symmetric for
+                            // retrieval purposes.
+                            QSet<qint64> neighborhood = seedIds;
+                            if (!seedIds.isEmpty()) {
+                                QStringList placeholders;
+                                for (int i = 0; i < seedIds.size(); ++i) {
+                                    placeholders.append(QStringLiteral("?"));
+                                }
+                                const QString inList = placeholders.join(QStringLiteral(","));
+                                const QString sqlOut = QStringLiteral(
+                                    "SELECT target_id FROM relationships WHERE source_id IN (")
+                                    + inList + QStringLiteral(")");
+                                const QString sqlIn = QStringLiteral(
+                                    "SELECT source_id FROM relationships WHERE target_id IN (")
+                                    + inList + QStringLiteral(")");
+                                QSqlQuery qo(lib);
+                                qo.prepare(sqlOut);
+                                for (qint64 id : seedIds) qo.addBindValue(id);
+                                if (qo.exec()) while (qo.next()) neighborhood.insert(qo.value(0).toLongLong());
+                                QSqlQuery qi(lib);
+                                qi.prepare(sqlIn);
+                                for (qint64 id : seedIds) qi.addBindValue(id);
+                                if (qi.exec()) while (qi.next()) neighborhood.insert(qi.value(0).toLongLong());
+                                // Also include containment hierarchy via parent_id.
+                                QSqlQuery qp(lib);
+                                qp.prepare(QStringLiteral(
+                                    "SELECT id, parent_id FROM entities "
+                                    "WHERE parent_id IS NOT NULL"));
+                                if (qp.exec()) {
+                                    while (qp.next()) {
+                                        const qint64 c = qp.value(0).toLongLong();
+                                        const qint64 p = qp.value(1).toLongLong();
+                                        if (seedIds.contains(c)) neighborhood.insert(p);
+                                        if (seedIds.contains(p)) neighborhood.insert(c);
+                                    }
                                 }
                             }
+                            seedIds = neighborhood;
+                            lib.close();
                         }
-                        seedIds = neighborhood;
-                        lib.close();
                     }
                     QSqlDatabase::removeDatabase(conn);
                 }
@@ -908,35 +914,40 @@ void KnowledgeBase::hybridSearch(const QString &queryText, int topK,
                     // in one query.
                     const QString conn = QStringLiteral("kb_graph_vec_%1")
                         .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
-                    QSqlDatabase vec = QSqlDatabase::contains(conn)
-                        ? QSqlDatabase::database(conn)
-                        : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
-                    vec.setDatabaseName(vecDbPath);
-                    if (vec.open()) {
-                        QStringList ids;
-                        for (qint64 id : seedIds) ids.append(QString::number(id));
-                        QSqlQuery q(vec);
-                        // Inline the id list — values come from a
-                        // private QSet<qint64>, no user input, so SQL
-                        // injection isn't a concern. ce.entity_id IN
-                        // (…) bounded by the neighborhood size.
-                        const QString sql = QStringLiteral(
-                            "SELECT DISTINCT c.file_path, c.heading, c.content "
-                            "FROM chunk_entities ce "
-                            "JOIN chunks c ON c.id = ce.chunk_id "
-                            "WHERE ce.entity_id IN (") + ids.join(QLatin1Char(',')) +
-                            QStringLiteral(") LIMIT 60");
-                        if (q.exec(sql)) {
-                            while (q.next()) {
-                                SearchResult r;
-                                r.filePath = q.value(0).toString();
-                                r.heading = q.value(1).toString();
-                                r.content = q.value(2).toString();
-                                r.score = 0.85f;
-                                grepResults.append(r);
+                    // Inner scope so QSqlDatabase + QSqlQuery destruct
+                    // before removeDatabase — see the kb_graph_lib block
+                    // above for rationale.
+                    {
+                        QSqlDatabase vec = QSqlDatabase::contains(conn)
+                            ? QSqlDatabase::database(conn)
+                            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                        vec.setDatabaseName(vecDbPath);
+                        if (vec.open()) {
+                            QStringList ids;
+                            for (qint64 id : seedIds) ids.append(QString::number(id));
+                            QSqlQuery q(vec);
+                            // Inline the id list — values come from a
+                            // private QSet<qint64>, no user input, so SQL
+                            // injection isn't a concern. ce.entity_id IN
+                            // (…) bounded by the neighborhood size.
+                            const QString sql = QStringLiteral(
+                                "SELECT DISTINCT c.file_path, c.heading, c.content "
+                                "FROM chunk_entities ce "
+                                "JOIN chunks c ON c.id = ce.chunk_id "
+                                "WHERE ce.entity_id IN (") + ids.join(QLatin1Char(',')) +
+                                QStringLiteral(") LIMIT 60");
+                            if (q.exec(sql)) {
+                                while (q.next()) {
+                                    SearchResult r;
+                                    r.filePath = q.value(0).toString();
+                                    r.heading = q.value(1).toString();
+                                    r.content = q.value(2).toString();
+                                    r.score = 0.85f;
+                                    grepResults.append(r);
+                                }
                             }
+                            vec.close();
                         }
-                        vec.close();
                     }
                     QSqlDatabase::removeDatabase(conn);
                 }
@@ -1051,28 +1062,36 @@ int KnowledgeBase::rebuildChunkEntityLinks()
     {
         const QString conn = QStringLiteral("kb_alias_loader_%1")
             .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
-        QSqlDatabase libDb = QSqlDatabase::contains(conn)
-            ? QSqlDatabase::database(conn)
-            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
-        libDb.setDatabaseName(libDbPath);
-        if (!libDb.open()) {
-            qWarning() << "KnowledgeBase::rebuildChunkEntityLinks: "
-                          "failed to open librarian DB:" << libDb.lastError().text();
-            return 0;
-        }
-        QSqlQuery q(libDb);
-        if (q.exec(QStringLiteral(
-                "SELECT alias, entity_id FROM entity_aliases"))) {
-            while (q.next()) {
-                AliasEntry e;
-                e.alias    = q.value(0).toString();
-                e.entityId = q.value(1).toLongLong();
-                e.lower    = e.alias.toLower();
-                if (!e.alias.isEmpty()) aliases.append(e);
+        bool openFailed = false;
+        // Inner scope so QSqlDatabase + QSqlQuery destruct before
+        // removeDatabase — Qt warns "connection X is still in use"
+        // and silently leaks the handle otherwise.
+        {
+            QSqlDatabase libDb = QSqlDatabase::contains(conn)
+                ? QSqlDatabase::database(conn)
+                : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+            libDb.setDatabaseName(libDbPath);
+            if (!libDb.open()) {
+                qWarning() << "KnowledgeBase::rebuildChunkEntityLinks: "
+                              "failed to open librarian DB:" << libDb.lastError().text();
+                openFailed = true;
+            } else {
+                QSqlQuery q(libDb);
+                if (q.exec(QStringLiteral(
+                        "SELECT alias, entity_id FROM entity_aliases"))) {
+                    while (q.next()) {
+                        AliasEntry e;
+                        e.alias    = q.value(0).toString();
+                        e.entityId = q.value(1).toLongLong();
+                        e.lower    = e.alias.toLower();
+                        if (!e.alias.isEmpty()) aliases.append(e);
+                    }
+                }
+                libDb.close();
             }
         }
-        libDb.close();
         QSqlDatabase::removeDatabase(conn);
+        if (openFailed) return 0;
     }
 
     if (aliases.isEmpty()) {
