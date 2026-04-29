@@ -22,9 +22,11 @@
 #include "projectmanager.h"
 #include "debuglog.h"
 #include <KLocalizedString>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QDebug>
 #include <QThread>
@@ -37,6 +39,8 @@
 #include <QUuid>
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
+#include <QDateTime>
+#include <QSettings>
 
 LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     : QObject(parent), m_llmService(llmService)
@@ -52,9 +56,18 @@ LibrarianService::LibrarianService(LLMService *llmService, QObject *parent)
     m_semanticTimer = new QTimer(this);
     m_semanticTimer->setInterval(30000); // 30s batch cycle
     connect(m_semanticTimer, &QTimer::timeout, this, &LibrarianService::runSemanticBatch);
-    m_semanticTimer->start();
+    // Deliberately NOT started here: starting before a project is open
+    // means the timer ticks against an empty queue forever and (worse)
+    // would have ticked against the previous project after a close. We
+    // start it from setProjectPath / resume and stop it from pause.
 
     connect(m_watcher, &QFileSystemWatcher::fileChanged, this, &LibrarianService::onFileChanged);
+
+    // Pick up newly-added project files (drag-drop, imports, manual file
+    // creation) without waiting for the next setProjectPath() call.
+    // Queued so we don't run on whatever thread emitted the tree change.
+    connect(&ProjectManager::instance(), &ProjectManager::treeStructureChanged,
+            this, &LibrarianService::onProjectTreeChanged, Qt::QueuedConnection);
 
     connect(&AgentGatekeeper::instance(), &AgentGatekeeper::serviceEnabledChanged,
             this, [this](AgentGatekeeper::Service s, bool enabled) {
@@ -93,6 +106,8 @@ void LibrarianService::setProjectPath(const QString &path)
     m_dbPath = dbPath;
     if (m_db->open(dbPath)) {
         RPGFORGE_DLOG("VARS") << "LibrarianService: DB opened at" << dbPath;
+        // A project is now open; the semantic timer can usefully tick.
+        if (!m_paused && !m_semanticTimer->isActive()) m_semanticTimer->start();
         scanAll();
     } else {
         qWarning().noquote() << "LibrarianService: FAILED to open DB at" << dbPath
@@ -172,7 +187,90 @@ void LibrarianService::scanFile(const QString &filePath)
 
 void LibrarianService::onFileChanged(const QString &path)
 {
+    if (path.isEmpty()) return;
+    // Determine whether this watcher fire actually changed the bytes on
+    // disk. A pure mtime touch (e.g. tar -x preserving content) hashes
+    // identically to what we already extracted; skip re-extraction in
+    // that case.
+    if (!QFileInfo::exists(path)) {
+        // File deleted from under us. Forget any hash currently mapped to
+        // this path — frees the slot for a future create.
+        const QString staleHash = m_db ? m_db->hashForPath(path) : QString();
+        if (!staleHash.isEmpty()) m_db->forgetExtraction(staleHash);
+        return;
+    }
+    const QString newHash = computeFileHash(path);
+    if (newHash.isEmpty()) return;
+
+    const QString oldHash = m_db ? m_db->hashForPath(path) : QString();
+    if (!oldHash.isEmpty() && oldHash == newHash) {
+        // Bytes unchanged — nothing to do.
+        return;
+    }
+    if (!oldHash.isEmpty() && oldHash != newHash) {
+        // Path had different content before; clear old hash row so it
+        // doesn't shadow the new one. The new hash will get its own row
+        // when extraction runs.
+        m_db->forgetExtraction(oldHash);
+    }
     scanFile(path);
+}
+
+void LibrarianService::onProjectTreeChanged()
+{
+    if (m_paused || m_projectPath.isEmpty() || !m_db) return;
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Librarian)) return;
+
+    QStringList activeFiles = ProjectManager::instance().getActiveFiles();
+    int queuedNew = 0;
+    int reheldSemantic = 0;
+    {
+        QMutexLocker locker(&m_mutex);
+        for (const QString &file : activeFiles) {
+            const QString suffix = QFileInfo(file).suffix().toLower();
+            if (suffix != QStringLiteral("md") && suffix != QStringLiteral("markdown")) continue;
+            if (!m_watcher->files().contains(file)) m_watcher->addPath(file);
+
+            // Path-only check — DO NOT hash on the GUI thread. If the
+            // path is already mapped to a file_extractions row, the
+            // worker has nothing new to do for this file. Hashing every
+            // .md on every treeStructureChanged emission was the source
+            // of the GUI-thread amplification observed live: 92 SHA-256
+            // computations and a full DB re-emit per drag/drop or
+            // import.
+            const QString existingHash = m_db->hashForPath(file);
+            if (existingHash.isEmpty()) {
+                // Genuinely new path (new file, content-edited file
+                // whose hash row was forgotten by onFileChanged, or a
+                // moved file we have not yet remapped). Queue for the
+                // worker; it will hash, dedup against file_extractions,
+                // and route into heuristic + semantic as appropriate.
+                if (!m_pendingFiles.contains(file)) {
+                    m_pendingFiles.append(file);
+                    ++queuedNew;
+                }
+            } else {
+                // Path is known. If the row is heuristic-done but
+                // semantic-pending, just make sure the file is in the
+                // semantic queue. Do not enter m_pendingFiles — the
+                // heuristic already ran for this content hash and the
+                // worker would otherwise needlessly hash + path-update.
+                bool h = false, s = false;
+                if (m_db->getExtractionState(existingHash, &h, &s) && !s) {
+                    if (!m_pendingSemantic.contains(file)) {
+                        m_pendingSemantic.append(file);
+                        ++reheldSemantic;
+                    }
+                }
+            }
+        }
+    }
+    if (queuedNew > 0 || reheldSemantic > 0) {
+        RPGFORGE_DLOG("VARS") << "LibrarianService::onProjectTreeChanged:"
+                              << "new=" << queuedNew
+                              << "rehold-semantic=" << reheldSemantic;
+        if (queuedNew > 0) m_processTimer->start();
+    }
 }
 
 void LibrarianService::processQueue()
@@ -191,21 +289,101 @@ void LibrarianService::processQueue()
     m_pendingFiles.clear();
     RPGFORGE_DLOG("VARS") << "LibrarianService::processQueue: processing"
                           << filesToProcess.size() << "file(s)";
-    
+
     QPointer<LibrarianService> weakThis(this);
     // Fire-and-forget: finalization happens via QueuedConnection back to
     // the main thread at the end of the task, so we don't need the QFuture.
     QThreadPool::globalInstance()->start([weakThis, filesToProcess]() {
         if (!weakThis) return;
 
+        // Track whether any file in this batch actually had heuristic work
+        // done. Pure path-update / both-flags-set passes are no-ops as far
+        // as the {{var}} table is concerned, so the post-batch
+        // entities-x-attributes re-query and libraryVariablesChanged emit
+        // can be skipped — that emit was visibly stalling the GUI on
+        // large projects each time onProjectTreeChanged fired.
+        int filesActuallyExtracted = 0;
+
         for (const QString &filePath : filesToProcess) {
             if (!weakThis || weakThis->isPaused()) break;
-            weakThis->extractHeuristic(filePath);
+
+            // Capture the hash ONCE before extraction. We recompute it
+            // AFTER extraction to detect a mid-flight save: if the bytes
+            // changed under us, the watcher already / will re-queue,
+            // and writing the heuristic-done row keyed on the OLD hash
+            // would resurrect a now-stale entry.
+            const QString hashBefore = LibrarianService::computeFileHash(filePath);
+            if (hashBefore.isEmpty()) continue;
+
+            bool h = false, s = false;
+            LibrarianDatabase *db = weakThis->m_db;
+            const bool known = db->getExtractionState(hashBefore, &h, &s);
+
+            if (known && h && s) {
+                // Both passes already done for this content — just
+                // refresh the path mapping (handles a move/rename of an
+                // unchanged file).
+                db->updateExtractionPath(hashBefore, filePath);
+                continue;
+            }
+
+            if (!h) {
+                weakThis->extractHeuristic(filePath);
+                // Mid-flight save guard: if the file changed during
+                // extractHeuristic, skip the write — the watcher's
+                // onFileChanged has already / will re-queue under the
+                // new hash, and writing the old hash would resurrect a
+                // stale row.
+                const QString hashAfter = LibrarianService::computeFileHash(filePath);
+                if (hashAfter != hashBefore) {
+                    RPGFORGE_DLOG("VARS")
+                        << "LibrarianService::processQueue: file changed mid-extraction;"
+                        << "discarding heuristic result for" << filePath;
+                    continue;
+                }
+                db->recordExtractionState(hashBefore, filePath, /*heuristicDone=*/true, s);
+                ++filesActuallyExtracted;
+            } else {
+                // Heuristic already done for this hash — but path may
+                // have moved.
+                db->updateExtractionPath(hashBefore, filePath);
+            }
+
+            // Hand off to the semantic pipeline. The LLM tick rate is
+            // controlled by m_semanticTimer.
+            if (!s) {
+                QMutexLocker locker(&weakThis->m_mutex);
+                if (!weakThis->m_pendingSemantic.contains(filePath)) {
+                    weakThis->m_pendingSemantic.append(filePath);
+                }
+            }
+        }
+
+        // Release this worker's DB connection on the owning thread before
+        // returning to the pool — otherwise main thread tears it down at
+        // shutdown and emits a thread-mismatch warning.
+        if (weakThis && weakThis->m_db) {
+            weakThis->m_db->closeCurrentThreadConnection();
         }
 
         // Finalize back on main thread
-        QMetaObject::invokeMethod(weakThis.data(), [weakThis]() {
+        QMetaObject::invokeMethod(weakThis.data(), [weakThis, filesActuallyExtracted]() {
             if (!weakThis) return;
+
+            // No-op pass: every file in the batch was already
+            // (h=1, s=0/1) for its content hash, so nothing in the
+            // entities/attributes tables changed. Skip the full re-query
+            // and emit — but DO fire scanningFinished so any progress UI
+            // dismisses.
+            //
+            // Exception: the very first emit per service-lifetime is
+            // mandatory so freshly-constructed consumers (VariablesPanel
+            // when a project is reopened, tests with a fresh QSignalSpy)
+            // see the current DB contents. Tracked via m_hasEmittedVarsOnce.
+            if (filesActuallyExtracted == 0 && weakThis->m_hasEmittedVarsOnce) {
+                Q_EMIT weakThis->scanningFinished();
+                return;
+            }
 
             QMap<QString, QString> libVars;
             QSqlDatabase db = weakThis->database()->database();
@@ -255,6 +433,7 @@ void LibrarianService::processQueue()
             }
 
             Q_EMIT weakThis->libraryVariablesChanged(libVars);
+            weakThis->m_hasEmittedVarsOnce = true;
             Q_EMIT weakThis->scanningFinished();
         }, Qt::QueuedConnection);
     });
@@ -521,28 +700,112 @@ void LibrarianService::parseMarkdownLists(const QString &content, const QString 
 
 void LibrarianService::runSemanticBatch()
 {
-    if (m_paused || m_projectPath.isEmpty() || !m_llmService) return;
+    if (m_paused || !m_llmService) return;
+    if (!AgentGatekeeper::instance().isEnabled(AgentGatekeeper::Service::Librarian)) return;
+    if (!m_db || !m_db->database().isOpen()) return;
 
-    QDir dir(m_projectPath);
-    QStringList filters;
-    filters << QStringLiteral("*.md");
-    QDirIterator it(m_projectPath, filters, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-    
-    if (it.hasNext()) {
-        QString filePath = it.next();
-        extractSemantic(filePath);
+    QString next;
+    QString nextHash;
+    {
+        QMutexLocker locker(&m_mutex);
+        // Backpressure: if the previous extractSemantic hasn't completed
+        // yet, leave the queue alone. The LLM is async and the timer
+        // ticks at a fixed cadence; without this guard, a slow model
+        // would have N concurrent in-flight calls all racing each
+        // other's DB writes.
+        if (m_semanticInFlight) return;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        // Files we skipped because they're in backoff. Re-append after the
+        // pop loop so they retain their place in the queue (just behind
+        // anything we left untouched) and get re-considered on the next
+        // tick. Without this they'd silently fall out of the queue.
+        QStringList deferred;
+        while (!m_pendingSemantic.isEmpty()) {
+            const QString candidate = m_pendingSemantic.takeFirst();
+            if (!QFileInfo::exists(candidate)) continue;
+            const QString hash = computeFileHash(candidate);
+            if (hash.isEmpty()) continue;
+            bool h = false, s = false;
+            m_db->getExtractionState(hash, &h, &s);
+            if (s) {
+                // Already done semantically — just keep the path mapping
+                // up-to-date (handles a file that was moved while it sat
+                // in the queue).
+                m_db->updateExtractionPath(hash, candidate);
+                continue;
+            }
+            const qint64 scheduled = m_semanticNextAttemptAt.value(hash, 0);
+            if (now < scheduled) {
+                // In backoff after a recent strike — leave it in the queue
+                // and try the next candidate. The 30s tick will revisit.
+                deferred.append(candidate);
+                continue;
+            }
+            next = candidate;
+            nextHash = hash;
+            break;
+        }
+        // Restore deferred (backed-off) candidates to the front of the
+        // queue so they're seen first on the next tick once their backoff
+        // window elapses. Anything we successfully chose has already been
+        // taken; everything we couldn't choose-because-done was discarded.
+        if (!deferred.isEmpty()) {
+            m_pendingSemantic = deferred + m_pendingSemantic;
+        }
+        // Edge case: every file in the queue is currently backed off.
+        // `next` is empty; we'll fall through and return below without
+        // dispatching, and the next tick will retry.
     }
+    if (next.isEmpty()) return;
+    // Mark the call in-flight BEFORE dispatching. extractSemantic's
+    // completion lambda clears the flag on both branches (parse-fail and
+    // success) so the next tick can proceed.
+    {
+        QMutexLocker locker(&m_mutex);
+        m_semanticInFlight = true;
+    }
+    // Pass the hash captured at submission time. extractSemantic must
+    // not recompute it inside the LLM completion callback — see the
+    // function comment for why.
+    extractSemantic(next, nextHash);
 }
 
-void LibrarianService::extractSemantic(const QString &filePath)
+void LibrarianService::extractSemantic(const QString &filePath, const QString &submissionHash)
 {
     if (!m_llmService) return;
+    if (submissionHash.isEmpty()) return;
 
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
     QTextStream in(&file);
     QString content = in.readAll();
     file.close();
+
+    // Best-effort cap on document size. Models with smaller context windows
+    // (e.g. local LM Studio loadouts) reject oversized prompts deterministically;
+    // retrying just burns LLM budget. v1: skip oversized files and retire them
+    // from the semantic queue. Future work will chunk + merge.
+    const int maxChars = QSettings(QStringLiteral("RPGForge"),
+                                    QStringLiteral("RPGForge"))
+        .value(QStringLiteral("librarian/semantic_max_chars"), 30000).toInt();
+    if (content.size() > maxChars) {
+        qWarning().noquote()
+            << "LibrarianService: skipping oversized file for semantic extraction:"
+            << filePath << "(" << content.size() << "chars >"
+            << maxChars << "limit). Marking semantic_done; configure"
+            << "librarian/semantic_max_chars to override.";
+        if (m_db) {
+            m_db->recordExtractionState(submissionHash, filePath,
+                                         /*heuristicDone=*/true,
+                                         /*semanticDone=*/true);
+        }
+        {
+            QMutexLocker locker(&m_mutex);
+            m_semanticInFlight = false;
+            m_semanticNextAttemptAt.remove(submissionHash);
+        }
+        return;
+    }
 
     // Extended prompt for the relationship-graph work. The model is asked to
     // emit a richer payload than the legacy {entity, type, attributes}: it
@@ -627,8 +890,26 @@ void LibrarianService::extractSemantic(const QString &filePath)
     request.stream = false;
 
     QPointer<LibrarianService> weakThis(this);
-    m_llmService->sendNonStreamingRequest(request, [weakThis, filePath](const QString &response) {
+    // Capture submissionHash by value so every write below — strike
+    // bump, completion record, retry — keys off the SAME content the
+    // LLM was shown, even if the user saves the file before the
+    // response arrives. Recomputing the hash inside this callback would
+    // mis-attribute the analysis of the OLD content to the NEW content,
+    // and the new content would never be re-extracted.
+    m_llmService->sendNonStreamingRequest(request,
+        [weakThis, filePath, submissionHash](const QString &response) {
         if (!weakThis) return;
+        // Backpressure: the call we set m_semanticInFlight=true for is
+        // resolving NOW. Clear the flag on every exit branch (parse-fail
+        // give-up, parse-fail strike-bump, success) so the next 30s
+        // semantic-timer tick can pop the queue. If `weakThis` is gone
+        // (service destroyed mid-flight) the flag dies with the service,
+        // so no leak.
+        auto clearInFlight = [weakThis]() {
+            if (!weakThis) return;
+            QMutexLocker locker(&weakThis->m_mutex);
+            weakThis->m_semanticInFlight = false;
+        };
         QJsonDocument doc = QJsonDocument::fromJson(response.toUtf8());
         if (!doc.isArray()) {
             int start = response.indexOf(QLatin1Char('['));
@@ -637,7 +918,42 @@ void LibrarianService::extractSemantic(const QString &filePath)
                 doc = QJsonDocument::fromJson(response.mid(start, end - start + 1).toUtf8());
             }
         }
-        if (!doc.isArray()) return;
+        if (!doc.isArray()) {
+            // Parse failure. Bump the per-hash strike counter on the
+            // file_extractions row; after 3 strikes mark semantic_done
+            // so this file stops monopolising the LLM queue. Persisted
+            // (not in-memory) so a permanently-broken file can't burn
+            // 3 LLM calls per restart.
+            if (weakThis->m_db) {
+                weakThis->m_db->incrementSemanticAttempts(submissionHash);
+                const int strikes = weakThis->m_db->getSemanticAttempts(submissionHash);
+                if (strikes >= 3) {
+                    qWarning().noquote()
+                        << "LibrarianService: giving up on semantic extraction for"
+                        << filePath << "after 3 LLM-response parse failures";
+                    weakThis->m_db->recordExtractionState(
+                        submissionHash, filePath, /*heuristicDone=*/true, /*semanticDone=*/true);
+                    weakThis->m_db->resetSemanticAttempts(submissionHash);
+                    QMutexLocker locker(&weakThis->m_mutex);
+                    weakThis->m_semanticNextAttemptAt.remove(submissionHash);
+                } else {
+                    qWarning().noquote()
+                        << "LibrarianService: LLM response not parseable for"
+                        << filePath << "(strike" << strikes << "/ 3)";
+                    QMutexLocker locker(&weakThis->m_mutex);
+                    // 5-minute backoff before this hash is eligible to be
+                    // popped again. Without it the 30s tick would re-pop
+                    // this same broken file every cycle and burn LLM budget.
+                    weakThis->m_semanticNextAttemptAt[submissionHash] =
+                        QDateTime::currentMSecsSinceEpoch() + 5 * 60 * 1000;
+                    if (!weakThis->m_pendingSemantic.contains(filePath)) {
+                        weakThis->m_pendingSemantic.append(filePath);
+                    }
+                }
+            }
+            clearInFlight();
+            return;
+        }
 
         const QJsonArray entities = doc.array();
         LibrarianDatabase *db = weakThis->m_db;
@@ -715,9 +1031,16 @@ void LibrarianService::extractSemantic(const QString &filePath)
                 if (parentId > 0) {
                     db->setEntityParent(id, parentId);
                 } else {
-                    qDebug() << "Librarian: parent" << parentName
-                              << "for entity" << db->getEntityName(id)
-                              << "not yet known; will retry on next pass";
+                    // Defer: queue containment with the synthetic
+                    // "is_part_of" relationship so resolvePendingRelationships
+                    // can apply setEntityParent once the parent document
+                    // gets ingested. Same deferral pattern as peer edges
+                    // below — silently dropping these was the reason
+                    // cross-document containment never appeared in the
+                    // graph.
+                    db->queuePendingRelationship(id, parentName,
+                                                  QStringLiteral("is_part_of"),
+                                                  filePath, /*strength=*/1.0);
                 }
             }
 
@@ -730,9 +1053,13 @@ void LibrarianService::extractSemantic(const QString &filePath)
 
                 qint64 targetId = db->resolveEntityByName(targetName);
                 if (targetId < 0) {
-                    qDebug() << "Librarian: relationship target" << targetName
-                              << "(from" << db->getEntityName(id)
-                              << ") not yet known; will retry on next pass";
+                    // Defer: queue the unresolved edge so it lands as
+                    // soon as the document that introduces the target
+                    // gets ingested. The naive log-and-drop this
+                    // replaces was the reason cross-document edges
+                    // never appeared in the graph.
+                    db->queuePendingRelationship(id, targetName, relType,
+                                                  filePath, /*strength=*/0.7);
                     continue;
                 }
                 if (targetId == id) continue;     // self-loop — drop
@@ -742,12 +1069,89 @@ void LibrarianService::extractSemantic(const QString &filePath)
             Q_EMIT weakThis->entityUpdated(id);
         }
 
-        weakThis->scanFile(filePath);
+        // Sweep the deferred-relationship queue: this batch may have
+        // introduced entities that earlier batches couldn't resolve.
+        const int resolved = db->resolvePendingRelationships();
+        if (resolved > 0) {
+            RPGFORGE_DLOG("VARS")
+                << "LibrarianService: resolved" << resolved
+                << "pending cross-document relationship(s) after extracting"
+                << filePath;
+        }
+
+        // Mark this file's semantic pass complete keyed by the
+        // SUBMISSION hash — the content the LLM was actually shown. If
+        // the file has since changed on disk, the watcher's
+        // onFileChanged has already / will queue the new hash; writing
+        // the new hash here would mis-attribute this old-content
+        // analysis to the new content.
+        db->recordExtractionState(submissionHash, filePath,
+                                   /*heuristicDone=*/true,
+                                   /*semanticDone=*/true);
+        db->resetSemanticAttempts(submissionHash);
+        {
+            QMutexLocker locker(&weakThis->m_mutex);
+            weakThis->m_semanticNextAttemptAt.remove(submissionHash);
+        }
+        clearInFlight();
     });
 }
 
 void LibrarianService::triggerSemanticReindex()
 {
     qDebug() << "Manually triggered full semantic reindex.";
+    if (!m_db) return;
+
+    // Force every file back through the LLM pass:
+    //   1. drop file_extractions rows for files that no longer exist
+    //      (otherwise they'd sit in the queue forever once we clear
+    //      semantic_done);
+    //   2. clear semantic_done across the remaining rows so they re-run;
+    //   3. clear the persisted strike counter so previously-given-up
+    //      files get another chance;
+    //   4. repopulate the in-memory queue from the active project files;
+    //   5. kick the timer.
+    const int pruned = m_db->garbageCollectMissingFiles();
+    if (pruned > 0) {
+        RPGFORGE_DLOG("VARS")
+            << "LibrarianService::triggerSemanticReindex: pruned"
+            << pruned << "missing-file extraction row(s)";
+    }
+    m_db->clearAllSemanticDone();
+    m_db->clearAllSemanticAttempts();
+
+    QStringList activeFiles = ProjectManager::instance().getActiveFiles();
+    {
+        QMutexLocker locker(&m_mutex);
+        // Clear in-memory backoff floors — full reindex means every file
+        // gets a fresh chance at the LLM, regardless of when the last
+        // strike happened.
+        m_semanticNextAttemptAt.clear();
+        for (const QString &file : activeFiles) {
+            const QString suffix = QFileInfo(file).suffix().toLower();
+            if (suffix != QStringLiteral("md") && suffix != QStringLiteral("markdown")) continue;
+            if (!m_pendingSemantic.contains(file)) m_pendingSemantic.append(file);
+        }
+    }
+    if (!m_paused && !m_semanticTimer->isActive()) m_semanticTimer->start();
     runSemanticBatch();
+}
+
+QString LibrarianService::computeFileHash(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning().noquote() << "LibrarianService::computeFileHash: cannot open"
+                             << path << ":" << file.errorString();
+        return QString();
+    }
+    QCryptographicHash hasher(QCryptographicHash::Sha256);
+    constexpr qint64 kChunk = 64 * 1024;
+    while (!file.atEnd()) {
+        const QByteArray chunk = file.read(kChunk);
+        if (chunk.isEmpty()) break;
+        hasher.addData(chunk);
+    }
+    file.close();
+    return QString::fromLatin1(hasher.result().toHex());
 }

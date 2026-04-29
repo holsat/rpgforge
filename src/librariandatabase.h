@@ -19,11 +19,15 @@
 #ifndef LIBRARIANDATABASE_H
 #define LIBRARIANDATABASE_H
 
+#include <QHash>
+#include <QMutex>
 #include <QObject>
+#include <QPointer>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QStringList>
+#include <QThread>
 #include <QVariantMap>
 
 /**
@@ -69,6 +73,22 @@ public:
 
     bool open(const QString &path);
     void close();
+
+    /**
+     * @brief Tear down the current thread's QSqlDatabase connection.
+     *
+     * Worker threads (QThreadPool runnables) may open a connection via
+     * database() to do extraction work. Those threads typically have no
+     * event loop, so close() — which runs on the main thread — cannot
+     * dispatch the per-connection teardown back to them via
+     * BlockingQueuedConnection. The supported pattern is therefore: each
+     * worker calls closeCurrentThreadConnection() before returning to the
+     * pool, releasing its connection on its own thread. Calling from the
+     * main thread is also safe; it just closes main's connection.
+     *
+     * Idempotent — a no-op if the current thread has no connection.
+     */
+    void closeCurrentThreadConnection();
 
     bool beginTransaction();
     bool commit();
@@ -152,6 +172,55 @@ public:
     QList<qint64> findEntitiesByAttribute(const QString &key, const QVariant &value) const;
     QList<qint64> allEntityIds() const;
 
+    // ------------------------------------------------------------------
+    // Per-file extraction state. The librarian keys extraction status by
+    // SHA-256 of file contents (NOT by path or mtime) so that a pure
+    // rename/move does not retrigger extraction, while genuine content
+    // edits do. heuristic_done and semantic_done are independent — the
+    // heuristic regex pass and the LLM pass mark themselves done
+    // separately.
+    // ------------------------------------------------------------------
+    bool getExtractionState(const QString &fileHash,
+                            bool *heuristicDone,
+                            bool *semanticDone) const;
+    bool recordExtractionState(const QString &fileHash,
+                               const QString &path,
+                               bool heuristicDone,
+                               bool semanticDone);
+    bool updateExtractionPath(const QString &fileHash, const QString &newPath);
+    QString hashForPath(const QString &path) const;
+    bool forgetExtraction(const QString &fileHash);
+    // Reset semantic_done across all rows. Used by triggerSemanticReindex
+    // to force a full re-walk of the LLM pass without disturbing the
+    // (cheap) heuristic state.
+    bool clearAllSemanticDone();
+
+    // Per-hash semantic strike counter — persisted on the
+    // file_extractions row so a permanently-broken file doesn't burn 3
+    // LLM calls on every app restart. The increment is UPSERT-style
+    // because the row may not exist yet (first attempt on a brand new
+    // hash).
+    int  getSemanticAttempts(const QString &fileHash) const;
+    bool incrementSemanticAttempts(const QString &fileHash);
+    bool resetSemanticAttempts(const QString &fileHash);
+    bool clearAllSemanticAttempts();
+
+    // Drop file_extractions rows whose last_path no longer exists on
+    // disk. Used by triggerSemanticReindex so deleted files don't sit
+    // in the queue forever. Returns the number of rows pruned.
+    int garbageCollectMissingFiles();
+
+    // Pending (deferred) relationship targets. When the LLM emits a
+    // relationship to an entity that has not been ingested yet, we queue
+    // it here and re-attempt resolution after every subsequent semantic
+    // extraction so the cross-document edge eventually lands.
+    bool queuePendingRelationship(qint64 sourceId,
+                                  const QString &targetName,
+                                  const QString &relationship,
+                                  const QString &evidenceFile,
+                                  double strength);
+    int  resolvePendingRelationships();
+
     QSqlDatabase database() const;
     QString lastError() const { return m_lastError; }
 
@@ -166,6 +235,14 @@ private:
 
     QString m_dbPath;
     QString m_lastError;
+
+    // Connection-name → thread-that-created-it. Populated by database() on
+    // every fresh addDatabase, consulted by close() to dispatch the
+    // per-connection teardown to the owning thread (or detect that the
+    // owner is gone). Mutex guards both the hash and the registration site
+    // because database() may run on multiple threads concurrently.
+    mutable QHash<QString, QPointer<QThread>> m_connectionThreads;
+    mutable QMutex m_connectionThreadsMutex;
 };
 
 #endif // LIBRARIANDATABASE_H

@@ -53,6 +53,7 @@
 #include "analyzerservice.h"
 #include "llmservice.h"
 #include "librarianservice.h"
+#include "librariandatabase.h"
 #include "entitygraphpanel.h"
 #include "entitycommunitydetector.h"
 #include "lorekeeperservice.h"
@@ -86,6 +87,7 @@
 #include <KTextEditor/Editor>
 #include <KTextEditor/View>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QToolTip>
 #include <QHelpEvent>
 #include <QDropEvent>
@@ -1073,7 +1075,11 @@ void MainWindow::setupActions()
     actionCollection()->setDefaultShortcut(compileAct, Qt::CTRL | Qt::SHIFT | Qt::Key_P);
     connect(compileAct, &QAction::triggered, this, &MainWindow::compileToPdf);
 
-    KStandardAction::quit(qApp, &QApplication::quit, actionCollection());
+    // Route File→Quit through MainWindow::close() so it fires closeEvent()
+    // (the single shutdown-ceremony chokepoint). Going to QApplication::quit
+    // here bypasses doc save + librarian WAL checkpoint. See bugfix-registry
+    // entry "2026-04-28 — Unified graceful-shutdown path (UI + signal)".
+    KStandardAction::quit(this, &MainWindow::close, actionCollection());
 
     // Entity graph view — Phase 2 of the relationship-graph work.
     auto *showEntityGraphAct = new QAction(this);
@@ -2163,6 +2169,26 @@ void MainWindow::restoreSession()
         }
     }
 
+    // Restore active sidebar panel
+    if (m_sidebar && settings.contains(QStringLiteral("sidebarPanel"))) {
+        int panelId = settings.value(QStringLiteral("sidebarPanel")).toInt();
+        if (panelId >= 0) {
+            m_sidebar->showPanel(panelId);
+        }
+    }
+
+    // Splitter restoration MUST run AFTER the window has a real geometry —
+    // restoreSession() is called from the constructor (before window->show())
+    // so QSplitter::restoreState would otherwise apply proportions against
+    // an unsized splitter, starving the editor pane. Defer to the next
+    // event-loop iteration; by then show() has produced a real layout.
+    QTimer::singleShot(0, this, &MainWindow::restoreSplittersDeferred);
+}
+
+void MainWindow::restoreSplittersDeferred()
+{
+    QSettings settings(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
+
     if (m_editorSplitter && settings.contains(QStringLiteral("editorSplitter"))) {
         m_editorSplitter->restoreState(settings.value(QStringLiteral("editorSplitter")).toByteArray());
     }
@@ -2171,39 +2197,34 @@ void MainWindow::restoreSession()
         m_mainSplitter->restoreState(settings.value(QStringLiteral("mainSplitter")).toByteArray());
     }
 
+    // vSplitter — top is editor cluster, bottom is analyzer.
     if (m_vSplitter && settings.contains(QStringLiteral("vSplitter"))) {
         m_vSplitter->restoreState(settings.value(QStringLiteral("vSplitter")).toByteArray());
-        // Defensive recovery only — the user's dragged size is the
-        // source of truth and must round-trip across restarts. Only
-        // override when the editor pane is so small the user would
-        // see a blank window and assume the app is broken (truly
-        // invisible: <30px). Anything above that is treated as the
-        // user's deliberate choice, even if extreme.
         QList<int> sizes = m_vSplitter->sizes();
-        if (sizes.size() >= 2 && sizes[0] < 30) {
+        if (sizes.size() >= 2) {
             const int total = sizes[0] + sizes[1];
-            const int problemsHeight = qMin(sizes[1], qMax(120, total / 4));
-            m_vSplitter->setSizes({total - problemsHeight, problemsHeight});
+            if (total > 0) {
+                // Cap analyzer to its widget maxHeight (600) AND force editor
+                // cluster ≥ 200 px so the user can never start with the upper
+                // UI invisible. Apply analyzer cap first, then give the rest
+                // to the editor cluster.
+                const int analyzerCap = qBound(0, qMin(sizes[1], 600), total - 200);
+                const int editorCluster = total - analyzerCap;
+                if (sizes[0] < 200 || sizes[1] > 600) {
+                    m_vSplitter->setSizes({editorCluster, analyzerCap});
+                }
+            }
         }
     }
+
+    // mainSplitter — sidebar / editor / preview.
     if (m_mainSplitter && settings.contains(QStringLiteral("mainSplitter"))) {
-        // Same narrow recovery on the horizontal splitter — only
-        // intervene when the editor pane (index 1) is effectively
-        // invisible, not for any "smaller than I'd default" case.
         QList<int> sizes = m_mainSplitter->sizes();
-        if (sizes.size() >= 2 && sizes[1] < 80) {
+        if (sizes.size() >= 2 && sizes[1] < 200) {  // was < 80; bump to 200
             const int total = std::accumulate(sizes.begin(), sizes.end(), 0);
             const int sidebar = qBound(180, sizes.value(0, 250), 320);
             const int preview = sizes.value(2, 0);
             m_mainSplitter->setSizes({sidebar, qMax(400, total - sidebar - preview), preview});
-        }
-    }
-
-    // Restore active sidebar panel
-    if (m_sidebar && settings.contains(QStringLiteral("sidebarPanel"))) {
-        int panelId = settings.value(QStringLiteral("sidebarPanel")).toInt();
-        if (panelId >= 0) {
-            m_sidebar->showPanel(panelId);
         }
     }
 }
@@ -2520,8 +2541,7 @@ void MainWindow::importScrivener()
                 // model directly.
                 ProjectManager::instance().setTreeData(resultData);
                 QMessageBox::information(this, i18n("Import Complete"), i18n("Scrivener project imported successfully."));
-            }
- else {
+            } else {
                 QMessageBox::warning(this, i18n("Import Failed"), i18n("Failed to import Scrivener project."));
             }
 
@@ -3151,6 +3171,53 @@ bool MainWindow::saveAllDocuments()
         ProjectManager::instance().saveProject();
     }
     return ok;
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // Idempotency guard: closeEvent can be re-entered (e.g. SIGTERM routed
+    // through closeAllWindows() while the user is also clicking the X). The
+    // ceremony below is destructive (drains workers, closes the DB) so it
+    // must run exactly once per process lifetime.
+    static bool s_shutdownRunning = false;
+    if (s_shutdownRunning) {
+        event->accept();
+        return;
+    }
+    s_shutdownRunning = true;
+
+    // 1. Best-effort silent save of all documents + project. saveAllDocuments
+    //    already encapsulates editor docs (m_document, m_researchDocument)
+    //    and ProjectManager::saveProject(); reuse it rather than diverging.
+    if (!saveAllDocuments()) {
+        qWarning() << "MainWindow::closeEvent: one or more documents failed to "
+                      "save during shutdown; continuing close.";
+    }
+
+    // 2. Pause the librarian so no new background writes start while we
+    //    drain. Other long-running services don't expose pause()/resume()
+    //    today; if they do later, mirror this call.
+    if (m_librarianService) {
+        m_librarianService->pause();
+    }
+
+    // 3. Drain the global thread pool. Workers writing to the librarian DB
+    //    MUST complete before we close the connections, or SQLite races
+    //    teardown and corrupts the WAL. 5s cap keeps a stuck task from
+    //    holding shutdown forever.
+    QThreadPool::globalInstance()->clear();
+    QThreadPool::globalInstance()->waitForDone(5000);
+
+    // 4. Close the librarian DB explicitly. LibrarianDatabase::close() runs
+    //    PRAGMA wal_checkpoint(TRUNCATE) on every owned connection (see
+    //    bugfix-registry entry 2026-04-28 "Extraction-pipeline runtime
+    //    defects"), collapsing the WAL cleanly before SQLite tears down.
+    if (m_librarianService && m_librarianService->database()) {
+        m_librarianService->database()->close();
+    }
+
+    event->accept();
+    QMainWindow::closeEvent(event);
 }
 
 QString MainWindow::activeConflictFile() const

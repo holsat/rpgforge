@@ -143,11 +143,16 @@ void ChatPanel::setupUi()
 
     toolbar->addStretch();
 
-    // Deep Search toggle. When on, the assistant runs the Comprehensive
-    // synthesis pipeline (draft → gap detection → up to 3 retrieval
-    // hops → final synthesis). Slower and more expensive than the
-    // default Quick path; useful for multi-hop questions where a single
-    // retrieval misses cross-cutting context.
+    // Deep Search and Ask Project toggles are constructed here but
+    // installed in the bottom button row (next to Cancel / Send) so the
+    // user can flip retrieval mode at the moment they hit Send rather
+    // than reaching back up to the toolbar.
+    //
+    // Deep Search: assistant runs the Comprehensive synthesis pipeline
+    // (draft → gap detection → up to 3 retrieval hops → final
+    // synthesis). Slower and more expensive than the default Quick path;
+    // useful for multi-hop questions where a single retrieval misses
+    // cross-cutting context.
     m_deepSearchBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("edit-find")),
                                        i18n("Deep Search"), this);
     m_deepSearchBtn->setCheckable(true);
@@ -164,7 +169,6 @@ void ChatPanel::setupUi()
         QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
         s.setValue(QStringLiteral("chat/deep_search"), on);
     });
-    toolbar->addWidget(m_deepSearchBtn);
 
     // Ask Project — whole-corpus MAP/REDUCE. Reads every project
     // markdown file via a cheap-model relevance pass, then synthesises
@@ -191,7 +195,23 @@ void ChatPanel::setupUi()
         QSettings s(QStringLiteral("RPGForge"), QStringLiteral("RPGForge"));
         s.setValue(QStringLiteral("chat/ask_project"), on);
     });
-    toolbar->addWidget(m_askProjectBtn);
+
+    // Stronger on/off affordance — the default Qt "depressed" look on a
+    // checked QPushButton is too subtle on dark themes for users to read
+    // at a glance. A bright accent fill + bold weight makes it obvious.
+    static const QString s_toggleQss = QStringLiteral(
+        "QPushButton:checked {"
+        "  background-color: palette(highlight);"
+        "  color: palette(highlighted-text);"
+        "  border: 1px solid palette(highlight);"
+        "  font-weight: bold;"
+        "}"
+        "QPushButton:checked:hover {"
+        "  background-color: palette(highlight);"
+        "  border: 1px solid palette(highlighted-text);"
+        "}");
+    m_deepSearchBtn->setStyleSheet(s_toggleQss);
+    m_askProjectBtn->setStyleSheet(s_toggleQss);
 
     m_clearBtn = new QPushButton(QIcon::fromTheme(QStringLiteral("edit-clear")), QString(), this);
     m_clearBtn->setToolTip(i18n("Clear Chat"));
@@ -231,6 +251,11 @@ void ChatPanel::setupUi()
     inputLayout->addWidget(m_inputEdit);
 
     auto *btnLayout = new QHBoxLayout();
+    // Retrieval-mode toggles live on the LEFT, inline with Send/Cancel,
+    // so the user can flip mode at the moment they decide to send. The
+    // stretch in the middle keeps Cancel/Send pinned to the right.
+    btnLayout->addWidget(m_deepSearchBtn);
+    btnLayout->addWidget(m_askProjectBtn);
     btnLayout->addStretch();
     m_cancelBtn = new QPushButton(i18n("Cancel"), this);
     m_cancelBtn->setIcon(QIcon::fromTheme(QStringLiteral("process-stop")));

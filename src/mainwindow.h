@@ -56,6 +56,7 @@ class QLabel;
 class QFrame;
 class QProgressBar;
 class QLineEdit;
+class QCloseEvent;
 #include <QPair>
 #include <QList>
 #include <QUrl>
@@ -83,6 +84,19 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+
+    /**
+     * @brief Single chokepoint for the application's shutdown ceremony.
+     *
+     * Runs on every quit path: window close (X), File→Quit, and SIGTERM/SIGINT
+     * (which routes through QApplication::closeAllWindows()). Performs a
+     * best-effort silent save of all documents, pauses long-running services,
+     * drains the global thread pool, and explicitly closes the librarian
+     * database so the WAL checkpoint runs before SQLite tears connections
+     * down. See bugfix-registry.md "2026-04-28 — Unified graceful-shutdown
+     * path (UI + signal)" for the binding invariants.
+     */
+    void closeEvent(QCloseEvent *event) override;
 
 private Q_SLOTS:
     void newFile();
@@ -235,6 +249,16 @@ public:
 
 private Q_SLOTS:
     void showEditorContextMenu(KTextEditor::View *view, QMenu *menu);
+    /**
+     * @brief Apply saved splitter sizes after the window has a real geometry.
+     *
+     * Scheduled via QTimer::singleShot(0, ...) at the end of restoreSession()
+     * so that QSplitter::restoreState consults laid-out widget sizes rather
+     * than the unsized splitters present during MainWindow construction.
+     * Without this deferral the proportional split applied against an
+     * unsized splitter starves the editor pane on startup.
+     */
+    void restoreSplittersDeferred();
 
 private:
     void setupEditor();

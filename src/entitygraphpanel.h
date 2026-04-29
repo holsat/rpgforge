@@ -21,15 +21,16 @@
 
 #include <QWidget>
 #include <QHash>
+#include <QList>
 
 class EntityGraphModel;
 class LibrarianDatabase;
+class QAction;
 class QGraphicsView;
 class QGraphicsScene;
 class QLineEdit;
 class QToolBar;
 class QPushButton;
-class QHBoxLayout;
 class QCheckBox;
 
 class EntityGraphNodeItem;
@@ -117,7 +118,7 @@ private:
     QGraphicsScene  *m_scene = nullptr;
     QLineEdit       *m_searchEdit = nullptr;
     QToolBar        *m_toolbar = nullptr;
-    QHBoxLayout     *m_typeFilterLayout = nullptr;
+    QList<QAction*>  m_typeFilterActions;     // toolbar actions wrapping the type checkboxes; tracked for removeAction on rebuild
     QHash<QString, QCheckBox*> m_typeChecks;
 
     QList<EntityGraphNodeItem*> m_nodeItems;

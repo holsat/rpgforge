@@ -341,15 +341,6 @@ add_executable(test_entitycommunitydetector tests/test_entitycommunitydetector.c
 target_link_libraries(test_entitycommunitydetector rpgforge_core Qt6::Test)
 add_test(NAME entity_community_detector_test COMMAND test_entitycommunitydetector)
 
-# Phase 1-5 verification harness — runs against a real Kabal-shaped
-# project DB to confirm the migrations apply, the alias backfill ran,
-# the chunk linker finds entity mentions in real prose, and community
-# detection completes on real-scale input. Not registered with ctest;
-# invoked manually with the project root as argv[1].
-add_executable(verify_kabal /tmp/verify_kabal.cpp)
-target_include_directories(verify_kabal PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(verify_kabal rpgforge_core Qt6::Core Qt6::Sql)
-
 add_executable(test_projecttreemodel tests/test_projecttreemodel.cpp)
 target_link_libraries(test_projecttreemodel rpgforge_core Qt6::Test)
 add_test(NAME project_tree_model_test COMMAND test_projecttreemodel)

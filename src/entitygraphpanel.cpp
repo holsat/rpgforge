@@ -49,6 +49,8 @@
 // Node item — circle sized by mention_count, coloured by type.
 // ---------------------------------------------------------------------------
 
+class EntityGraphEdgeItem;     // forward decl — used by EntityGraphNodeItem
+
 class EntityGraphNodeItem : public QGraphicsEllipseItem
 {
 public:
@@ -93,6 +95,13 @@ public:
     void setVelocity(const QPointF &v) { m_velocity = v; }
     void addForce(const QPointF &f) { m_velocity += f; }
 
+    // Register an edge whose endpoint is this node. Edges call
+    // updatePosition() when this node moves so they stay anchored.
+    void addEdge(EntityGraphEdgeItem *e) { if (e) m_edges.append(e); }
+
+protected:
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
+
 private:
     static QColor colourForType(const QString &type)
     {
@@ -111,6 +120,7 @@ private:
     EntityGraphNode m_node;
     QGraphicsTextItem *m_label = nullptr;
     QPointF m_velocity{0.0, 0.0};
+    QList<EntityGraphEdgeItem*> m_edges;
 };
 
 // ---------------------------------------------------------------------------
@@ -132,6 +142,9 @@ public:
         }
         setPen(p);
         setZValue(-1);          // below nodes
+        // Register with both endpoints so they re-anchor us when dragged.
+        if (m_src) m_src->addEdge(this);
+        if (m_tgt) m_tgt->addEdge(this);
         updatePosition();
         setToolTip(relationship);
     }
@@ -150,6 +163,16 @@ private:
     EntityGraphNodeItem *m_tgt = nullptr;
     QString m_relationship;
 };
+
+QVariant EntityGraphNodeItem::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemPositionHasChanged) {
+        for (auto *e : m_edges) {
+            if (e) e->updatePosition();
+        }
+    }
+    return QGraphicsEllipseItem::itemChange(change, value);
+}
 
 // ---------------------------------------------------------------------------
 // EntityGraphPanel
@@ -212,11 +235,11 @@ void EntityGraphPanel::setupUi()
     m_toolbar->addSeparator();
     auto *typeLabel = new QLabel(i18n("Types:"), this);
     m_toolbar->addWidget(typeLabel);
-    auto *typeFilterContainer = new QWidget(this);
-    m_typeFilterLayout = new QHBoxLayout(typeFilterContainer);
-    m_typeFilterLayout->setContentsMargins(0, 0, 0, 0);
-    m_typeFilterLayout->setSpacing(6);
-    m_toolbar->addWidget(typeFilterContainer);
+    // Type-filter checkboxes are added directly to the toolbar (via
+    // addWidget → QAction) by rebuildTypeFilterRow(). We deliberately do
+    // NOT wrap them in a QWidget/QHBoxLayout container — QToolBar does
+    // not reliably re-layout when grandchildren are added, which would
+    // leave the row visually empty.
 
     root->addWidget(m_toolbar);
 
@@ -272,12 +295,17 @@ void EntityGraphPanel::onTypeCheckboxToggled()
 void EntityGraphPanel::rebuildTypeFilterRow()
 {
     m_suppressFilterRebuild = true;
-    // Wipe the existing checkboxes.
-    while (auto *item = m_typeFilterLayout->takeAt(0)) {
-        if (auto *w = item->widget()) w->deleteLater();
-        delete item;
+    // Wipe the previous row: each checkbox was added via addWidget(cb),
+    // which returns a QAction owning the wrapping widget. Removing the
+    // action and deleteLater'ing it cleans up both.
+    for (QAction *act : std::as_const(m_typeFilterActions)) {
+        if (!act) continue;
+        m_toolbar->removeAction(act);
+        act->deleteLater();
     }
+    m_typeFilterActions.clear();
     m_typeChecks.clear();
+
     const QSet<QString> types = m_model->allTypes();
     QStringList sorted(types.begin(), types.end());
     sorted.sort();
@@ -286,7 +314,8 @@ void EntityGraphPanel::rebuildTypeFilterRow()
         cb->setChecked(true);
         connect(cb, &QCheckBox::toggled,
                 this, &EntityGraphPanel::onTypeCheckboxToggled);
-        m_typeFilterLayout->addWidget(cb);
+        QAction *act = m_toolbar->addWidget(cb);
+        m_typeFilterActions.append(act);
         m_typeChecks.insert(type, cb);
     }
     m_suppressFilterRebuild = false;

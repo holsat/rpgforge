@@ -20,6 +20,9 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDateTime>
+#include <QFileInfo>
+#include <QMetaObject>
+#include <QMutexLocker>
 #include <QUuid>
 #include <QSqlError>
 #include <QThread>
@@ -49,8 +52,128 @@ bool LibrarianDatabase::open(const QString &path)
 
 void LibrarianDatabase::close()
 {
-    // Removing connections is complex because they are per-thread.
-    // In a short-lived test, we can just let them be.
+    // For every QSqlDatabase connection this LibrarianDatabase owns
+    // (one per thread that ever called database()), force a full WAL
+    // checkpoint and truncate before removing the connection.
+    //
+    // Without the checkpoint, kill mid-write leaves the WAL holding
+    // pages that the main DB cannot validate on the next open —
+    // SQLite then reports the file as malformed and `.recover` only
+    // salvages orphan pages. PRAGMA wal_checkpoint(TRUNCATE) flushes
+    // all WAL frames into the main DB and resets the WAL to zero
+    // length, so a process killed shortly after a clean close still
+    // leaves a coherent main DB.
+    //
+    // Per-connection teardown MUST run on the thread that created the
+    // connection. Qt logs "QSqlDatabasePrivate::database: requested
+    // database does not belong to the calling thread" otherwise. We
+    // tracked the owning QThread* in m_connectionThreads at creation
+    // time; iterate that map and dispatch each teardown to the right
+    // thread, or do it inline when the owner is the current thread or
+    // has already finished (worker pool runnables that have returned).
+    if (!QCoreApplication::instance()) return;
+
+    // Snapshot then clear under the mutex so re-entry into database()
+    // from a stale call site can't trip over a half-mutated map.
+    QHash<QString, QPointer<QThread>> snapshot;
+    {
+        QMutexLocker lock(&m_connectionThreadsMutex);
+        snapshot.swap(m_connectionThreads);
+    }
+
+    auto teardown = [](const QString &connectionName) {
+        if (!QSqlDatabase::contains(connectionName)) return;
+        {
+            QSqlDatabase db = QSqlDatabase::database(connectionName, /*open=*/false);
+            if (db.isValid() && db.isOpen()) {
+                QSqlQuery q(db);
+                // TRUNCATE: flush WAL into main DB and reset WAL to
+                // zero length. Best-effort — if the pragma fails
+                // (e.g. read-only handle), we still proceed to close;
+                // a missed checkpoint is recoverable on next open,
+                // but a never-closed connection leaks.
+                if (!q.exec(QStringLiteral("PRAGMA wal_checkpoint(TRUNCATE)"))) {
+                    qWarning().noquote()
+                        << "LibrarianDatabase::close: wal_checkpoint failed on"
+                        << connectionName << ":" << q.lastError().text();
+                }
+                db.close();
+            }
+        }
+        // Must drop the QSqlDatabase out of scope BEFORE removeDatabase,
+        // otherwise Qt warns about an outstanding handle.
+        QSqlDatabase::removeDatabase(connectionName);
+    };
+
+    QThread *thisThread = QThread::currentThread();
+    for (auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it) {
+        const QString &connectionName = it.key();
+        QThread *owner = it.value().data();   // may be nullptr if QPointer cleared
+
+        if (!owner || owner == thisThread || owner->isFinished()) {
+            // Owner is gone (worker returned to pool, thread destroyed),
+            // or we ARE the owner — safe to do the work inline. When the
+            // worker thread already exited, Qt's own per-thread
+            // bookkeeping is gone too; calling removeDatabase from this
+            // thread is the only remaining option and Qt accepts it
+            // (the connection is treated as orphaned).
+            teardown(connectionName);
+            continue;
+        }
+
+        // Owner thread is alive and isn't us. We can only post a
+        // BlockingQueuedConnection to it if it's actually running an
+        // event loop — QThreadPool runnables don't, so the post would
+        // sit forever and deadlock close() on the destructor path.
+        // Probe loopLevel() first; fall through to inline-with-warning
+        // when there's no loop.
+        if (owner->loopLevel() <= 0) {
+            qWarning().noquote()
+                << "LibrarianDatabase::close: owning thread for"
+                << connectionName
+                << "is alive but has no event loop — closing inline"
+                << "(may emit a one-line thread-mismatch warning from Qt)";
+            teardown(connectionName);
+            continue;
+        }
+
+        QObject ctx;
+        ctx.moveToThread(owner);
+        QMetaObject::invokeMethod(
+            &ctx, [connectionName, &teardown]() { teardown(connectionName); },
+            Qt::BlockingQueuedConnection);
+    }
+}
+
+void LibrarianDatabase::closeCurrentThreadConnection()
+{
+    if (!QCoreApplication::instance()) return;
+    if (m_dbPath.isEmpty()) return;
+
+    QString threadId = QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    QString connectionName = QStringLiteral("Librarian_%1_%2")
+        .arg(QString::number(reinterpret_cast<quintptr>(this), 16), threadId);
+
+    {
+        QMutexLocker lock(&m_connectionThreadsMutex);
+        m_connectionThreads.remove(connectionName);
+    }
+
+    if (!QSqlDatabase::contains(connectionName)) return;
+    {
+        QSqlDatabase db = QSqlDatabase::database(connectionName, /*open=*/false);
+        if (db.isValid() && db.isOpen()) {
+            QSqlQuery q(db);
+            if (!q.exec(QStringLiteral("PRAGMA wal_checkpoint(TRUNCATE)"))) {
+                qWarning().noquote()
+                    << "LibrarianDatabase::closeCurrentThreadConnection:"
+                    << "wal_checkpoint failed on" << connectionName
+                    << ":" << q.lastError().text();
+            }
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(connectionName);
 }
 
 QSqlDatabase LibrarianDatabase::database() const
@@ -85,6 +208,17 @@ QSqlDatabase LibrarianDatabase::database() const
         // Enforce FK cascades for entity_aliases / entity_tags / relationships
         // — SQLite has them off by default per-connection.
         q.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
+    }
+
+    // Record the owning QThread for this fresh connection so close() can
+    // dispatch the teardown back to the right thread (or detect that the
+    // owner is gone). QPointer tracks thread destruction so a worker
+    // that exited before close() runs leaves a null entry — close()
+    // treats that as "owner gone, tear down inline".
+    {
+        QMutexLocker lock(&m_connectionThreadsMutex);
+        m_connectionThreads.insert(connectionName,
+                                    QPointer<QThread>(QThread::currentThread()));
     }
     return db;
 }
@@ -252,6 +386,51 @@ bool LibrarianDatabase::initSchema(QSqlDatabase &db)
             }
         }
     }
+
+    // file_extractions — per-file extraction status keyed by content
+    // hash (SHA-256). Created via CREATE TABLE IF NOT EXISTS so existing
+    // project DBs upgrade cleanly on next open.
+    if (!query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS file_extractions ("
+                    "file_hash TEXT PRIMARY KEY, "
+                    "last_path TEXT NOT NULL, "
+                    "heuristic_done INTEGER NOT NULL DEFAULT 0, "
+                    "semantic_done INTEGER NOT NULL DEFAULT 0, "
+                    "extracted_at DATETIME)"))) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+    query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_file_extractions_path ON file_extractions(last_path)"));
+
+    // Persisted semantic-attempt strike counter. Old projects that
+    // already have file_extractions rows pick up the column with
+    // default 0 — no data loss.
+    if (!addColumnIfMissing(db, QStringLiteral("file_extractions"),
+                             QStringLiteral("attempts"),
+                             QStringLiteral("INTEGER NOT NULL DEFAULT 0"))) return false;
+
+    // pending_relationships — LLM-emitted edges whose target couldn't
+    // yet be resolved. Re-tried after every successful semantic
+    // extraction.
+    if (!query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS pending_relationships ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "source_id INTEGER NOT NULL, "
+                    "target_name TEXT NOT NULL, "
+                    "relationship TEXT NOT NULL, "
+                    "evidence_file TEXT, "
+                    "strength REAL DEFAULT 0.5, "
+                    "queued_at DATETIME, "
+                    "UNIQUE(source_id, target_name, relationship), "
+                    "FOREIGN KEY(source_id) REFERENCES entities(id) ON DELETE CASCADE)"))) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+
+    // Per-edge GC counter: bumped on each unresolved retry pass; rows
+    // exceeding the threshold are deleted by resolvePendingRelationships
+    // so the queue can't grow without bound on broken refs.
+    if (!addColumnIfMissing(db, QStringLiteral("pending_relationships"),
+                             QStringLiteral("attempts"),
+                             QStringLiteral("INTEGER NOT NULL DEFAULT 0"))) return false;
 
     // Indexes for performance
     query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)"));
@@ -834,4 +1013,333 @@ QList<qint64> LibrarianDatabase::allEntityIds() const
         while (q.next()) ids.append(q.value(0).toLongLong());
     }
     return ids;
+}
+
+bool LibrarianDatabase::getExtractionState(const QString &fileHash,
+                                            bool *heuristicDone,
+                                            bool *semanticDone) const
+{
+    if (heuristicDone) *heuristicDone = false;
+    if (semanticDone)  *semanticDone  = false;
+    if (fileHash.isEmpty()) return false;
+
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("SELECT heuristic_done, semantic_done "
+                              "FROM file_extractions WHERE file_hash = :h"));
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    if (q.exec() && q.next()) {
+        if (heuristicDone) *heuristicDone = q.value(0).toInt() != 0;
+        if (semanticDone)  *semanticDone  = q.value(1).toInt() != 0;
+        return true;
+    }
+    return false;
+}
+
+bool LibrarianDatabase::recordExtractionState(const QString &fileHash,
+                                               const QString &path,
+                                               bool heuristicDone,
+                                               bool semanticDone)
+{
+    if (fileHash.isEmpty()) return false;
+
+    QSqlQuery q(database());
+    // INSERT … ON CONFLICT … DO UPDATE so we don't lose existing
+    // last_path or extracted_at on flag-only updates. Flags monotonically
+    // OR with their previous value — once heuristic_done is true, a
+    // subsequent semantic-only update mustn't clear it.
+    q.prepare(QStringLiteral(
+        "INSERT INTO file_extractions "
+        "(file_hash, last_path, heuristic_done, semantic_done, extracted_at) "
+        "VALUES (:h, :p, :hd, :sd, :ts) "
+        "ON CONFLICT(file_hash) DO UPDATE SET "
+        "  last_path      = excluded.last_path, "
+        "  heuristic_done = MAX(file_extractions.heuristic_done, excluded.heuristic_done), "
+        "  semantic_done  = MAX(file_extractions.semantic_done,  excluded.semantic_done), "
+        "  extracted_at   = excluded.extracted_at"));
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    q.bindValue(QStringLiteral(":p"), path);
+    q.bindValue(QStringLiteral(":hd"), heuristicDone ? 1 : 0);
+    q.bindValue(QStringLiteral(":sd"), semanticDone  ? 1 : 0);
+    q.bindValue(QStringLiteral(":ts"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool LibrarianDatabase::updateExtractionPath(const QString &fileHash, const QString &newPath)
+{
+    if (fileHash.isEmpty()) return false;
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("UPDATE file_extractions SET last_path = :p WHERE file_hash = :h"));
+    q.bindValue(QStringLiteral(":p"), newPath);
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QString LibrarianDatabase::hashForPath(const QString &path) const
+{
+    if (path.isEmpty()) return QString();
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("SELECT file_hash FROM file_extractions WHERE last_path = :p LIMIT 1"));
+    q.bindValue(QStringLiteral(":p"), path);
+    if (q.exec() && q.next()) return q.value(0).toString();
+    return QString();
+}
+
+bool LibrarianDatabase::forgetExtraction(const QString &fileHash)
+{
+    if (fileHash.isEmpty()) return false;
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("DELETE FROM file_extractions WHERE file_hash = :h"));
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool LibrarianDatabase::clearAllSemanticDone()
+{
+    QSqlQuery q(database());
+    if (!q.exec(QStringLiteral("UPDATE file_extractions SET semantic_done = 0"))) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool LibrarianDatabase::queuePendingRelationship(qint64 sourceId,
+                                                  const QString &targetName,
+                                                  const QString &relationship,
+                                                  const QString &evidenceFile,
+                                                  double strength)
+{
+    if (sourceId < 0 || targetName.trimmed().isEmpty() || relationship.trimmed().isEmpty()) {
+        return false;
+    }
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO pending_relationships "
+        "(source_id, target_name, relationship, evidence_file, strength, queued_at) "
+        "VALUES (:s, :t, :r, :ef, :str, :ts)"));
+    q.bindValue(QStringLiteral(":s"),  sourceId);
+    q.bindValue(QStringLiteral(":t"),  targetName.trimmed());
+    q.bindValue(QStringLiteral(":r"),  relationship.trimmed());
+    q.bindValue(QStringLiteral(":ef"), evidenceFile);
+    q.bindValue(QStringLiteral(":str"), strength);
+    q.bindValue(QStringLiteral(":ts"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+int LibrarianDatabase::resolvePendingRelationships()
+{
+    QSqlDatabase db = database();
+    if (!db.isOpen()) return 0;
+
+    // Snapshot the queue first so we can iterate without invalidating the
+    // SELECT cursor when we issue DELETE/INSERT mid-loop.
+    struct Pending {
+        qint64 id;
+        qint64 sourceId;
+        QString targetName;
+        QString relationship;
+        QString evidenceFile;
+        double strength;
+    };
+    QVector<Pending> rows;
+    {
+        QSqlQuery q(db);
+        if (!q.exec(QStringLiteral(
+                "SELECT id, source_id, target_name, relationship, evidence_file, strength "
+                "FROM pending_relationships"))) {
+            m_lastError = q.lastError().text();
+            return 0;
+        }
+        while (q.next()) {
+            Pending p;
+            p.id           = q.value(0).toLongLong();
+            p.sourceId     = q.value(1).toLongLong();
+            p.targetName   = q.value(2).toString();
+            p.relationship = q.value(3).toString();
+            p.evidenceFile = q.value(4).toString();
+            p.strength     = q.value(5).toDouble();
+            rows.append(p);
+        }
+    }
+
+    int resolved = 0;
+    QVector<qint64> unresolvedIds;
+    for (const Pending &p : rows) {
+        const qint64 targetId = resolveEntityByName(p.targetName);
+        if (targetId < 0) {
+            unresolvedIds.append(p.id);
+            continue;
+        }
+        if (targetId == p.sourceId) {
+            // Self-loop — don't write, but drop the pending row so we
+            // don't keep retrying.
+            QSqlQuery del(db);
+            del.prepare(QStringLiteral("DELETE FROM pending_relationships WHERE id = :id"));
+            del.bindValue(QStringLiteral(":id"), p.id);
+            del.exec();
+            continue;
+        }
+        // Containment is stored as a parent_id on the entities row, not
+        // as a relationships row. Synthetic "is_part_of" rows queued by
+        // the librarian's pass-3 parent-resolution miss are applied via
+        // setEntityParent here.
+        bool applied = false;
+        if (p.relationship == QLatin1String("is_part_of")) {
+            applied = setEntityParent(p.sourceId, targetId);
+        } else {
+            applied = (upsertRelationship(p.sourceId, targetId, p.relationship,
+                                           p.evidenceFile, /*line=*/0, p.strength) >= 0);
+        }
+        if (applied) {
+            QSqlQuery del(db);
+            del.prepare(QStringLiteral("DELETE FROM pending_relationships WHERE id = :id"));
+            del.bindValue(QStringLiteral(":id"), p.id);
+            if (del.exec()) ++resolved;
+        } else {
+            // Insert collided / failed — count as unresolved so we GC
+            // it eventually.
+            unresolvedIds.append(p.id);
+        }
+    }
+
+    // Bump attempts on still-unresolved rows. Done in a single bulk
+    // UPDATE to avoid one round-trip per row.
+    if (!unresolvedIds.isEmpty()) {
+        QStringList placeholders;
+        placeholders.reserve(unresolvedIds.size());
+        for (int i = 0; i < unresolvedIds.size(); ++i) {
+            placeholders << QStringLiteral("?");
+        }
+        QSqlQuery bump(db);
+        bump.prepare(QStringLiteral(
+            "UPDATE pending_relationships SET attempts = attempts + 1 "
+            "WHERE id IN (%1)").arg(placeholders.join(QLatin1Char(','))));
+        for (qint64 id : unresolvedIds) bump.addBindValue(id);
+        bump.exec();
+    }
+
+    // GC: drop rows that have failed too many times. 10 retries ≈ 10
+    // semantic-batch ticks of failed resolution; enough slack for slow
+    // multi-document projects but small enough to keep the queue
+    // bounded.
+    constexpr int kMaxAttempts = 10;
+    QSqlQuery gc(db);
+    gc.prepare(QStringLiteral(
+        "DELETE FROM pending_relationships WHERE attempts >= :n"));
+    gc.bindValue(QStringLiteral(":n"), kMaxAttempts);
+    if (gc.exec()) {
+        const int dropped = gc.numRowsAffected();
+        if (dropped > 0) {
+            qInfo().noquote()
+                << "LibrarianDatabase: GC'd" << dropped
+                << "pending relationship(s) after >=" << kMaxAttempts
+                << "failed resolution attempts";
+        }
+    }
+
+    return resolved;
+}
+
+int LibrarianDatabase::getSemanticAttempts(const QString &fileHash) const
+{
+    if (fileHash.isEmpty()) return 0;
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("SELECT attempts FROM file_extractions WHERE file_hash = :h"));
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    if (q.exec() && q.next()) return q.value(0).toInt();
+    return 0;
+}
+
+bool LibrarianDatabase::incrementSemanticAttempts(const QString &fileHash)
+{
+    if (fileHash.isEmpty()) return false;
+    QSqlQuery q(database());
+    // UPSERT-style: if the row doesn't yet exist (first-ever attempt
+    // before any successful extraction), insert with attempts=1 and
+    // last_path empty; the next recordExtractionState will fill it in.
+    // If the row exists, just bump.
+    q.prepare(QStringLiteral(
+        "INSERT INTO file_extractions "
+        "(file_hash, last_path, heuristic_done, semantic_done, extracted_at, attempts) "
+        "VALUES (:h, '', 0, 0, :ts, 1) "
+        "ON CONFLICT(file_hash) DO UPDATE SET "
+        "  attempts = file_extractions.attempts + 1"));
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    q.bindValue(QStringLiteral(":ts"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool LibrarianDatabase::resetSemanticAttempts(const QString &fileHash)
+{
+    if (fileHash.isEmpty()) return false;
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("UPDATE file_extractions SET attempts = 0 WHERE file_hash = :h"));
+    q.bindValue(QStringLiteral(":h"), fileHash);
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool LibrarianDatabase::clearAllSemanticAttempts()
+{
+    QSqlQuery q(database());
+    if (!q.exec(QStringLiteral("UPDATE file_extractions SET attempts = 0"))) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+int LibrarianDatabase::garbageCollectMissingFiles()
+{
+    QSqlDatabase db = database();
+    if (!db.isOpen()) return 0;
+
+    // Walk the table and collect hashes whose last_path no longer
+    // exists. We do the existence check in C++ (not SQL) because SQLite
+    // has no native filesystem function.
+    QStringList toDelete;
+    {
+        QSqlQuery q(db);
+        if (!q.exec(QStringLiteral(
+                "SELECT file_hash, last_path FROM file_extractions"))) {
+            m_lastError = q.lastError().text();
+            return 0;
+        }
+        while (q.next()) {
+            const QString hash = q.value(0).toString();
+            const QString path = q.value(1).toString();
+            if (path.isEmpty()) continue;
+            if (!QFileInfo::exists(path)) toDelete.append(hash);
+        }
+    }
+    if (toDelete.isEmpty()) return 0;
+
+    int dropped = 0;
+    for (const QString &hash : toDelete) {
+        if (forgetExtraction(hash)) ++dropped;
+    }
+    return dropped;
 }
